@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Entorno / secretos
+.env
+.env.local
+
+# Datos generados (base de datos SQLite y backups)
+data/*.db
+data/*.db.bak-*
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+
+# Herramientas locales (Claude)
+.claude/
+
+# Sistema
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
