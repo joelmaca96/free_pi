@@ -8,8 +8,8 @@ from typing import Dict, List, Optional
 
 from sqlalchemy.orm import Session
 
-from db.models import BoxScore, Game, Player, Team, TeamGameStats
-from stats import effective_fg_pct, true_shooting_pct
+from .models import BoxScore, Game, Player, Team, TeamGameStats
+from ..stats import effective_fg_pct, true_shooting_pct
 
 logger = logging.getLogger(__name__)
 

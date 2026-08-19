@@ -7,7 +7,7 @@ proyección de enfrentamiento, narrativa y carga de minutos).
 """
 import pytest
 
-from insights import (
+from packages.baskonia_core.insights import (
     league_label,
     parse_minutes,
     per_36,
@@ -21,7 +21,7 @@ from insights import (
     season_start_year,
     team_advanced_summary,
 )
-from db import models
+from packages.baskonia_core.db import models
 
 
 # --- Funciones puras -------------------------------------------------------

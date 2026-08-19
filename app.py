@@ -30,9 +30,9 @@ from pptx import Presentation
 from pptx.dml.color import RGBColor
 from pptx.util import Inches, Pt
 
-import config
-from db import models
-from insights import (
+from packages.baskonia_core import config
+from packages.baskonia_core.db import models
+from packages.baskonia_core.insights import (
     ZSCORE_COLD_THRESHOLD,
     ZSCORE_HOT_THRESHOLD,
     current_season,

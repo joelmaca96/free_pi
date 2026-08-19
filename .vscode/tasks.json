@@ -5,7 +5,10 @@
             "label": "Run tests",
             "type": "shell",
             "command": "${workspaceFolder}/.venv/Scripts/python.exe",
-            "args": ["-m", "pytest"],
+            "args": [
+                "-m",
+                "pytest"
+            ],
             "options": {
                 "cwd": "${workspaceFolder}"
             },
@@ -19,7 +22,12 @@
             "label": "Launch app",
             "type": "shell",
             "command": "${workspaceFolder}/.venv/Scripts/python.exe",
-            "args": ["-m", "streamlit", "run", "app.py"],
+            "args": [
+                "-m",
+                "streamlit",
+                "run",
+                "app.py"
+            ],
             "options": {
                 "cwd": "${workspaceFolder}"
             },

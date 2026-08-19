@@ -7,8 +7,8 @@ actualizan correctamente.
 """
 import pytest
 
-from db import models
-from db.storage import (
+from packages.baskonia_core.db import models
+from packages.baskonia_core.db.storage import (
     upsert_boxscore,
     upsert_game,
     upsert_player,

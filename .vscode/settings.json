@@ -22,7 +22,9 @@
                 "tooltip": "Ejecuta la suite de tests (pytest)",
                 "useVsCodeApi": true,
                 "command": "workbench.action.tasks.runTask",
-                "args": ["Run tests"]
+                "args": [
+                    "Run tests"
+                ]
             },
             {
                 "name": "$(rocket) Launch app",
@@ -30,7 +32,9 @@
                 "tooltip": "Lanza la aplicación Streamlit",
                 "useVsCodeApi": true,
                 "command": "workbench.action.tasks.runTask",
-                "args": ["Launch app"]
+                "args": [
+                    "Launch app"
+                ]
             }
         ]
     }

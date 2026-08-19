@@ -283,22 +283,26 @@ conocidos). Ver `doc/arquitectura/02_migration.md`.
 baskonia-pipeline/
 ├── requirements.txt      # requests, beautifulsoup4, pandas, SQLAlchemy, python-dotenv
 ├── .env.example          # plantilla de configuración (copiada a .env)
-├── config.py             # config central (UA, rate-limit, DB, temporada, equipos)
+├── baskonia_core.py      # PUENTE DE MIGRACIÓN (F1): reexporta el dominio compartido
 ├── main.py               # orquestador principal del pipeline
 ├── report.py             # CLI de consulta: imprime lo ya guardado, sin red
 ├── app.py                # GUI (Streamlit) para usuarios sin conocimientos técnicos
-├── insights.py           # forma reciente por jugador, stats por-36, validaciones
-├── stats.py              # cálculo de eFG%, TS%, posesiones, pace, ORtg/DRtg
 ├── scraper/
 │   ├── __init__.py
 │   ├── client.py             # BBRClient: HTTP con rate-limit (20s), reintentos y UTF-8 forzado
 │   ├── parser.py             # parsea tablas HTML de BBR → estructuras limpias
 │   ├── bbr.py                # construye URLs de BBR y orquesta llamadas
 │   └── baskonia_official.py  # API JSON de baskonia.com: calendario 26/27 y plantilla actual
-└── db/
-    ├── __init__.py
-    ├── models.py         # SQLAlchemy: teams, players, games, boxscores, team_game_stats
-    └── storage.py        # upserts idempotentes
+└── packages/
+    └── baskonia_core/        # dominio compartido (F1 de la migración)
+        ├── __init__.py
+        ├── config.py         # config central (UA, rate-limit, DB, temporada, equipos)
+        ├── insights.py       # forma reciente por jugador, stats por-36, validaciones
+        ├── stats.py          # cálculo de eFG%, TS%, posesiones, pace, ORtg/DRtg
+        └── db/
+            ├── __init__.py
+            ├── models.py     # SQLAlchemy: teams, players, games, boxscores, team_game_stats
+            └── storage.py    # upserts idempotentes
 ```
 
 ### Flujo del pipeline (`main.py`)

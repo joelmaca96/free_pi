@@ -19,7 +19,7 @@ from typing import Dict, List, Optional
 
 import requests
 
-import config
+from packages.baskonia_core import config
 
 logger = logging.getLogger(__name__)
 

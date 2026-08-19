@@ -11,9 +11,9 @@ import argparse
 import sys
 from typing import IO, List, Optional
 
-import config
-from db import models
-from insights import per_36, parse_minutes, player_recent_form, validate_data
+from packages.baskonia_core import config
+from packages.baskonia_core.db import models
+from packages.baskonia_core.insights import per_36, parse_minutes, player_recent_form, validate_data
 
 
 def _pct(value: Optional[float]) -> str:

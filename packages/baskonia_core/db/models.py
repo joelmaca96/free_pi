@@ -20,7 +20,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 
-import config
+from .. import config
 
 Base = declarative_base()
 

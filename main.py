@@ -23,9 +23,9 @@ import unicodedata
 from datetime import datetime
 from typing import Dict, List, Optional, Set
 
-import config
-from db import models
-from db.storage import (
+from packages.baskonia_core import config
+from packages.baskonia_core.db import models
+from packages.baskonia_core.db.storage import (
     upsert_boxscore,
     upsert_game,
     upsert_player,
@@ -36,7 +36,7 @@ from scraper import baskonia_official
 from scraper.bbr import fetch_boxscore, fetch_standings, fetch_team
 from scraper.client import BBRClient
 from scraper.parser import parse_schedule_games
-from stats import effective_fg_pct, team_game_ratings, true_shooting_pct
+from packages.baskonia_core.stats import effective_fg_pct, team_game_ratings, true_shooting_pct
 
 logging.basicConfig(
     level=logging.INFO,

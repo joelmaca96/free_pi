@@ -12,7 +12,7 @@ from typing import Optional
 
 import requests
 
-import config
+from packages.baskonia_core import config
 
 logger = logging.getLogger(__name__)
 

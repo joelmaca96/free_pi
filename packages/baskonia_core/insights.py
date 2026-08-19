@@ -8,8 +8,8 @@ No hace peticiones de red: solo agrega lo que ya está en `boxscores`/`games`.
 from datetime import datetime
 from typing import Dict, List, Optional
 
-from db import models
-from stats import project_matchup
+from .db import models
+from .stats import project_matchup
 
 # Umbrales de z-score para etiquetar una racha (idea 1 de 7.3): ±1 desviación
 # típica respecto a la media del propio jugador en esa temporada.

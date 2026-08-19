@@ -40,8 +40,8 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 import app  # noqa: E402
-import insights  # noqa: E402
-from db import models  # noqa: E402
+from packages.baskonia_core import insights  # noqa: E402
+from packages.baskonia_core.db import models  # noqa: E402
 
 
 def _round(value, ndigits=4):

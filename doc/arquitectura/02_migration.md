@@ -161,6 +161,40 @@ sin que nada del código actual se entere.
 
 ---
 
+### ✅ F1 completada (2026-08-19)
+
+**Estado:** ✅ **COMPLETADA** — gate de salida verificado.
+
+**Entregables:**
+- `packages/baskonia_core/` — dominio compartido: `config.py`, `stats.py`, `insights.py` y
+  `db/` (`models.py`, `storage.py`), movidos con `git mv` (historial conservado).
+- Imports internos reescritos a relativos (`db/models.py`→`from .. import config`;
+  `db/storage.py`→`from .models`/`from ..stats`; `insights.py`→`from .db`/`from .stats`).
+- **Único fichero puente** `baskonia_core.py` en la raíz (comentario
+  `# PUENTE DE MIGRACIÓN — eliminar en F7`).
+- Imports de todos los consumidores actualizados a `packages.baskonia_core` (`main.py`, `app.py`,
+  `report.py`, `scraper/*`, `tools/parity_dump.py`, `tests/*`).
+- `pytest.ini`: `pythonpath = . tools packages`.
+- `tests/test_architecture.py` — regla de frontera: `packages/baskonia_core/*` no importa nada de
+  la raíz ni de `apps/`.
+
+**Gate de salida verificado:**
+- `python -m pytest` → **108 passed** (incluye el nuevo `test_architecture.py`).
+- `python main.py --help` funciona.
+- `streamlit run app.py` arranca (Uvicorn en :8502).
+- `tools/parity_dump.py` → los 4 ficheros regenerados son **idénticos byte a byte** a la línea
+  base de F0 (sin diff en git).
+
+**Desviación declarada respecto al diseño** (decisión del usuario en la iteración 2):
+- En lugar de **6 módulos puente** de una línea en la raíz, se usa **un único fichero puente**
+  (`baskonia_core.py`) y se actualizan los imports de todos los consumidores a
+  `packages.baskonia_core` directamente. Esto relaja la restricción "sin tocar tests" del diseño
+  original, por decisión explícita del usuario.
+
+**Próxima fase:** F2 (ver tabla de fases más abajo).
+
+---
+
 ## Fase F2 — Extraer `core/services/` desde `app.py`
 
 **Objetivo:** sacar de la capa de UI la lógica de negocio que hoy vive ahí. Es la fase que más

@@ -6,7 +6,7 @@ enfrentamiento.
 """
 import pytest
 
-from stats import (
+from packages.baskonia_core.stats import (
     effective_fg_pct,
     estimate_possessions,
     project_matchup,

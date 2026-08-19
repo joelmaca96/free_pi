@@ -7,7 +7,7 @@ y partidos.
 import logging
 from typing import Dict, List, Optional
 
-import config
+from packages.baskonia_core import config
 from scraper.client import BBRClient
 from scraper import parser
 

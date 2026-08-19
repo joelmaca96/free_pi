@@ -9,7 +9,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from db import models
+from packages.baskonia_core.db import models
 
 
 @pytest.fixture()
