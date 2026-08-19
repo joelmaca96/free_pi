@@ -271,6 +271,15 @@ ordenadas, flotantes a 4 decimales, `NaN`→`null`) para una combinación
 `tests/parity/baseline/` (4 combinaciones que cubren los casos límite
 conocidos). Ver `doc/arquitectura/02_migration.md`.
 
+**✅ Fase F2 de la migración a la nueva arquitectura** (2026-08-19): se extrae
+la lógica de negocio de `app.py` (capa UI Streamlit) a
+`packages/baskonia_core/services/` **sin cambiar el cuerpo de las funciones**:
+calendario (`calendar.py`), plantilla (`roster.py`), enfrentamientos
+(`matchup.py`) y box scores (`boxscore.py`), más `dates.py` con `parse_bbr_date`
+compartido. `app.py` queda como capa de presentación pura (sin `session.query`).
+Sin cambio de comportamiento visible: la paridad estricta F0 se mantiene
+byte a byte y la suite pasa (137 tests). Ver `doc/arquitectura/02_migration.md`.
+
 ---
 
 ## 2. Arquitectura
@@ -294,11 +303,18 @@ baskonia-pipeline/
 │   ├── bbr.py                # construye URLs de BBR y orquesta llamadas
 │   └── baskonia_official.py  # API JSON de baskonia.com: calendario 26/27 y plantilla actual
 └── packages/
-    └── baskonia_core/        # dominio compartido (F1 de la migración)
+    └── baskonia_core/        # dominio compartido (F1/F2 de la migración)
         ├── __init__.py
         ├── config.py         # config central (UA, rate-limit, DB, temporada, equipos)
+        ├── dates.py          # parse_bbr_date (compartido por servicios y UI)
         ├── insights.py       # forma reciente por jugador, stats por-36, validaciones
         ├── stats.py          # cálculo de eFG%, TS%, posesiones, pace, ORtg/DRtg
+        ├── services/         # lógica de negocio extraída de app.py (F2)
+        │   ├── __init__.py   # reexporta los servicios (incluidos los privados _)
+        │   ├── calendar.py   # _team_games, past_games, upcoming_games, games_in_window
+        │   ├── roster.py     # current_roster, team_by_slug, has_roster
+        │   ├── matchup.py    # head_to_head_games
+        │   └── boxscore.py   # boxscore_rows, _team_stats_for_game
         └── db/
             ├── __init__.py
             ├── models.py     # SQLAlchemy: teams, players, games, boxscores, team_game_stats

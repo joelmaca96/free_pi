@@ -17,7 +17,7 @@ Uso:
 """
 import io
 import unicodedata
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Dict
 
@@ -31,6 +31,7 @@ from pptx.dml.color import RGBColor
 from pptx.util import Inches, Pt
 
 from packages.baskonia_core import config
+from packages.baskonia_core.dates import parse_bbr_date
 from packages.baskonia_core.db import models
 from packages.baskonia_core.insights import (
     ZSCORE_COLD_THRESHOLD,
@@ -48,9 +49,23 @@ from packages.baskonia_core.insights import (
     schedule_difficulty,
     scouting_narrative,
     season_label,
-    season_start_year,
     team_advanced_summary,
     validate_data,
+)
+from packages.baskonia_core.services import (
+    _result_label,
+    _rival_of,
+    _team_games,
+    _team_stats_for_game,
+    _player_stats_row,
+    boxscore_rows,
+    current_roster,
+    games_in_window,
+    has_roster,
+    head_to_head_games,
+    past_games,
+    team_by_slug,
+    upcoming_games,
 )
 from main import fetch_opponent_scouting
 from scraper.client import BBRClient
@@ -77,14 +92,6 @@ _MONTHS_ES = {
     "Jan": "enero", "Feb": "febrero", "Mar": "marzo", "Apr": "abril", "May": "mayo", "Jun": "junio",
     "Jul": "julio", "Aug": "agosto", "Sep": "septiembre", "Oct": "octubre", "Nov": "noviembre", "Dec": "diciembre",
 }
-
-
-def parse_bbr_date(value: str) -> "datetime | None":
-    """Parsea una fecha en formato BBR ('Sun, Nov 23, 2025'), o None si no cuadra."""
-    try:
-        return datetime.strptime(value, "%a, %b %d, %Y")
-    except (ValueError, TypeError):
-        return None
 
 
 def format_date_es(value: str) -> str:
@@ -126,87 +133,6 @@ def get_session():
     """Sesión de base de datos compartida entre recargas de la app."""
     Session = models.init_db()
     return Session()
-
-
-def _team_games(session, team: models.Team, season: "int | None" = None, league: "str | None" = None):
-    """Todos los partidos de un equipo (jugados y pendientes), ordenados por fecha.
-
-    Punto único de acceso al calendario de un equipo: aquí se aplican los dos
-    filtros globales de la app. `league` es una columna real (`Game.league`), así
-    que se filtra en la propia consulta; `season` es derivada de la fecha (ver
-    `insights.season_start_year`), así que se filtra en Python tras traer las
-    filas. `None` en cualquiera de los dos = sin filtrar por ese eje.
-    """
-    query = session.query(models.Game).filter(
-        (models.Game.home_team_id == team.id) | (models.Game.away_team_id == team.id)
-    )
-    if league is not None:
-        query = query.filter(models.Game.league == league)
-    games = query.all()
-    if season is not None:
-        games = [g for g in games if season_start_year(g.date) == season]
-    games.sort(key=lambda g: parse_bbr_date(g.date) or datetime.min)
-    return games
-
-
-def _team_stats_for_game(session, game_id: int, team_id: int):
-    return session.query(models.TeamGameStats).filter_by(game_id=game_id, team_id=team_id).first()
-
-
-def _rival_of(game: models.Game, team: models.Team) -> models.Team:
-    """Devuelve el equipo rival de `team` en un partido dado."""
-    return game.away_team if game.home_team_id == team.id else game.home_team
-
-
-def _result_label(game: models.Game, team: models.Team) -> str:
-    """Resultado del partido desde el punto de vista de `team`, o 'pendiente' si no se ha jugado."""
-    is_home = game.home_team_id == team.id
-    team_score = game.home_score if is_home else game.away_score
-    opp_score = game.away_score if is_home else game.home_score
-    if team_score is None:
-        return "pendiente"
-    return f"{team_score}-{opp_score}"
-
-
-def past_games(session, team: models.Team, season: "int | None" = None, league: "str | None" = None) -> list:
-    """Partidos ya jugados de un equipo (con resultado), del más reciente al más antiguo.
-
-    `season`/`league` acotan a la temporada/competición seleccionadas; `None` en
-    cualquiera de los dos no filtra por ese eje.
-    """
-    query = (
-        session.query(models.Game)
-        .filter((models.Game.home_team_id == team.id) | (models.Game.away_team_id == team.id))
-        .filter(models.Game.home_score.isnot(None))
-    )
-    if league is not None:
-        query = query.filter(models.Game.league == league)
-    games = query.all()
-    if season is not None:
-        games = [g for g in games if season_start_year(g.date) == season]
-    games.sort(key=lambda g: parse_bbr_date(g.date) or datetime.min, reverse=True)
-    return games
-
-
-def upcoming_games(session, team: models.Team) -> list:
-    """Próximos partidos de un equipo (sin resultado todavía), del más cercano al más lejano.
-
-    Un partido sin resultado no siempre es "próximo": BBR deja para siempre
-    sin resultado la fila de un partido aplazado, aunque se haya jugado más
-    adelante en otra fecha como fila aparte. Se excluyen las fechas ya
-    pasadas (por si hay algún caso similar sin anotar), para no mezclar
-    partidos de la temporada ya cerrada con los realmente pendientes.
-    """
-    games = (
-        session.query(models.Game)
-        .filter((models.Game.home_team_id == team.id) | (models.Game.away_team_id == team.id))
-        .filter(models.Game.home_score.is_(None))
-        .all()
-    )
-    today = datetime.now()
-    games = [g for g in games if (parse_bbr_date(g.date) or datetime.max) >= today]
-    games.sort(key=lambda g: parse_bbr_date(g.date) or datetime.max)
-    return games
 
 
 def _games_to_df(session, games: list, team: models.Team) -> pd.DataFrame:
@@ -333,25 +259,6 @@ def streaks_df(
     return pd.DataFrame(rows)
 
 
-def games_in_window(
-    session, team: models.Team, window_days: int, reference_date: "datetime | None" = None
-) -> list:
-    """Partidos ya JUGADOS de `team` dentro de los últimos `window_days`
-    días respecto a `reference_date` (por defecto, ahora).
-
-    Se llama a `past_games` sin temporada ni competición a propósito: la ventana
-    de días ya es un filtro temporal más preciso, y la carga física de un jugador
-    es transversal a la competición (un partido de ACB y otro de Euroliga en la
-    misma semana cansan igual).
-    """
-    reference_date = reference_date or datetime.now()
-    cutoff = reference_date - timedelta(days=window_days)
-    return [
-        g for g in past_games(session, team)
-        if cutoff <= (parse_bbr_date(g.date) or datetime.min) <= reference_date
-    ]
-
-
 def player_load_df(session, team: models.Team, window_days: int) -> pd.DataFrame:
     """Tabla de carga de minutos por jugador en los últimos `window_days` días."""
     games = games_in_window(session, team, window_days)
@@ -382,12 +289,7 @@ def schedule_difficulty_df(difficulty: Dict[str, object]) -> pd.DataFrame:
 
 def boxscore_df(session, game: models.Game, team: models.Team) -> pd.DataFrame:
     """Tabla de box score (PTS, REB, AST, PTS/36, eFG%, TS%) de un equipo en un partido."""
-    rows = (
-        session.query(models.BoxScore)
-        .filter_by(game_id=game.id, team_id=team.id)
-        .order_by(models.BoxScore.points.desc())
-        .all()
-    )
+    rows = boxscore_rows(session, game.id, team.id)
     data = []
     for row in rows:
         minutes = parse_minutes(row.minutes)
@@ -405,31 +307,6 @@ def boxscore_df(session, game: models.Game, team: models.Team) -> pd.DataFrame:
             }
         )
     return pd.DataFrame(data)
-
-
-def head_to_head_games(
-    session,
-    team_a: models.Team,
-    team_b: models.Team,
-    season: "int | None" = None,
-    league: "str | None" = None,
-):
-    """Enfrentamientos directos entre dos equipos, ordenados por fecha.
-
-    No distingue jugado/pendiente (nunca lo hizo): un enfrentamiento ya
-    programado de la temporada seleccionada aparece con el marcador sin rellenar.
-    """
-    query = session.query(models.Game).filter(
-        ((models.Game.home_team_id == team_a.id) & (models.Game.away_team_id == team_b.id))
-        | ((models.Game.home_team_id == team_b.id) & (models.Game.away_team_id == team_a.id))
-    )
-    if league is not None:
-        query = query.filter(models.Game.league == league)
-    games = query.all()
-    if season is not None:
-        games = [g for g in games if season_start_year(g.date) == season]
-    games.sort(key=lambda g: parse_bbr_date(g.date) or datetime.min)
-    return games
 
 
 def render_narrative_section(
@@ -498,7 +375,7 @@ def render_team_tab(
         st.subheader(team.name)
     with pdf_col:
         rival_slug = next((s for s in config.TEAMS if s != team.slug), None)
-        rival = session.query(models.Team).filter_by(slug=rival_slug).first() if rival_slug else None
+        rival = team_by_slug(session, rival_slug) if rival_slug else None
         if rival is not None:
             pdf_bytes = build_pdf_report(session, team, rival, last_n, season, league)
             st.download_button(
@@ -743,8 +620,8 @@ def render_upcoming_tab(
         lugar = "en casa" if game.home_team_id == team.id else "fuera"
         st.markdown(f"### {format_date_es(game.date)} — {rival.name} ({lugar})")
 
-    has_roster = session.query(models.Player).filter_by(team_id=rival.id).first() is not None
-    if not has_roster:
+    rival_has_roster = has_roster(session, rival)
+    if not rival_has_roster:
         st.warning(f"Todavía no hay datos de {rival.name} en la base de datos.")
         n_rival = st.number_input(
             f"Últimos N partidos de {rival.name} a descargar",
@@ -784,37 +661,6 @@ def render_upcoming_tab(
         mime="application/pdf",
         key=f"pdf_upcoming_{game.id}",
     )
-
-
-def current_roster(session, team: models.Team) -> list:
-    """Jugadores de la plantilla actual, ordenados por dorsal.
-
-    Solo la plantilla oficial de baskonia.com (ver
-    `scraper/baskonia_official.py`) rellena `photo_url`; un jugador
-    capturado únicamente vía BBR (temporadas o rosters anteriores, ya no en
-    el equipo) no tiene foto y no se considera "plantilla actual".
-    """
-    players = (
-        session.query(models.Player)
-        .filter_by(team_id=team.id)
-        .filter(models.Player.photo_url.isnot(None))
-        .all()
-    )
-    players.sort(key=lambda p: int(p.number) if p.number and p.number.isdigit() else 999)
-    return players
-
-
-def _player_stats_row(
-    session,
-    team: models.Team,
-    player: models.Player,
-    last_n: int,
-    season: "int | None" = None,
-    league: "str | None" = None,
-) -> "dict | None":
-    """Fila de `player_recent_form` para un jugador concreto, o `None` si no tiene partidos."""
-    form = player_recent_form(session, team, last_n=last_n, season=season, league=league)
-    return next((r for r in form if r["player_name"] == player.name), None)
 
 
 def render_player_card(
@@ -1143,7 +989,7 @@ def build_pdf_report(
 def main() -> None:
     session = get_session()
     focus_slug = config.TEAMS[0] if config.TEAMS else None
-    baskonia = session.query(models.Team).filter_by(slug=focus_slug).first() if focus_slug else None
+    baskonia = team_by_slug(session, focus_slug) if focus_slug else None
     if baskonia is None:
         st.error(
             f"No se encontró el equipo '{focus_slug}' en la base de datos. "

@@ -32,9 +32,10 @@ Adaptador de proyecto para el pipeline agéntico ([AGENTIC_WORKFLOW.md](AGENTIC_
 | `data/` | `baskonia.db` (SQLite, con datos reales ya cargados) |
 | `assets/` | Logos/imágenes estáticas usadas por `app.py` |
 
-No hay submódulos ni monorepo: un solo paquete Python plano en la raíz. **No es un repositorio
-git** (no hay `.git/`); no hay convención de commits que seguir, y el pipeline de features no debe
-asumir operaciones git salvo que el usuario las pida explícitamente.
+No hay submódulos ni monorepo: un solo paquete Python plano en la raíz. **Sí es un repositorio
+git** (existe `.git/`, verificado con `git rev-parse --is-inside-work-tree` → `true`). El pipeline
+de features puede usar operaciones git (`git mv` para conservar historial, `git revert` para
+rollback) cuando aporten valor, sin asumir una convención de commits concreta.
 
 ## Capas (regla de dependencia, si aplica)
 
