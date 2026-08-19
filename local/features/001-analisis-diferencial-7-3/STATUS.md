@@ -1,10 +1,68 @@
 # Status: 001-analisis-diferencial-7-3
-stage: development
+stage: done
 docs: yes
 tests: no
-review_cycles: 0
+review_cycles: 1
 design_cycles: 4
-blocked_on: (ninguno) — DISEÑO DEL CICLO 4 COMPLETO, SIN BLOQUEO REAL. `01_design.md` ya integra la
+blocked_on: (ninguno) — DOCUMENTACIÓN COMPLETA (etapa 4, Feature Documenter). Ejecutado WP-8, que el
+  developer dejó explícitamente pendiente para esta etapa (ver `02_implementation.md` →
+  "Desviaciones del diseño" #1): en `README.md` — (a) sección 7.3, los 6 checkboxes `[ ]`→`[x]` +
+  cabecera/intro actualizada de "(propuestas, sin implementar)" a "(implementadas)"; (b) "Estado
+  actual", nuevo bullet con las 6 ideas + los dos selectores globales (temporada/competición),
+  mencionando los umbrales de racha/narrativa como constantes ajustables en `insights.py`; (c)
+  ampliada (no duplicada) la limitación ya documentada por la feature 002 sobre la tabla `SPA` de
+  BBR (mezcla liga regular con playoffs/Copa), señalando que el nuevo selector de Competición hereda
+  esa misma limitación; (d) sección 6 (GUI), párrafo de cabecera + ítems 1 y 3 de la lista de
+  pestañas, documentando los selectores nuevos y las subsecciones nuevas visibles en la UI. No se
+  tocó el párrafo de `format_date_es()` ya presente en esa sección (añadido por una ejecución
+  anterior, no relacionado con esta feature). No se tocó ningún fichero `.py` ni `data/baskonia.db`.
+  Verificado que las ~20 funciones/constantes públicas nuevas o extendidas ya tienen docstring
+  español estilo Google, consistente con el resto del código — sin huecos de documentación de
+  código detectados (ver `04_docs.md` → "Huecos detectados"). `tests: no` → no se encadena etapa 5;
+  esta era la última etapa activa de la feature. Ver `04_docs.md` para el detalle completo.
+  ------ (registro previo, etapa 3 / reviewer, ciclo 1) ------
+  (ninguno) — REVIEW CICLO 1: APPROVED (0 BLOCKER, 0 MAJOR, 2 MINOR/INFO no bloqueantes).
+  Ver `03_review.md`. Los dos hallazgos que el developer ya había señalado en `02_implementation.md`
+  se verificaron de forma independiente por el reviewer (código real + consultas propias contra
+  `data/baskonia.db`) y no bloquean: (1) las 7 funciones cuyo cuerpo remitía a un "ciclo 1" ya
+  borrado del diseño están implementadas de forma coherente con el contrato fijado y el estilo del
+  resto del código — verificado línea a línea, sin incoherencias; (2) los umbrales de racha ±1.0 no
+  se disparan con `recent_n=5` (rango real de `z_score_pts`: -0.615..0.125) es una consecuencia
+  matemática fiel a la fórmula ya fijada por el diseño, no un bug — queda como decisión de producto
+  pendiente para el usuario (ajustar constantes o normalizar por `√N`), no para el pipeline de
+  desarrollo. Build reproducido por el reviewer (`py_compile` + smoke import limpios) más una
+  verificación adicional con `streamlit.testing.v1.AppTest` (0 excepciones en 3 combinaciones
+  temporada×competición). Siguiente etapa: **documentación** (`docs: yes`) — el Documenter debe
+  ejecutar WP-8 (pendiente, deliberadamente no hecho por el developer): checkboxes `[ ]`→`[x]` de la
+  sección 7.3 de `README.md` + nota en "Estado actual" mencionando los dos selectores y la
+  limitación de cobertura de datos de Euroliga (ver supuesto #13 de `01_design.md` y desviación #1
+  de `02_implementation.md`). `tests: no` → no se encadena etapa 5.
+  ------ (registro previo, etapa 2 / developer) ------
+  (ninguno) — DESARROLLO COMPLETO, LISTO PARA REVIEW. Implementados 9 de los 10 WPs
+  (WP-0a, WP-0b, WP-1..WP-6, WP-7) en `insights.py`, `stats.py` y `app.py`; ver
+  `02_implementation.md`. **WP-8 (checkboxes de 7.3 + nota en "Estado actual" de `README.md`)
+  deliberadamente NO ejecutado**: lo asume la etapa 4 (Feature Documenter) por indicación explícita
+  del invocador, para no solaparse — el Documenter debe hacerlo (supuesto #8 del diseño ya preveía la
+  coordinación). Build limpio: `py_compile stats.py insights.py app.py` y
+  `import app, main, stats, insights, report, config` sin error ni warning nuevo. Verificación ad-hoc
+  contra `data/baskonia.db` real de las 6 ideas + Ampliación A + Ampliación B, con los 3 casos de
+  degradado limpio (temporada 2026-27 vacía, 2025-26×Supercopa = 0 partidos, equipo sin
+  `team_game_stats`) documentados con resultados literales; todos los números coinciden con los
+  criterios de aceptación del diseño (incluida la matriz temporada×competición fila por fila).
+  Además `app.py` se ejecutó headless de verdad con `streamlit.testing.v1.AppTest`: **0 excepciones**
+  en las 8 combinaciones temporada×competición y en el camino "rival ya scouteado"
+  (proyección 77.3/88.5/82.9), y `streamlit run app.py` arranca sin traceback (healthz HTTP 200).
+  6 desviaciones menores documentadas con justificación en `02_implementation.md` (ninguna toca
+  contratos ni comportamiento especificado). **Hallazgo para el reviewer**: el diseño remite los
+  cuerpos de 7 funciones al "ciclo 1", cuyo texto ya no existe en `01_design.md` (firmas y contratos
+  sí estaban fijados; los detalles no especificados se implementaron mínimos y están señalados uno a
+  uno). **Segundo hallazgo, no bloqueante**: con `recent_n=5` ningún jugador alcanza el umbral de
+  racha ±1.0 (rango real de `z_score_pts`: -0.615 .. 0.125), consecuencia matemática de la fórmula
+  fijada por el diseño; ajustar umbral o normalizar por √N es decisión de producto y NO se ha tocado.
+  Pendiente solo verificación *visual* de aspecto (anchos de columnas/cabecera), explicitada en
+  `02_implementation.md`.
+  ------ (registro previo, etapa 1 / ciclo 4 de diseño) ------
+  (ninguno) — DISEÑO DEL CICLO 4 COMPLETO, SIN BLOQUEO REAL. `01_design.md` ya integra la
   Ampliación B (selector de competición) sobre el diseño ya aprobado (6 ideas de 7.3 + Ampliación A),
   editado en sitio como delta, sin rehacer el documento. Verificado de nuevo, de forma independiente,
   contra `data/baskonia.db` real: 101 partidos jugados `acb` / 38 `euroleague` (139 total, 0 sin
@@ -89,7 +147,7 @@ blocked_on: (ninguno) — DISEÑO DEL CICLO 4 COMPLETO, SIN BLOQUEO REAL. `01_de
   `team_advanced_summary` y a enhebrar `season` por casi toda la superficie de `app.py`, no solo en
   las 6 funciones nuevas; sigue sin tocar `db/models.py` ni requerir migración). WPs: 10 (antes 8).
   Pendiente: gate humano sobre este diseño revisado antes de reanudar la etapa de desarrollo.
-updated: 2026-08-18 por feature-architect
+updated: 2026-08-19 por feature-documenter
 
 ## Nota operativa de sesión
 Esta sesión no puede lanzar diálogos interactivos desde subagentes (sin AskUserQuestion). Ningún

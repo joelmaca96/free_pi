@@ -145,6 +145,51 @@ que presente **todos los datos necesarios para preparar los partidos**, cargando
   conocida sin corregir (no bloqueante, ver sección 1): la tabla `SPA` de
   BBR agrupa liga regular ACB con playoffs/Copa bajo el mismo código de
   competición, así que `league='acb'` no distingue esas fases.
+- **Análisis diferencial de scouting (las 6 ideas de la sección 7.3) + dos
+  selectores globales de temporada y competición** (`stats.py`/`insights.py`/
+  `app.py`, sin cambios de esquema): **(1) rachas (hot/cold)** — doble
+  z-score por jugador (volumen de PTS y eficiencia TS%,
+  `insights.player_form_zscore()`) de los últimos N partidos frente a su
+  propia media/desviación de la temporada seleccionada, marcado 🔥/❄️/➖ con
+  umbral ±1.0 (`insights.ZSCORE_HOT_THRESHOLD`/`ZSCORE_COLD_THRESHOLD`,
+  constantes ajustables en `insights.py`; con los datos reales de hoy y
+  N=5 el rango de z-score no llega a activar ninguna marca — no es un bug,
+  es consecuencia de comparar la media de N partidos con la desviación por
+  partido sin normalizar por `√N`, ver decisión de producto pendiente); **(2)
+  perfil de tiro** — columnas `3PA%`/`FTr` (proporción de intentos de 3 y
+  tasa de tiros libres sobre el total de intentos) en "Forma reciente" y en
+  la ficha de jugador; **(3) dificultad del próximo tramo de calendario** —
+  Net Rating medio de los próximos N rivales ya scouteados
+  (`insights.schedule_difficulty()`); **(4) proyección simple del próximo
+  partido** — posesiones y marcador esperado combinando pace/ORtg/DRtg
+  medios de ambos equipos (`stats.project_matchup()` +
+  `insights.project_next_matchup()`); **(5) scouting narrativo automático** —
+  párrafo en español que combina ritmo, balance, perfil de tiro, máximo
+  anotador y racha (`insights.scouting_narrative()`; umbrales
+  `_NARRATIVE_PACE_FAST/_SLOW` y `_NARRATIVE_FG3A_RATE_HIGH/_LOW`, también
+  constantes ajustables en `insights.py`); **(6) gestión de carga/fatiga** —
+  minutos acumulados por jugador en una ventana de días ajustable (1-30,
+  default 14, `app.games_in_window()`/`player_load_df()`), deliberadamente
+  **sin** filtro de temporada/competición (una ventana de días nunca cruza
+  el hueco real de ~3 meses entre temporadas de este proyecto). La
+  "temporada" se deriva en tiempo de consulta a partir de `Game.date` (sin
+  columna ni migración nueva — regla mes ≥ 7 → empieza esa temporada,
+  `insights.season_start_year()`/`list_seasons()`/`current_season()`) y se
+  enhebra por casi toda la superficie de `app.py`; únicas excepciones
+  deliberadas: `upcoming_games()` (calendario pendiente, se quedaría vacío
+  al elegir una temporada cerrada), `validate_data()` (calidad de datos
+  transversal) y la propia carga/fatiga (idea 6, ver arriba). La
+  "competición" es un segundo selector global, ortogonal al de temporada
+  (`Game.league`, ya fiable tras el fix descrito arriba), combinado con
+  "Temporada" por intersección (AND) en el mismo conjunto de funciones;
+  hereda la misma limitación de la tabla `SPA` de BBR descrita en el punto
+  anterior (elegir "ACB" sigue mezclando liga regular con playoffs/Copa del
+  Rey) y hoy no muestra ninguna estadística avanzada al elegir "Euroliga"
+  porque el 0% de `boxscores`/`team_game_stats` capturados hasta ahora es de
+  esa competición — degradado limpio vía `Optional[...]`/`None`, no un fallo
+  del filtro (pendiente de ampliar la captura si se quiere ver Euroliga con
+  datos, fuera de alcance de esta feature). Ver también sección 6 (GUI) y
+  sección 7.3.
 
 **❌ Pendiente (no existe nada de esto todavía):**
 - Arquitectura de la aplicación final.
@@ -202,15 +247,19 @@ limitación pendiente.
   `barcelona` tienen 4 partidos jugados con `league='acb'` cada uno y
   `valencia` 5 (liga regular + playoffs/Copa del Rey fusionados bajo el
   mismo `id` de tabla de BBR). Hoy `league='acb'` no permite filtrar solo
-  liga regular.
+  liga regular. El selector de **Competición** de la GUI (sección 6, feature
+  de análisis diferencial de 7.3) hereda esta misma limitación: distingue
+  ACB vs Euroliga vs Supercopa, no sub-fases dentro de ACB — elegir "ACB" en
+  el selector sigue mezclando liga regular con playoffs/Copa del Rey.
 
-Quedan dos frentes razonables para seguir (no implementados todavía):
+Queda un frente razonable para seguir (no implementado todavía):
 - **Automatizar la ejecución periódica** del pipeline (tarea programada) para
   que la GUI muestre siempre datos al día sin lanzar `main.py` a mano.
-- **Tests automatizados** para `parser.py`/`stats.py`/`insights.py`/
-  `_select_boxscores`/`resolve_opponent_team`: no hay ningún test todavía y ya
-  han aparecido varios bugs sutiles de emparejamiento de nombres; conviene
-  proteger contra regresiones antes de seguir añadiendo funcionalidad encima.
+
+**✅ Tests automatizados implementados** (2026-08-19): suite `pytest` en
+`tests/` que protege contra regresiones en las capas donde han aparecido los
+bugs más sutiles (emparejamiento de nombres, parsing de BBR, cálculo de
+estadísticas). Ver sección 6.2.
 
 ---
 
@@ -455,24 +504,60 @@ streamlit run app.py
 ```
 
 Abre una página web local (por defecto `http://localhost:8501`) **centrada en
-el Baskonia** (primer slug de `config.TEAMS`), con cuatro pestañas:
+el Baskonia** (primer slug de `config.TEAMS`). La cabecera es **global a las
+cuatro pestañas**: escudo, selector numérico de N partidos (forma reciente) y,
+desde la feature de análisis diferencial de la sección 7.3, dos selectores
+adicionales — **Temporada** (`season_selector`: temporadas con al menos un
+partido guardado de este equipo, formato `AAAA-AA`, preseleccionada la más
+reciente con partidos ya jugados) y **Competición** (`league_selector`: ligas
+ya vistas de este equipo + opción "Todas" por defecto). Ambos se derivan en
+tiempo de consulta sin columnas nuevas en la BD (`insights.list_seasons()`/
+`current_season()` a partir de `Game.date`; `insights.list_leagues()` a
+partir de `Game.league`) y se combinan por intersección (AND); se enhebran
+por casi toda la GUI, con dos excepciones deliberadas: "Próximos
+enfrentamientos" sigue listando **todo** el calendario pendiente
+independientemente del filtro (para no vaciar la pestaña al elegir una
+temporada ya cerrada) y la sección de carga/fatiga (ver pestaña 1) usa una
+ventana de días, no de temporada. Cuatro pestañas:
 
-1. **Resumen**: estadísticas avanzadas medias (Pace/ORtg/DRtg/Net/eFG%/TS%);
+1. **Resumen**: **resumen automático** en texto generado a partir de las
+   stats ya calculadas del equipo — ritmo, balance, perfil de tiro, máximo
+   anotador y racha (`insights.scouting_narrative()`; no se pinta nada si el
+   equipo no tiene ninguna estadística avanzada en la temporada/competición
+   seleccionada); estadísticas avanzadas medias (Pace/ORtg/DRtg/Net/eFG%/TS%);
    **últimos N partidos jugados** (gráfico de ORtg/DRtg) separado de
    **enfrentamientos directos** contra los otros equipos de `TEAMS` (pueden
    quedar fuera de los últimos N si el enfrentamiento fue hace tiempo, o
    solaparse si es reciente — se muestran en tablas distintas a propósito,
    para no dar la impresión equivocada de que no hay enfrentamientos
-   directos recientes); y forma reciente por jugador (gráfico de PTS).
+   directos recientes); forma reciente por jugador (gráfico de PTS, y tabla
+   con columnas de perfil de tiro `3PA%`/`FTr` — proporción de intentos de 3
+   y tasa de tiros libres sobre el total de intentos); **rachas (hot/cold)**:
+   doble z-score por jugador (volumen de PTS y eficiencia TS%) de los
+   últimos N partidos frente a su media/desviación de la temporada
+   seleccionada, marcado 🔥/❄️/➖ con umbral ±1.0 (ver "Estado actual" sobre
+   por qué apenas se activa con los datos de hoy); y **carga de minutos**
+   (gestión de fatiga): minutos acumulados por jugador en una ventana de
+   días ajustable (1-30, default 14), independiente del filtro de
+   temporada/competición.
 2. **Partidos anteriores**: selector con **cualquier** partido ya jugado del
    Baskonia (no solo los últimos N o los enfrentamientos vs Bilbao); al
    elegir uno, muestra pace/Net Rating y el box score completo de ambos
    equipos.
 3. **Próximos enfrentamientos**: lista el calendario pendiente — combina lo
    que ya tenga BBR con el calendario oficial de baskonia.com para la 26/27
-   (ver sección 4.1). Si el rival elegido ya tiene datos en la base de
-   datos, muestra directamente su scouting (misma vista que "Resumen" pero
-   del rival) y los **últimos 2 enfrentamientos directos** contra el
+   (ver sección 4.1); esta lista no se acota por temporada/competición (ver
+   excepción explicada más arriba). Antes del selector de rival,
+   **dificultad del próximo tramo de calendario**: Net Rating medio de los
+   próximos N rivales ya scouteados, calculado sobre la temporada/
+   competición seleccionada de cada rival (`insights.schedule_difficulty()`).
+   Si el rival elegido ya tiene datos en la base de datos, además de su
+   scouting (misma vista que "Resumen" pero del rival, con las mismas
+   subsecciones nuevas de rachas/carga) se muestra la **proyección del
+   partido** (posesiones y marcador esperado combinando pace/ORtg/DRtg
+   medios de ambos equipos en la temporada seleccionada,
+   `insights.project_next_matchup()` — no aparece si a alguno de los dos le
+   falta algún valor) y los **últimos 2 enfrentamientos directos** contra el
    Baskonia (constante `H2H_LAST_N` en `app.py`, independiente del N de
    "forma reciente"). Si es la primera vez que aparece, un botón
    **"Descargar datos de `<rival>`"** lanza la descarga bajo demanda (roster
@@ -497,6 +582,11 @@ cuerpo técnico lo lleve impreso o lo comparta sin abrir la app. Los nombres
 con caracteres fuera de Latin-1 (p.ej. "Žalgiris") se aproximan a ASCII antes
 de escribirlos al PDF (`_pdf_safe()`): la fuente base de fpdf2 no los soporta
 y antes hacía saltar toda la pestaña, no solo el PDF.
+
+Todas las fechas se muestran en **castellano** (`format_date_es()` en
+`app.py`): BBR guarda las fechas en inglés ("Sun, Nov 23, 2025") y la GUI las
+convierte a "domingo, 23 de noviembre de 2025" en tablas, gráficos, títulos
+de partido y el propio PDF.
 
 Solo el botón de descarga bajo demanda de un rival hace peticiones a BBR; el
 resto de la GUI solo lee `data/baskonia.db`.
@@ -683,6 +773,40 @@ servicio `systemd` que lo mantenga levantado.
 
 ---
 
+## 6.2 Tests automatizados
+
+Suite de tests `pytest` que protege contra regresiones en las capas donde han
+aparecido los bugs más sutiles del proyecto (emparejamiento de nombres entre
+fuentes, parsing de HTML de BBR, cálculo de estadísticas avanzadas). No hay
+ningún test que haga peticiones de red: todos usan HTML de ejemplo embebido o
+una base de datos SQLite en memoria aislada por test (nunca tocan
+`data/baskonia.db`).
+
+```bash
+pip install -r requirements.txt   # incluye pytest
+python -m pytest                  # ejecuta toda la suite
+python -m pytest tests/test_parser.py -k "schedule"   # filtrar por test
+```
+
+### Cobertura
+
+| Fichero | Qué cubre |
+|---|---|
+| `tests/test_parser.py` | Parsing de BBR: clasificación, roster, calendario (slug real del rival, competición real por tabla, local/visitante, notas "Postponed") y box scores (tablas ocultas en comentarios HTML). |
+| `tests/test_stats.py` | Cálculo de eFG%, TS%, posesiones, ORtg/DRtg/Net Rating/Pace y proyección de enfrentamiento. |
+| `tests/test_insights.py` | Funciones puras (fechas de temporada, minutos, per-36) y agregaciones sobre BD (forma reciente, resumen avanzado, rachas por z-score, dificultad de calendario, proyección, narrativa, carga de minutos). |
+| `tests/test_main.py` | `_normalize_team_name`, `_select_boxscores` (últimos N + enfrentamientos directos + dedup + emparejamiento por subcadena) y `resolve_opponent_team` (creación, reutilización por slug, emparejamiento por subcadena, migración de slugs falsos). |
+| `tests/test_storage.py` | Upserts idempotentes de `db/storage.py` (equipos, jugadores, partidos, box scores, stats avanzadas) y cálculo automático de eFG%/TS% en `upsert_boxscore`. |
+
+### Fixtures compartidas (`tests/conftest.py`)
+
+- `session`: sesión SQLAlchemy sobre una BD SQLite en memoria, aislada por test.
+- `teams`: dos equipos de ejemplo (Baskonia y Bilbao).
+- `played_game`: un partido jugado con box scores y stats avanzadas de ambos
+  equipos, listo para los tests de agregación.
+
+---
+
 ## 7. Pendiente / Próximos pasos
 
 ### 7.1 Tareas inmediatas del pipeline (scraping)
@@ -748,33 +872,37 @@ servicio `systemd` que lo mantenga levantado.
 - [ ] Base de datos de producción.
 - [ ] Automatización del pipeline (ejecución periódica).
 
-### 7.3 Ideas de análisis diferencial (propuestas, sin implementar)
+### 7.3 Ideas de análisis diferencial (implementadas)
 
 Brainstorm de mejoras orientadas a análisis/estadísticas, no solo tablas de
-datos. Ninguna requiere scraping nuevo — todas parten de datos que el
-pipeline ya guarda (`boxscores`, `team_game_stats`, calendario oficial).
-Pendiente de que el usuario priorice cuál(es) implementar.
+datos. Ninguna requirió scraping nuevo — las 6 se calculan sobre datos que el
+pipeline ya guardaba (`boxscores`, `team_game_stats`, calendario oficial).
+Implementadas las 6 en `stats.py`/`insights.py`/`app.py`, acotables a una
+**temporada** y una **competición** concretas mediante los dos selectores
+globales nuevos de la cabecera de la GUI (ver "Estado actual" y sección 6).
 
-- [ ] **Detector de rachas (hot/cold streaks)**: comparar la media de los
+- [x] **Detector de rachas (hot/cold streaks)**: comparar la media de los
       últimos 3-5 partidos de cada jugador contra su propia media de
       temporada (z-score simple) para marcar automáticamente quién está en
       racha y quién bajo de forma. Cálculo puro sobre `player_recent_form`.
-- [ ] **Perfil de tiro / selección de tiro**: ratios a partir de columnas ya
+      Implementado como doble z-score (PTS y TS%), no solo uno — ver "Estado
+      actual".
+- [x] **Perfil de tiro / selección de tiro**: ratios a partir de columnas ya
       guardadas pero no expuestas como ratio (`fg3_attempted/fg_attempted`,
       tasa de tiros libres) — de qué manera tira cada jugador, útil para
       scouting real.
-- [ ] **Dificultad del próximo tramo de calendario**: media de Net Rating de
+- [x] **Dificultad del próximo tramo de calendario**: media de Net Rating de
       los próximos N rivales (los ya scouteados) usando el calendario real
       de `baskonia_official.fetch_upcoming_games()`, para avisar de rachas
       de calendario duras o asequibles.
-- [ ] **Proyección simple del próximo partido**: estimar posesiones/marcador
+- [x] **Proyección simple del próximo partido**: estimar posesiones/marcador
       esperado combinando pace + ORtg/DRtg de ambos equipos (fórmula
       estándar de posesiones). Sería la única funcionalidad predictiva de la
       app; todo lo demás hoy es descriptivo/histórico.
-- [ ] **Scouting narrativo automático**: resumen en texto generado a partir
+- [x] **Scouting narrativo automático**: resumen en texto generado a partir
       de las stats ya calculadas del rival ("juega rápido, tira mucho de 3,
       su base anota de más...") en vez de solo tablas sueltas.
-- [ ] **Gestión de carga/fatiga**: minutos acumulados por jugador en una
+- [x] **Gestión de carga/fatiga**: minutos acumulados por jugador en una
       ventana de días (no de partidos) como proxy de fatiga para rotaciones.
 
 **Descartado por falta de datos** (no es que falte implementarlo, es que la

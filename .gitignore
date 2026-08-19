@@ -28,3 +28,17 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Logs de Streamlit
+.streamlit/logs/
+
+# Logs de pytest
+.pytest_cache/
+
+# Logs de coverage
+htmlcov/
+
+informe.txt
+download_logos.py
+
+local/
