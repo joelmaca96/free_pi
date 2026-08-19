@@ -21,6 +21,8 @@ import requests
 
 from packages.baskonia_core import config
 
+from .ratelimit import throttle
+
 logger = logging.getLogger(__name__)
 
 ACB_API_BASE = "https://www.acb.com/api"
@@ -63,6 +65,7 @@ def fetch_team_games(team_name: str, season: int) -> List[Dict[str, object]]:
     url = f"{ACB_API_BASE}/teams/{team_name}/games"
     params = {"season": season}
     logger.info("Obteniendo partidos de %s (temporada %s) desde la API ACB", team_name, season)
+    throttle(url)
     response = requests.get(url, params=params, headers=_headers(), timeout=config.TIMEOUT)
     response.raise_for_status()
     payload = response.json()

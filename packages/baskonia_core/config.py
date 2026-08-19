@@ -27,6 +27,13 @@ REQUEST_DELAY = float(os.getenv("REQUEST_DELAY", "20"))
 TIMEOUT = float(os.getenv("TIMEOUT", "30"))
 MAX_RETRIES = int(os.getenv("MAX_RETRIES", "3"))
 
+# Retardo entre peticiones para las fuentes que no son Basketball-Reference
+# (RealGM, API ACB, CMS baskonia.com). BBR banea IPs agresivamente y por eso
+# usa los 20 s de `REQUEST_DELAY`; las demás fuentes son APIs JSON o páginas
+# menos hostiles, y aplicarles 20 s haría inviable el backfill de temporada
+# (RealGM publica el calendario por día: ~273 peticiones por liga).
+SOURCE_REQUEST_DELAY = float(os.getenv("SOURCE_REQUEST_DELAY", "2"))
+
 # --- Base de datos ---
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///data/baskonia.db")
 

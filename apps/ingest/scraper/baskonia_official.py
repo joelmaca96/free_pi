@@ -21,6 +21,8 @@ import requests
 
 from packages.baskonia_core import config
 
+from .ratelimit import throttle
+
 logger = logging.getLogger(__name__)
 
 API_BASE = "https://cms.deportivoalaves.com/api"
@@ -99,6 +101,7 @@ def fetch_games(
         from_date.isoformat(),
         to_date.isoformat() if to_date else "∞",
     )
+    throttle(API_BASE)
     response = requests.get(f"{API_BASE}/games-items", params=params, headers=_headers(), timeout=config.TIMEOUT)
     response.raise_for_status()
     payload = response.json()
@@ -181,6 +184,7 @@ def fetch_current_roster() -> List[Dict[str, object]]:
         "filters[team_member_role][key][$eq]": "Player",
     }
     logger.info("Obteniendo plantilla actual de baskonia.com")
+    throttle(API_BASE)
     response = requests.get(f"{API_BASE}/team-members", params=params, headers=_headers(), timeout=config.TIMEOUT)
     response.raise_for_status()
     payload = response.json()

@@ -8,7 +8,9 @@ La deduplicación es por clave natural `(date, opponent_normalizado, is_home)`
 (mismo criterio que el upsert de BD por `(date, home, away)`). Cuando dos
 fuentes aportan el mismo partido, gana la de mayor prioridad según
 `SOURCE_PRIORITY` (RealGM primero); a igual prioridad, la que trae más datos
-(resultado y boxscore_url sobre solo fecha).
+(resultado y boxscore_url sobre solo fecha). Los campos que la fuente ganadora
+deja vacíos se completan con los de las perdedoras, para no perder un dato
+(p.ej. el `boxscore_url` que solo publica BBR) solo por prioridad de fuente.
 """
 import logging
 import re
@@ -98,12 +100,15 @@ def merge_sources(
             `scraper/`.
 
     Returns:
-        Lista única de partidos, sin duplicados, con los campos de la fuente
-        ganadora en caso de conflicto.
+        Lista única de partidos, sin duplicados. En caso de conflicto mandan
+        los campos de la fuente ganadora, pero los campos que esa fuente deja
+        vacíos se completan con los de las fuentes perdedoras (ver abajo).
     """
     # Mapa clave -> (prioridad, score, partido)
     # Menor número de prioridad = mayor prioridad (RealGM=0 es la principal).
     best: Dict[Tuple[str, str, bool], Tuple[int, int, Dict[str, object]]] = {}
+    # Mapa clave -> partidos descartados, con su prioridad, para rellenar huecos.
+    losers: Dict[Tuple[str, str, bool], List[Tuple[int, Dict[str, object]]]] = {}
 
     for source_name, games in sources:
         priority = SOURCE_PRIORITY.get(source_name, 99)
@@ -115,8 +120,49 @@ def merge_sources(
                 priority < current[0]
                 or (priority == current[0] and score > current[1])
             ):
+                if current is not None:
+                    losers.setdefault(key, []).append((current[0], current[2]))
                 best[key] = (priority, score, game)
+            else:
+                losers.setdefault(key, []).append((priority, game))
 
-    merged = [entry[2] for entry in best.values()]
+    merged = [
+        _fill_gaps(entry[2], [g for _, g in sorted(losers.get(key, []), key=lambda p: p[0])])
+        for key, entry in best.items()
+    ]
     logger.info("Fusión: %d partidos únicos a partir de %d fuentes", len(merged), len(sources))
     return merged
+
+
+def _fill_gaps(
+    winner: Dict[str, object], others: List[Dict[str, object]]
+) -> Dict[str, object]:
+    """Completa los campos vacíos del partido ganador con los de las otras fuentes.
+
+    La fuente de mayor prioridad manda, pero puede no traer todo: RealGM puede
+    dar un partido sin `boxscore_url` que BBR sí publica. Sin este relleno ese
+    dato se perdería solo por haber perdido la fusión, aunque no hubiera
+    conflicto real (el ganador no aporta valor para ese campo).
+
+    Solo se rellenan claves ausentes o con valor vacío (`None`/`""`): nunca se
+    sobrescribe un valor que el ganador sí trae.
+
+    Args:
+        winner: Partido de la fuente de mayor prioridad.
+        others: Partidos descartados para la misma clave natural, ordenados de
+            mayor a menor prioridad de fuente.
+
+    Returns:
+        Copia del partido ganador con los huecos rellenados.
+    """
+    if not others:
+        return winner
+
+    filled = dict(winner)
+    for other in others:
+        for field, value in other.items():
+            if value is None or value == "":
+                continue
+            if filled.get(field) is None or filled.get(field) == "":
+                filled[field] = value
+    return filled

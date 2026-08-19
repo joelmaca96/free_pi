@@ -126,3 +126,71 @@ def test_ingest_can_import_network_libs() -> None:
         "apps/ingest/scraper no importa ninguna librería de red (requests/bs4). "
         "Si la ingesta dejara de usar red, revisar esta regla."
     )
+
+
+# --- Puentes de migración ---------------------------------------------------
+
+# Módulos de la raíz que NO son puentes (capa de borde con código propio).
+NON_BRIDGE_ROOT_MODULES = {"app"}
+
+BRIDGE_MARKER = "PUENTE DE MIGRACIÓN"
+
+ROOT_DIR = Path(__file__).resolve().parent.parent
+
+
+def _root_bridge_files():
+    """Ficheros .py de la raíz que deben ser puentes de migración."""
+    return sorted(
+        py_file
+        for py_file in ROOT_DIR.glob("*.py")
+        if py_file.stem not in NON_BRIDGE_ROOT_MODULES
+    )
+
+
+@pytest.mark.parametrize("pyfile", _root_bridge_files(), ids=lambda p: p.name)
+def test_root_bridges_are_marked(pyfile):
+    """Todo módulo puente de la raíz lleva el marcador de retirada en F7.
+
+    Principio 3 de `doc/arquitectura/02_migration.md`: los puentes son
+    temporales y explícitos. Sin el marcador, la limpieza de F7 no los
+    encuentra. Regresión: `config.py` era una copia literal de
+    `packages/baskonia_core/config.py` sin marcador, así que habría
+    sobrevivido a F7 y divergido en silencio.
+    """
+    source = pyfile.read_text(encoding="utf-8")
+    assert BRIDGE_MARKER in source, (
+        f"{pyfile.name} está en la raíz y no lleva '{BRIDGE_MARKER}'. "
+        "Si es un puente, márcalo; si es código propio, añádelo a "
+        "NON_BRIDGE_ROOT_MODULES."
+    )
+
+
+@pytest.mark.parametrize("pyfile", _root_bridge_files(), ids=lambda p: p.name)
+def test_root_bridges_do_not_duplicate_domain(pyfile):
+    """Un puente reexporta el dominio; no redefine su contenido.
+
+    Se comprueba que no declara constantes de configuración ni clases/funciones
+    propias: si lo hace, es una copia y no un puente, y las dos definiciones
+    divergirán.
+    """
+    tree = ast.parse(pyfile.read_text(encoding="utf-8"), filename=str(pyfile))
+    own_definitions = [
+        node.name
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+    ]
+    assert not own_definitions, (
+        f"{pyfile.name} define {own_definitions} en vez de solo reexportar el dominio."
+    )
+
+    assignments = [
+        target.id
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        for target in node.targets
+        if isinstance(target, ast.Name) and target.id.isupper()
+    ]
+    assert not assignments, (
+        f"{pyfile.name} redefine las constantes {assignments}; deben vivir solo "
+        "en packages/baskonia_core/."
+    )

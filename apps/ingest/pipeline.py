@@ -15,12 +15,15 @@ Uso:
     python main.py --fix-league      # corrige la competición real de los partidos ya guardados
 """
 import logging
+import os
 import re
 import shutil
+import sqlite3
 import sys
 import unicodedata
 from datetime import date, datetime
 from typing import Dict, List, Optional, Set, Tuple
+from urllib.parse import urlparse
 
 from packages.baskonia_core import config
 from packages.baskonia_core.db import models
@@ -621,8 +624,7 @@ def backfill_league() -> None:
     correcto.
     """
     logger.info("=== Backfill de Game.league ===")
-    backup_path = _backup_database()
-    logger.info("Copia de seguridad creada en %s", backup_path)
+    _log_backup(_backup_database())
 
     client = BBRClient()
     Session = models.init_db()
@@ -674,6 +676,18 @@ def _season_date_range(season: int) -> Tuple[date, date]:
     return date(season, 10, 1), date(season + 1, 6, 30)
 
 
+def _is_realgm_url(url: str) -> bool:
+    """Indica si una URL de box score apunta a RealGM.
+
+    Args:
+        url: URL guardada en `Game.boxscore_url`.
+
+    Returns:
+        `True` si el host es el de RealGM.
+    """
+    return urlparse(str(url)).netloc.endswith("realgm.com")
+
+
 def _capture_realgm_boxscore(session, game_obj: "models.Game") -> None:
     """Descarga (si falta) el box score de un partido desde RealGM y rellena
     los game logs de jugador.
@@ -684,6 +698,12 @@ def _capture_realgm_boxscore(session, game_obj: "models.Game") -> None:
     `player_game_logs` (`upsert_player_game_log`). No hace nada si el partido
     ya tiene box score guardado (idempotente).
 
+    El `boxscore_url` guardado no siempre es de RealGM: si RealGM falló para esa
+    competición, la fusión de fuentes puede haber dejado ganar a BBR y la URL
+    apunta a basketball-reference.com. Pasarla al parser de RealGM no daría un
+    box score, así que se omite explícitamente con un aviso en vez de intentar
+    la descarga y fallar en el parseo.
+
     Args:
         session: Sesión de base de datos.
         game_obj: Partido ya persistido.
@@ -693,6 +713,11 @@ def _capture_realgm_boxscore(session, game_obj: "models.Game") -> None:
         return
     if not game_obj.boxscore_url:
         return  # partido aun no jugado o sin enlace
+    if not _is_realgm_url(game_obj.boxscore_url):
+        logger.warning(
+            "    Box score de otra fuente (no RealGM), se omite: %s", game_obj.boxscore_url
+        )
+        return
 
     try:
         box_data = realgm.fetch_game_boxscore(game_obj.boxscore_url)
@@ -845,8 +870,7 @@ def backfill_season(season: int) -> None:
             2025-26).
     """
     logger.info("=== Backfill de temporada %s ===", season)
-    backup_path = _backup_database()
-    logger.info("Copia de seguridad creada en %s", backup_path)
+    _log_backup(_backup_database())
 
     Session = models.init_db()
     session = Session()
@@ -943,8 +967,7 @@ def scout_team(team_ref: str, season: int) -> None:
         season: Año de inicio de la temporada a scoutear.
     """
     logger.info("=== Scout de equipo %s (temporada %s) ===", team_ref, season)
-    backup_path = _backup_database()
-    logger.info("Copia de seguridad creada en %s", backup_path)
+    _log_backup(_backup_database())
 
     Session = models.init_db()
     session = Session()
@@ -985,15 +1008,34 @@ def scout_team(team_ref: str, season: int) -> None:
         session.close()
 
 
-def _backup_database() -> str:
+def _log_backup(backup_path: Optional[str]) -> None:
+    """Registra el resultado de `_backup_database()`.
+
+    Args:
+        backup_path: Ruta devuelta por `_backup_database()`, o `None` si no
+            había base de datos previa que copiar.
+    """
+    if backup_path is None:
+        logger.info("Sin base de datos previa: no se ha creado copia de seguridad")
+    else:
+        logger.info("Copia de seguridad creada en %s", backup_path)
+
+
+def _backup_database() -> Optional[str]:
     """Copia el fichero sqlite de `config.DATABASE_URL` con un sufijo de timestamp.
 
     Solo soporta `DATABASE_URL` de tipo `sqlite:///<ruta>` (único backend usado
     en este PoC). Nunca sobrescribe una copia anterior: cada llamada genera un
     fichero nuevo.
 
+    La base de datos se abre en modo WAL, así que las escrituras recientes
+    pueden vivir en el fichero `-wal` y no en el `.db`. Antes de copiar se hace
+    `wal_checkpoint(TRUNCATE)` para volcarlas: sin eso la copia perdería en
+    silencio todo lo que aún no se hubiera consolidado.
+
     Returns:
-        Ruta del fichero de copia de seguridad creado.
+        Ruta del fichero de copia de seguridad creado, o `None` si todavía no
+        existe base de datos (primera ejecución: no hay nada que salvar).
 
     Raises:
         RuntimeError: si `DATABASE_URL` no es sqlite (no hay fichero que copiar).
@@ -1002,6 +1044,23 @@ def _backup_database() -> str:
     if not config.DATABASE_URL.startswith(prefix):
         raise RuntimeError(f"Backup no soportado para DATABASE_URL='{config.DATABASE_URL}' (solo sqlite:///)")
     db_path = config.DATABASE_URL[len(prefix):]
+
+    if not os.path.exists(db_path):
+        # Primera ejecución: `models.init_db()` creará la BD después. No hay
+        # datos previos que proteger, así que no es un error.
+        logger.info("No existe %s todavía: se omite la copia de seguridad", db_path)
+        return None
+
+    # Consolidar el WAL en el .db antes de copiar (ver docstring).
+    try:
+        connection = sqlite3.connect(db_path)
+        try:
+            connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        finally:
+            connection.close()
+    except sqlite3.Error as exc:  # noqa: BLE001
+        logger.warning("No se pudo consolidar el WAL antes del backup: %s", exc)
+
     backup_path = f"{db_path}.bak-{datetime.now().strftime('%Y%m%d%H%M%S')}"
     shutil.copy2(db_path, backup_path)
     return backup_path

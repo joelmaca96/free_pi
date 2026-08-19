@@ -7,8 +7,16 @@ bugs sutiles en el pasado: `_normalize_team_name`, `_select_boxscores`
 """
 import pytest
 
-from apps.ingest.pipeline import _normalize_team_name, _select_boxscores, resolve_opponent_team
+from apps.ingest.pipeline import (
+    _capture_realgm_boxscore,
+    _is_realgm_url,
+    _normalize_team_name,
+    _select_boxscores,
+    resolve_opponent_team,
+)
+from apps.ingest.scraper import realgm
 from packages.baskonia_core.db import models
+from packages.baskonia_core.db.storage import upsert_game, upsert_team
 
 
 # --- _normalize_team_name --------------------------------------------------
@@ -162,3 +170,51 @@ def test_resolve_opponent_team_no_slug_keeps_existing_slug(session):
     team = resolve_opponent_team(session, "Bilbao", None, "acb")
     assert team.id == existing.id
     assert team.slug == "bilbao"  # no se migra
+
+
+# --- _is_realgm_url --------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "url,expected",
+    [
+        ("https://basketball.realgm.com/international/boxscore/123", True),
+        ("http://realgm.com/x", True),
+        ("https://www.basketball-reference.com/international/boxscores/x.html", False),
+        ("https://www.acb.com/partido/1", False),
+        ("", False),
+    ],
+)
+def test_is_realgm_url(url, expected):
+    """Distingue los box scores de RealGM de los de otras fuentes.
+
+    `_capture_realgm_boxscore` solo sabe parsear RealGM: si la fusión dejó
+    ganar a BBR, la URL guardada es de otro host y hay que omitirla en vez de
+    intentar descargarla.
+    """
+    assert _is_realgm_url(url) is expected
+
+
+def test_capture_realgm_boxscore_skips_foreign_url(session, monkeypatch, caplog):
+    """Un `boxscore_url` que no es de RealGM no se descarga."""
+    called = []
+    monkeypatch.setattr(
+        realgm, "fetch_game_boxscore", lambda url: called.append(url) or {"home": [], "away": []}
+    )
+
+    home = upsert_team(session, "vitoria", "Baskonia", "acb")
+    away = upsert_team(session, "real-madrid", "Real Madrid", "acb")
+    game = upsert_game(
+        session,
+        date="2025-10-05",
+        league="acb",
+        home_team=home,
+        away_team=away,
+        boxscore_url="https://www.basketball-reference.com/international/boxscores/x.html",
+    )
+    session.commit()
+
+    with caplog.at_level("WARNING"):
+        _capture_realgm_boxscore(session, game)
+
+    assert called == []
+    assert "no RealGM" in caplog.text

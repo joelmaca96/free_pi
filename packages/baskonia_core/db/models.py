@@ -65,7 +65,7 @@ class Game(Base):
     id = Column(Integer, primary_key=True)
     date = Column(String, nullable=False)  # fecha en formato ISO
     league = Column(String, nullable=False)
-    season = Column(Integer, nullable=True)  # año de finalización de la temporada (p.ej. 2026)
+    season = Column(Integer, nullable=True)  # año de inicio de la temporada (p.ej. 2025 para 2025-26)
     home_team_id = Column(Integer, ForeignKey("teams.id"))
     away_team_id = Column(Integer, ForeignKey("teams.id"))
     home_score = Column(Integer, nullable=True)

@@ -31,6 +31,8 @@ from bs4 import BeautifulSoup, Comment
 
 from packages.baskonia_core import config
 
+from .ratelimit import throttle
+
 logger = logging.getLogger(__name__)
 
 REALGM_BASE = "https://basketball.realgm.com"
@@ -271,6 +273,7 @@ def _fetch_schedule_day(
     """
     url = _schedule_url(league, day)
     logger.debug("RealGM: consultando calendario %s de %s", league, day)
+    throttle(url)
     response = session.get(url, timeout=config.TIMEOUT)
     response.raise_for_status()
     soup = BeautifulSoup(response.text, "html.parser")
@@ -360,6 +363,7 @@ def fetch_game_boxscore(
 
     url = boxscore_url if boxscore_url.startswith("http") else f"{REALGM_BASE}{boxscore_url}"
     logger.info("RealGM: descargando box score desde %s", url)
+    throttle(url)
     response = session.get(url, timeout=config.TIMEOUT)
     response.raise_for_status()
     soup = BeautifulSoup(response.text, "html.parser")
@@ -466,6 +470,7 @@ def fetch_player_game_logs(
         # La página de game logs es la del jugador con "Summary" -> "GameLogs".
         game_logs_url = player_url.replace("/Summary", "/GameLogs")
         logger.info("RealGM: game logs de %s desde %s", player_name, game_logs_url)
+        throttle(game_logs_url)
         response = session.get(game_logs_url, timeout=config.TIMEOUT)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, "html.parser")
@@ -510,6 +515,7 @@ def _resolve_player_url(
     for league in ("euroleague", "acb"):
         try:
             teams_url = _teams_url(league)
+            throttle(teams_url)
             response = session.get(teams_url, timeout=config.TIMEOUT)
             response.raise_for_status()
             soup = BeautifulSoup(response.text, "html.parser")
@@ -519,6 +525,7 @@ def _resolve_player_url(
             roster_url = _roster_url_from_team_link(team_link)
             if not roster_url:
                 continue
+            throttle(roster_url)
             roster_response = session.get(roster_url, timeout=config.TIMEOUT)
             roster_response.raise_for_status()
             roster_soup = BeautifulSoup(roster_response.text, "html.parser")
