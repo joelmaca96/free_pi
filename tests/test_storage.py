@@ -12,6 +12,8 @@ from packages.baskonia_core.db.storage import (
     upsert_boxscore,
     upsert_game,
     upsert_player,
+    upsert_player_game_log,
+    upsert_season_team_stats,
     upsert_team,
     upsert_team_game_stats,
 )
@@ -170,3 +172,82 @@ def test_upsert_team_game_stats_idempotent(session, teams, played_game):
     upsert_team_game_stats(session, played_game, teams["vitoria"], ratings)
     upsert_team_game_stats(session, played_game, teams["vitoria"], ratings)
     assert session.query(models.TeamGameStats).count() == 2  # 2 del fixture, sin duplicados
+
+
+def test_upsert_team_game_stats_persists_team_totals(session, teams, played_game):
+    """Los totales de equipo por partido se persisten."""
+    ratings = {
+        "possessions": 70.0,
+        "pace": 69.5,
+        "off_rating": 125.7,
+        "def_rating": 115.1,
+        "net_rating": 10.6,
+        "team_points": 88,
+        "team_rebounds": 40,
+        "team_assists": 20,
+        "team_turnovers": 12,
+        "team_fg_attempted": 70,
+        "team_ft_attempted": 15,
+    }
+    row = upsert_team_game_stats(session, played_game, teams["vitoria"], ratings)
+    assert row.team_points == 88
+    assert row.team_rebounds == 40
+    assert row.team_assists == 20
+    assert row.team_turnovers == 12
+    assert row.team_fg_attempted == 70
+    assert row.team_ft_attempted == 15
+
+
+def test_upsert_boxscore_persists_pf_and_gs(session, teams, played_game):
+    """Las columnas nuevas PF (personal_fouls) y GS (games_started) se persisten."""
+    stats = {"MP": "30:00", "PTS": 22, "FG": 8, "FGA": 15, "PF": 3, "GS": 1}
+    box = upsert_boxscore(session, played_game, teams["vitoria"], "Markus Howard", stats)
+    assert box.personal_fouls == 3
+    assert box.games_started == 1
+
+
+# --- upsert_player_game_log ------------------------------------------------
+
+def test_upsert_player_game_log_creates(session, teams, played_game):
+    """Un game log de jugador nuevo se inserta."""
+    player = upsert_player(session, "Markus Howard", teams["vitoria"])
+    stats = {"MP": "30:00", "PTS": 22, "TRB": 3, "AST": 4, "STL": 1, "BLK": 0, "TOV": 2,
+             "FG": 8, "FGA": 15, "3P": 4, "3PA": 9, "FT": 2, "FTA": 2, "+/-": 12}
+    log = upsert_player_game_log(session, player, played_game, stats, season=2025)
+    assert log.id is not None
+    assert log.points == 22
+    assert log.rebounds == 3
+    assert log.assists == 4
+    assert log.season == 2025
+    assert log.efg_pct is not None  # se calcula automáticamente
+
+
+def test_upsert_player_game_log_idempotent(session, teams, played_game):
+    """Repetir el upsert del mismo jugador/partido no duplica la fila."""
+    player = upsert_player(session, "Markus Howard", teams["vitoria"])
+    stats = {"MP": "30:00", "PTS": 22, "TRB": 3, "AST": 4}
+    upsert_player_game_log(session, player, played_game, stats, season=2025)
+    upsert_player_game_log(session, player, played_game, stats, season=2025)
+    assert session.query(models.PlayerGameLog).count() == 1
+
+
+# --- upsert_season_team_stats ----------------------------------------------
+
+def test_upsert_season_team_stats_creates(session, teams):
+    """Los agregados de temporada se insertan."""
+    stats = {"games_played": 34, "wins": 25, "losses": 9, "points_per_game": 88.5,
+             "rebounds_per_game": 36.2, "assists_per_game": 19.8, "pace": 70.1,
+             "off_rating": 118.4, "def_rating": 108.9, "net_rating": 9.5}
+    row = upsert_season_team_stats(session, teams["vitoria"], 2025, stats)
+    assert row.id is not None
+    assert row.games_played == 34
+    assert row.wins == 25
+    assert row.points_per_game == pytest.approx(88.5)
+
+
+def test_upsert_season_team_stats_idempotent(session, teams):
+    """Repetir el upsert del mismo equipo/temporada no duplica la fila."""
+    stats = {"games_played": 34, "wins": 25, "losses": 9}
+    upsert_season_team_stats(session, teams["vitoria"], 2025, stats)
+    upsert_season_team_stats(session, teams["vitoria"], 2025, stats)
+    assert session.query(models.SeasonTeamStats).count() == 1

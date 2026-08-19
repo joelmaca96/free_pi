@@ -674,6 +674,161 @@ def _season_date_range(season: int) -> Tuple[date, date]:
     return date(season, 10, 1), date(season + 1, 6, 30)
 
 
+def _capture_realgm_boxscore(session, game_obj: "models.Game") -> None:
+    """Descarga (si falta) el box score de un partido desde RealGM y rellena
+    los game logs de jugador.
+
+    RealGM es la fuente principal de box scores. Para cada partido jugado con
+    `boxscore_url` de RealGM, descarga las tablas de jugadores de ambos
+    equipos, persiste los box scores (`upsert_boxscore`) y rellena
+    `player_game_logs` (`upsert_player_game_log`). No hace nada si el partido
+    ya tiene box score guardado (idempotente).
+
+    Args:
+        session: Sesión de base de datos.
+        game_obj: Partido ya persistido.
+    """
+    already_saved = session.query(models.BoxScore).filter_by(game_id=game_obj.id).first() is not None
+    if already_saved:
+        return
+    if not game_obj.boxscore_url:
+        return  # partido aun no jugado o sin enlace
+
+    try:
+        box_data = realgm.fetch_game_boxscore(game_obj.boxscore_url)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("    Error capturando box score RealGM %s: %s", game_obj.boxscore_url, exc)
+        return
+
+    for box_team, rows in (
+        (game_obj.home_team, box_data.get("home", [])),
+        (game_obj.away_team, box_data.get("away", [])),
+    ):
+        for player_row in rows:
+            player_name = player_row.get("player_name")
+            if not player_name:
+                continue
+            upsert_boxscore(session, game_obj, box_team, player_name, player_row)
+            # Rellenar el game log del jugador (nivel jugador/temporada).
+            player = upsert_player(session, player_name, box_team)
+            upsert_player_game_log(
+                session, player, game_obj, player_row, season=game_obj.season
+            )
+
+    # Estadísticas avanzadas del partido (eFG%/TS% ya se calculan por jugador
+    # dentro de upsert_boxscore; aquí pace/ORtg/DRtg por equipo).
+    _backfill_player_advanced(session, game_obj.id)
+    _ensure_advanced_stats(session, game_obj, game_obj.home_team, game_obj.away_team)
+
+
+def _capture_boxscores_and_logs(session, team: "models.Team", season: int) -> None:
+    """Captura los box scores de los partidos jugados de un equipo en una
+    temporada y rellena `player_game_logs`.
+
+    Recorre los partidos del equipo en la temporada que ya tienen
+    `boxscore_url` (jugados) y los captura desde RealGM de forma idempotente.
+    Es el paso que conecta la captura completa a nivel de partido/jugador en
+    `backfill_season`/`scout_team`.
+
+    Args:
+        session: Sesión de base de datos.
+        team: Equipo objetivo.
+        season: Año de inicio de la temporada.
+    """
+    games = (
+        session.query(models.Game)
+        .filter(
+            (models.Game.home_team_id == team.id) | (models.Game.away_team_id == team.id),
+            models.Game.season == season,
+            models.Game.boxscore_url.isnot(None),
+        )
+        .all()
+    )
+    for game_obj in games:
+        _capture_realgm_boxscore(session, game_obj)
+    session.commit()
+    logger.info("  Box scores capturados para %d partidos de %s (%s)", len(games), team.name, season)
+
+
+def _populate_season_team_stats(session, team: "models.Team", season: int) -> None:
+    """Calcula y persiste los agregados de temporada de un equipo.
+
+    Agrega desde los partidos jugados y los box scores ya guardados del
+    equipo en la temporada: partidos jugados, victorias/derrotas, medias de
+    puntos/rebotes/asistencias y las medias de pace/ORtg/DRtg/Net Rating de
+    `team_game_stats`. Idempotente (`upsert_season_team_stats`).
+
+    Args:
+        session: Sesión de base de datos.
+        team: Equipo objetivo.
+        season: Año de inicio de la temporada.
+    """
+    games = (
+        session.query(models.Game)
+        .filter(
+            (models.Game.home_team_id == team.id) | (models.Game.away_team_id == team.id),
+            models.Game.season == season,
+            models.Game.home_score.isnot(None),
+        )
+        .all()
+    )
+    if not games:
+        return
+
+    wins = losses = 0
+    total_points = total_rebounds = total_assists = 0
+    pace_vals = off_vals = def_vals = net_vals = []
+    for game_obj in games:
+        is_home = game_obj.home_team_id == team.id
+        team_score = game_obj.home_score if is_home else game_obj.away_score
+        opp_score = game_obj.away_score if is_home else game_obj.home_score
+        if team_score is not None and opp_score is not None:
+            if team_score > opp_score:
+                wins += 1
+            elif team_score < opp_score:
+                losses += 1
+        total_points += team_score or 0
+
+        # Agregados de box score del equipo en el partido.
+        totals = _team_boxscore_totals(session, game_obj.id, team.id)
+        total_rebounds += totals["team_rebounds"]
+        total_assists += totals["team_assists"]
+
+        # Medias de pace/ORtg/DRtg/Net Rating desde team_game_stats.
+        tgs = (
+            session.query(models.TeamGameStats)
+            .filter_by(game_id=game_obj.id, team_id=team.id)
+            .first()
+        )
+        if tgs is not None:
+            if tgs.pace is not None:
+                pace_vals.append(tgs.pace)
+            if tgs.off_rating is not None:
+                off_vals.append(tgs.off_rating)
+            if tgs.def_rating is not None:
+                def_vals.append(tgs.def_rating)
+            if tgs.net_rating is not None:
+                net_vals.append(tgs.net_rating)
+
+    n = len(games)
+    stats = {
+        "games_played": n,
+        "wins": wins,
+        "losses": losses,
+        "points_per_game": round(total_points / n, 1) if n else None,
+        "rebounds_per_game": round(total_rebounds / n, 1) if n else None,
+        "assists_per_game": round(total_assists / n, 1) if n else None,
+        "pace": round(sum(pace_vals) / len(pace_vals), 1) if pace_vals else None,
+        "off_rating": round(sum(off_vals) / len(off_vals), 1) if off_vals else None,
+        "def_rating": round(sum(def_vals) / len(def_vals), 1) if def_vals else None,
+        "net_rating": round(sum(net_vals) / len(net_vals), 1) if net_vals else None,
+    }
+    upsert_season_team_stats(session, team, season, stats)
+    session.commit()
+    logger.info("  Agregados de temporada %s de %s: %d PJ, %d V, %d D",
+                season, team.name, n, wins, losses)
+
+
 def backfill_season(season: int) -> None:
     """Completa los partidos de una temporada histórica del Baskonia en las 4 competiciones.
 
@@ -761,6 +916,11 @@ def backfill_season(season: int) -> None:
             session.commit()
             logger.info("  %d partidos únicos persistidos", len(merged))
 
+        # Captura completa: box scores de los partidos jugados + game logs de
+        # jugador + agregados de temporada (criterio 5 del diseño).
+        _capture_boxscores_and_logs(session, team, season)
+        _populate_season_team_stats(session, team, season)
+
         logger.info("Backfill de temporada %s completado", season)
     except Exception as exc:  # noqa: BLE001
         session.rollback()
@@ -811,6 +971,11 @@ def scout_team(team_ref: str, season: int) -> None:
             game["season"] = season
         persist_schedule(session, team, merged)
         session.commit()
+
+        # Captura completa del rival: box scores + game logs + agregados.
+        _capture_boxscores_and_logs(session, team, season)
+        _populate_season_team_stats(session, team, season)
+
         logger.info("Scout de %s completado: %d partidos", team_ref, len(merged))
     except Exception as exc:  # noqa: BLE001
         session.rollback()

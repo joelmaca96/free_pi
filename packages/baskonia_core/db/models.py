@@ -65,6 +65,7 @@ class Game(Base):
     id = Column(Integer, primary_key=True)
     date = Column(String, nullable=False)  # fecha en formato ISO
     league = Column(String, nullable=False)
+    season = Column(Integer, nullable=True)  # año de finalización de la temporada (p.ej. 2026)
     home_team_id = Column(Integer, ForeignKey("teams.id"))
     away_team_id = Column(Integer, ForeignKey("teams.id"))
     home_score = Column(Integer, nullable=True)
@@ -104,6 +105,8 @@ class BoxScore(Base):
     plus_minus = Column(Float, nullable=True)
     efg_pct = Column(Float, nullable=True)  # effective field goal %
     ts_pct = Column(Float, nullable=True)  # true shooting %
+    personal_fouls = Column(Integer, nullable=True)  # PF
+    games_started = Column(Integer, nullable=True)  # GS (1 si titular, 0 si no)
 
     game = relationship("Game")
     team = relationship("Team")
@@ -123,8 +126,75 @@ class TeamGameStats(Base):
     off_rating = Column(Float, nullable=True)
     def_rating = Column(Float, nullable=True)
     net_rating = Column(Float, nullable=True)
+    # Totales de equipo por partido (para captura completa a nivel de equipo)
+    team_points = Column(Integer, nullable=True)
+    team_rebounds = Column(Integer, nullable=True)
+    team_assists = Column(Integer, nullable=True)
+    team_turnovers = Column(Integer, nullable=True)
+    team_fg_attempted = Column(Integer, nullable=True)
+    team_ft_attempted = Column(Integer, nullable=True)
 
     game = relationship("Game")
+    team = relationship("Team")
+
+
+class PlayerGameLog(Base):
+    """Game log de un jugador en un partido (nivel jugador/temporada).
+
+    Complementa `BoxScore` con el registro por partido de un jugador a lo
+    largo de una temporada, incluyendo minutos, puntos, rebotes, asistencias,
+    robos, tapones, pérdidas, tiros y métricas de eficiencia. Se usa para
+    reconstruir la evolución de un jugador y los agregados de temporada.
+    """
+
+    __tablename__ = "player_game_logs"
+    __table_args__ = (UniqueConstraint("player_id", "game_id", name="uq_player_game_log"),)
+
+    id = Column(Integer, primary_key=True)
+    player_id = Column(Integer, ForeignKey("players.id"), nullable=False)
+    game_id = Column(Integer, ForeignKey("games.id"), nullable=False)
+    season = Column(Integer, nullable=True)
+    minutes = Column(String, nullable=True)
+    points = Column(Integer, nullable=True)
+    rebounds = Column(Integer, nullable=True)
+    assists = Column(Integer, nullable=True)
+    steals = Column(Integer, nullable=True)
+    blocks = Column(Integer, nullable=True)
+    turnovers = Column(Integer, nullable=True)
+    fg_made = Column(Integer, nullable=True)
+    fg_attempted = Column(Integer, nullable=True)
+    fg3_made = Column(Integer, nullable=True)
+    fg3_attempted = Column(Integer, nullable=True)
+    ft_made = Column(Integer, nullable=True)
+    ft_attempted = Column(Integer, nullable=True)
+    plus_minus = Column(Float, nullable=True)
+    efg_pct = Column(Float, nullable=True)
+    ts_pct = Column(Float, nullable=True)
+
+    player = relationship("Player")
+    game = relationship("Game")
+
+
+class SeasonTeamStats(Base):
+    """Agregados de un equipo por temporada (nivel temporada)."""
+
+    __tablename__ = "season_team_stats"
+    __table_args__ = (UniqueConstraint("team_id", "season", name="uq_season_team_stats"),)
+
+    id = Column(Integer, primary_key=True)
+    team_id = Column(Integer, ForeignKey("teams.id"), nullable=False)
+    season = Column(Integer, nullable=False)
+    games_played = Column(Integer, nullable=True)
+    wins = Column(Integer, nullable=True)
+    losses = Column(Integer, nullable=True)
+    points_per_game = Column(Float, nullable=True)
+    rebounds_per_game = Column(Float, nullable=True)
+    assists_per_game = Column(Float, nullable=True)
+    pace = Column(Float, nullable=True)
+    off_rating = Column(Float, nullable=True)
+    def_rating = Column(Float, nullable=True)
+    net_rating = Column(Float, nullable=True)
+
     team = relationship("Team")
 
 

@@ -45,13 +45,18 @@ def team_game_ratings(
     """Calcula posesiones, pace, ORtg, DRtg y Net Rating de un equipo en un partido.
 
     Args:
-        team_totals: Totales del equipo (fga, fta, orb, tov).
+        team_totals: Totales del equipo (fga, fta, orb, tov, y opcionalmente
+            team_points, team_rebounds, team_assists, team_fg_attempted,
+            team_ft_attempted).
         opp_totals: Totales del rival (fga, fta, orb, tov).
         team_score: Puntos anotados por el equipo.
         opp_score: Puntos anotados por el rival.
 
     Returns:
-        Diccionario con 'possessions', 'pace', 'off_rating', 'def_rating' y 'net_rating'.
+        Diccionario con 'possessions', 'pace', 'off_rating', 'def_rating',
+        'net_rating' y los totales de equipo (team_points, team_rebounds,
+        team_assists, team_fg_attempted, team_ft_attempted) si están
+        disponibles en `team_totals`.
     """
     poss = estimate_possessions(team_totals.get("fga"), team_totals.get("fta"), team_totals.get("orb"), team_totals.get("tov"))
     opp_poss = estimate_possessions(opp_totals.get("fga"), opp_totals.get("fta"), opp_totals.get("orb"), opp_totals.get("tov"))
@@ -61,13 +66,20 @@ def team_game_ratings(
     net_rating = off_rating - def_rating if off_rating is not None and def_rating is not None else None
     pace = (poss + opp_poss) / 2 if poss is not None and opp_poss is not None else None
 
-    return {
+    result: Dict[str, Optional[float]] = {
         "possessions": poss,
         "pace": pace,
         "off_rating": off_rating,
         "def_rating": def_rating,
         "net_rating": net_rating,
     }
+    # Propagar los totales de equipo (si la fuente los aporta) para que
+    # `upsert_team_game_stats` pueda persistirlos en `team_game_stats`.
+    for key in ("team_points", "team_rebounds", "team_assists",
+                "team_fg_attempted", "team_ft_attempted"):
+        if key in team_totals:
+            result[key] = team_totals[key]
+    return result
 
 
 def project_matchup(
