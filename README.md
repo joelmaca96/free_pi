@@ -29,6 +29,22 @@ que presente **todos los datos necesarios para preparar los partidos**, cargando
 > (arquitectura de la app, interfaz, infraestructura) sigue **por construir**.
 
 **✅ Implementado y validado:**
+- **Múltiples fuentes de datos con RealGM como principal** (secciones 4.2–4.4):
+  RealGM (Euroliga + ACB), Basketball-Reference, web oficial del Baskonia
+  (baskonia.com) y API de la ACB. `merge_sources()` las fusiona con prioridad
+  RealGM > BBR > CMS > ACB y deduplicación por `(fecha, rival, local/visitante)`.
+- **Backfill por temporada** (`--backfill-season <año>`): descarga las 4
+  competiciones (Euroliga, ACB, Copa del Rey, Supercopa) de una temporada
+  completa. Otras temporadas son opcionales (bajo demanda).
+- **Scouting de rivales bajo demanda** (`--scout-team <equipo>`): descarga y
+  cachea partidos de equipos que no son el Baskonia.
+- **Captura completa en el modelo de datos**: `Game.season`, `BoxScore`
+  (`personal_fouls`, `games_started`), totales de equipo en `TeamGameStats`,
+  y tablas nuevas `PlayerGameLog` y `SeasonTeamStats` (migración Alembic
+  `a1b2c3d4e5f6_add_season_and_full_stats`).
+- **Preparado para la temporada actual**: descarga partido a partido conforme
+  avanza la temporada (camino idempotente). La automatización programada queda
+  para más adelante.
 - Pipeline de scraping de Basketball-Reference, ejecutado en `.venv` local con datos reales.
 - Modelo de datos SQLAlchemy y almacenamiento idempotente (upserts).
 - `data/baskonia.db` poblada: 5 equipos, 34 jugadores, 8 partidos, 190 líneas de box score, 16 filas de estadísticas avanzadas por equipo/partido (incluye ya los 2 enfrentamientos directos Vitoria-Bilbao).
@@ -280,6 +296,17 @@ compartido. `app.py` queda como capa de presentación pura (sin `session.query`)
 Sin cambio de comportamiento visible: la paridad estricta F0 se mantiene
 byte a byte y la suite pasa (137 tests). Ver `doc/arquitectura/02_migration.md`.
 
+**✅ Fase F4 de la migración a la nueva arquitectura** (2026-08-19): el pipeline
+de captura pasa a ser una **aplicación autónoma** `apps/ingest/` con su propio
+`requirements.txt`. `scraper/`, `main.py` y `report.py` se movieron (con `git mv`)
+a `apps/ingest/` (`scraper/`, `pipeline.py`, `report.py`); el `argparse` y el
+`if __name__ == "__main__"` salen a `apps/ingest/cli.py` (CLI con
+`--refresh-teams`/`--fix-league`). `main.py` en la raíz es ahora un **puente
+temporal** (`# PUENTE DE MIGRACIÓN — eliminar en F7`) que delega en
+`apps.ingest.cli.main`. `requirements.txt` de la raíz es un agregador de
+desarrollo. Sin cambios de lógica en el pipeline; suite verde (178 tests). Ver
+`doc/arquitectura/02_migration.md`.
+
 ---
 
 ## 2. Arquitectura
@@ -290,18 +317,25 @@ byte a byte y la suite pasa (137 tests). Ver `doc/arquitectura/02_migration.md`.
 
 ```
 baskonia-pipeline/
-├── requirements.txt      # requests, beautifulsoup4, pandas, SQLAlchemy, python-dotenv
+├── requirements.txt      # agregador de desarrollo (apunta a los requirements de cada app)
 ├── .env.example          # plantilla de configuración (copiada a .env)
 ├── baskonia_core.py      # PUENTE DE MIGRACIÓN (F1): reexporta el dominio compartido
-├── main.py               # orquestador principal del pipeline
-├── report.py             # CLI de consulta: imprime lo ya guardado, sin red
+├── main.py               # PUENTE DE MIGRACIÓN (F4): delega en apps.ingest.cli.main (eliminar en F7)
 ├── app.py                # GUI (Streamlit) para usuarios sin conocimientos técnicos
-├── scraper/
-│   ├── __init__.py
-│   ├── client.py             # BBRClient: HTTP con rate-limit (20s), reintentos y UTF-8 forzado
-│   ├── parser.py             # parsea tablas HTML de BBR → estructuras limpias
-│   ├── bbr.py                # construye URLs de BBR y orquesta llamadas
-│   └── baskonia_official.py  # API JSON de baskonia.com: calendario 26/27 y plantilla actual
+├── apps/
+│   ├── ingest/           # pipeline de captura autónomo (F4)
+│   │   ├── __init__.py
+│   │   ├── cli.py            # CLI: argparse + main() (--refresh-teams / --fix-league)
+│   │   ├── pipeline.py       # orquestador del pipeline (movido desde main.py)
+│   │   ├── report.py         # CLI de consulta: imprime lo ya guardado, sin red
+│   │   ├── requirements.txt  # runtime de la ingesta (requests, bs4, SQLAlchemy, python-dotenv)
+│   │   └── scraper/
+│   │       ├── __init__.py
+│   │       ├── client.py             # BBRClient: HTTP con rate-limit (20s), reintentos y UTF-8 forzado
+│   │       ├── parser.py             # parsea tablas HTML de BBR → estructuras limpias
+│   │       ├── bbr.py                # construye URLs de BBR y orquesta llamadas
+│   │       └── baskonia_official.py  # API JSON de baskonia.com: calendario 26/27 y plantilla actual
+│   └── api/               # backend FastAPI (F3)
 └── packages/
     └── baskonia_core/        # dominio compartido (F1/F2 de la migración)
         ├── __init__.py
@@ -321,7 +355,14 @@ baskonia-pipeline/
             └── storage.py    # upserts idempotentes
 ```
 
-### Flujo del pipeline (`main.py`)
+> **Nota (F4):** el pipeline de captura vive ahora en `apps/ingest/` como aplicación
+> autónoma con su propio `requirements.txt`. `main.py` en la raíz es un **puente
+> temporal** (`# PUENTE DE MIGRACIÓN — eliminar en F7`) que delega en
+> `apps.ingest.cli.main` para mantener funcionando la documentación, el `cron` y la
+> memoria muscular durante la transición. La ruta canónica de invocación es
+> `python -m apps.ingest.cli`.
+
+### Flujo del pipeline (`apps/ingest/pipeline.py`)
 1. Obtiene la **clasificación** de las ligas configuradas.
 2. Para cada equipo de interés, obtiene **roster** y **calendario** de BBR —
    **solo si el equipo aún no está en la BD**, o si se pasa `--refresh-teams`.
@@ -387,7 +428,7 @@ box score de:
 1. **Enfrentamientos directos** entre los equipos de `TEAMS`.
 2. **Los últimos `LAST_N_GAMES` partidos jugados** de cada equipo.
 
-Implementado en `main.py` → `_select_boxscores()`:
+Implementado en `apps/ingest/pipeline.py` → `_select_boxscores()`:
 - `parse_schedule_games(html)` (en `parser.py`) extrae el calendario estructurado:
   `date`, `opponent`, `opponent_slug`, `boxscore_url`, `is_home`, `points`, `opp_points`.
 - `_select_boxscores()` filtra enfrentamientos directos (oponente en `TEAMS`)
@@ -451,6 +492,62 @@ así que se empareja por nombre normalizado (`resolve_opponent_team()` para
 equipos, nombre exacto para jugadores) — ver limitaciones conocidas en la
 sección 1.
 
+### 4.2 RealGM (fuente principal)
+
+`scraper/realgm.py`. Es la **fuente principal** de calendario y box scores
+para el Baskonia (y para el scouting de rivales). RealGM cubre de forma
+fiable Euroliga y Liga ACB con box scores por jugador y por equipo, y es la
+fuente que alimenta la captura completa (jugador/equipo/temporada/partido).
+
+- Base: `https://basketball.realgm.com`
+- Calendario por día: `/international/league/{id}/{slug}/schedules/{YYYY-MM-DD}`
+  - Euroliga: `id=1`, slug `Euroleague`
+  - Liga ACB: `id=2`, slug `Liga-ACB`
+- Equipos: `/international/league/{id}/{slug}/teams`
+- Box score: enlace extraído de la fila del calendario (página de box score
+  con tablas de jugadores por equipo).
+
+Funciones principales:
+- `fetch_team_schedule(team_name, season, league)` — recorre el rango de
+  fechas de la temporada (1 oct → 30 jun) y devuelve los partidos del equipo
+  objetivo con `opponent`, `is_home`, `points`, `opp_points` y `boxscore_url`.
+- `fetch_game_boxscore(boxscore_url)` — devuelve las tablas de jugadores
+  (`home`/`away`) de un partido.
+- `fetch_player_game_logs(player_name, team_name, season)` — game logs por
+  jugador (pendiente de completar en desarrollo: requiere resolver la página
+  del jugador y sustituir "Summary" por "GameLogs" en la URL).
+
+**Notas de scraping**: RealGM aplica restricciones anti-bot; las tablas
+pueden venir ocultas en comentarios HTML (`_find_all_tables` las extrae) y
+en algunos entornos requiere un navegador no-headless (Selenium). El módulo
+está aislado y envuelto en `try/except` en el punto de llamada para que un
+fallo de esta fuente no tumbe el resto del pipeline.
+
+### 4.3 API de la ACB (fuente de respaldo)
+
+`scraper/acb_api.py`. Fuente de respaldo para la Liga ACB y la Copa del Rey.
+- Base: `https://www.acb.com/api`
+- `fetch_team_games(team_name, season)` — calendario/resultados de un equipo
+  en una temporada.
+
+**Estado**: el esquema JSON de los endpoints está pendiente de verificar en
+desarrollo (el mapeo `_map_game` devuelve `None` hasta confirmar el formato).
+Es una fuente de respaldo: si falla, el pipeline continúa con las demás.
+
+### 4.4 Fusión de fuentes (`scraper/fusion.py`)
+
+`merge_sources(sources)` combina los partidos de varias fuentes en una lista
+única y deduplicada. Cada fuente aporta `(nombre, lista_de_partidos)` con el
+contrato plano de `scraper/`.
+
+- **Prioridad** (`SOURCE_PRIORITY`): `realgm: 0`, `bbr: 1`, `cms: 2`,
+  `acb: 3`. A igual partido, gana la fuente de menor número (RealGM primero).
+- **Deduplicación** por clave natural `(date, opponent_normalizado, is_home)`,
+  donde `_normalize_name` elimina acentos y sufijos (`bc`, `basket`, `club`,
+  `sad`).
+- **Desempate a igual prioridad**: gana la fuente que aporta más datos
+  (resultado y `boxscore_url` sobre solo fecha).
+
 ---
 
 ## 5. Modelo de datos (SQLAlchemy)
@@ -478,10 +575,15 @@ cd baskonia-pipeline
 python3 -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 cp .env.example .env   # ajustar si hace falta
-python main.py
-python main.py --refresh-teams   # fuerza releer roster/calendario de los equipos
-python main.py --fix-league      # backfill: corrige Game.league de partidos ya guardados
+python -m apps.ingest.cli
+python -m apps.ingest.cli --refresh-teams   # fuerza releer roster/calendario de los equipos
+python -m apps.ingest.cli --fix-league      # backfill: corrige Game.league de partidos ya guardados
 ```
+
+> **Puente de transición (F4):** durante la migración, `python main.py` sigue
+> funcionando igual (delega en `apps.ingest.cli.main`). Es un puente temporal
+> (`# PUENTE DE MIGRACIÓN — eliminar en F7`); la ruta canónica es
+> `python -m apps.ingest.cli`.
 
 > El rate-limit de 20s hace que cada petición tarde ~20s. Con la selección
 > filtrada (solo enfrentamientos directos + últimos 3 por equipo) son pocas
@@ -507,10 +609,10 @@ python main.py --fix-league      # backfill: corrige Game.league de partidos ya 
 ### Consultar lo ya guardado (sin red)
 
 ```bash
-python report.py                          # usa los equipos de TEAMS (.env)
-python report.py vitoria bilbao            # equipos concretos (slugs de BBR)
-python report.py --last-n 3                # forma reciente sobre 3 partidos en vez de 5
-python report.py --export informe.txt      # vuelca el mismo informe a un fichero
+python -m apps.ingest.report                          # usa los equipos de TEAMS (.env)
+python -m apps.ingest.report vitoria bilbao            # equipos concretos (slugs de BBR)
+python -m apps.ingest.report --last-n 3                # forma reciente sobre 3 partidos en vez de 5
+python -m apps.ingest.report --export informe.txt      # vuelca el mismo informe a un fichero
 ```
 
 Imprime, por equipo:
@@ -592,7 +694,7 @@ ventana de días, no de temporada. Cuatro pestañas:
    "forma reciente"). Si es la primera vez que aparece, un botón
    **"Descargar datos de `<rival>`"** lanza la descarga bajo demanda (roster
    + calendario + box score de sus últimos N partidos,
-   `fetch_opponent_scouting()` en `main.py`) respetando el rate-limit de
+   `fetch_opponent_scouting()` en `apps/ingest/pipeline.py`) respetando el rate-limit de
    20s — la GUI avisa del tiempo estimado antes de lanzarla. Si el rival no
    se pudo emparejar con un equipo real de BBR (ver limitaciones de la
    sección 1), el botón falla con un aviso legible en vez de reventar.
@@ -775,8 +877,10 @@ servicio `systemd` que lo mantenga levantado.
   Cloudflare y un túnel con nombre. Si se quiere proteger la app, añadir
   autenticación (p.ej. `st.secrets` o un proxy con auth).
 - **Actualización del pipeline**: para que la GUI muestre datos al día, hay
-  que ejecutar `python main.py` periódicamente en la RPi (tarea `cron` o
-  `systemd timer`) — ver "Automatizar la ejecución periódica" en la sección 7.
+  que ejecutar `python -m apps.ingest.cli` periódicamente en la RPi (tarea
+  `cron` o `systemd timer`) — ver "Automatizar la ejecución periódica" en la
+  sección 7. Durante la transición, `python main.py` (puente) sigue
+  funcionando igual.
 
 ### Despliegue profesional (app definitiva)
 
@@ -875,6 +979,32 @@ python -m pytest tests/test_parser.py -k "schedule"   # filtrar por test
       afectados; ver limitaciones en la sección 1). Necesitaría una tabla de
       alias mantenida a mano, o un ID de club canónico compartido — no hay
       forma de resolverlo solo con coincidencia de texto.
+- [x] **RealGM como fuente principal** (`scraper/realgm.py`, sección 4.2):
+      calendario y box scores de Euroliga y Liga ACB, con captura completa a
+      nivel de jugador/equipo/temporada/partido. BBR, baskonia.com y la API
+      de la ACB quedan como fuentes de respaldo.
+- [x] **Fusión de fuentes** (`scraper/fusion.py`, sección 4.4): deduplicación
+      por `(fecha, rival normalizado, local/visitante)` con prioridad
+      RealGM > BBR > CMS > ACB.
+- [x] **Backfill por temporada** (`python main.py --backfill-season 2025`):
+      descarga las 4 competiciones (Euroliga, ACB, Copa del Rey, Supercopa)
+      de una temporada completa. Otras temporadas son opcionales (bajo
+      demanda).
+- [x] **Scouting de rivales bajo demanda** (`python main.py --scout-team
+      <equipo> --scout-season <año>`): descarga y cachea partidos de equipos
+      que no son el Baskonia (p.ej. para ver el estado de forma de un rival),
+      sin volver a descargarlos en ejecuciones posteriores.
+- [x] **Preparado para la temporada actual**: el scraper descarga partido a
+      partido conforme avanza la temporada (mismo camino idempotente de
+      descarga/upsert por partido). La automatización programada queda para
+      más adelante.
+- [x] **Captura completa en el modelo de datos**: `Game.season`,
+      `BoxScore.personal_fouls`/`games_started`, totales de equipo en
+      `TeamGameStats`, y tablas nuevas `PlayerGameLog` y `SeasonTeamStats`
+      (migración Alembic `a1b2c3d4e5f6_add_season_and_full_stats`).
+- [ ] Completar `fetch_player_game_logs` de RealGM (resolución de la página
+      del jugador y sustitución "Summary"→"GameLogs" en la URL).
+- [ ] Verificar el esquema JSON de la API de la ACB y completar `_map_game`.
 
 ### 7.2 Roadmap de la app final (todo por construir)
 > Nada de esto existe todavía. Es la visión del PoC completo.

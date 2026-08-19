@@ -7,7 +7,7 @@ ocultas en comentarios HTML).
 """
 import pytest
 
-from scraper.parser import (
+from apps.ingest.scraper.parser import (
     _table_competition,
     parse_boxscore,
     parse_schedule_games,

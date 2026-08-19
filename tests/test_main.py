@@ -7,7 +7,7 @@ bugs sutiles en el pasado: `_normalize_team_name`, `_select_boxscores`
 """
 import pytest
 
-from main import _normalize_team_name, _select_boxscores, resolve_opponent_team
+from apps.ingest.pipeline import _normalize_team_name, _select_boxscores, resolve_opponent_team
 from packages.baskonia_core.db import models
 
 

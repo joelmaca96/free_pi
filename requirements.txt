@@ -1,13 +1,31 @@
-# Dependencias del pipeline de scraping de Basketball-Reference
+# Dependencias agregadas de desarrollo (raíz del repo).
+# Cada aplicación tiene su propio requirements.txt:
+#   - apps/ingest/requirements.txt  (pipeline de captura)
+#   - apps/api/requirements.txt     (backend FastAPI)
+# Este fichero agrega todo para desarrollo local en un solo `pip install -r requirements.txt`.
+
+# --- apps/ingest (pipeline de captura) ---
 requests>=2.31.0
 beautifulsoup4>=4.12.0
-pandas>=2.0.0
 SQLAlchemy>=2.0.0
 python-dotenv>=1.0.0
+
+# --- apps/api (backend FastAPI) ---
+fastapi>=0.115
+uvicorn[standard]>=0.30
+alembic>=1.13
+httpx>=0.27  # TestClient
+
+# --- UI Streamlit (hasta F7) ---
 streamlit>=1.32.0
+
+# --- Informes exportables (hasta F6/F7) ---
 fpdf2>=2.7.0
 python-pptx>=1.0.0
 Pillow>=10.0.0
 
-# Dependencias de desarrollo (tests)
+# --- Análisis / datos ---
+pandas>=2.0.0
+
+# --- Dependencias de desarrollo (tests) ---
 pytest>=8.0.0

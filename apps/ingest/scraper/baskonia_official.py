@@ -34,6 +34,8 @@ TEAM_NAME = "Kosner Baskonia"
 _LEAGUE_MAP = {
     "liga endesa": "acb",
     "euroleague": "euroleague",
+    "copa del rey": "copa-del-rey",
+    "supercopa": "supercopa",
 }
 
 
@@ -53,13 +55,17 @@ def _to_bbr_style_date(iso_date: str) -> str:
     return datetime.strptime(iso_date, "%Y-%m-%d").strftime("%a, %b %d, %Y")
 
 
-def fetch_upcoming_games(from_date: Optional[date] = None) -> List[Dict[str, object]]:
-    """Descarga los próximos partidos del Baskonia desde baskonia.com.
+def fetch_games(
+    from_date: Optional[date] = None,
+    to_date: Optional[date] = None,
+) -> List[Dict[str, object]]:
+    """Descarga los partidos del Baskonia en un rango de fechas (histórico y próximos).
 
     Args:
-        from_date: fecha a partir de la cual se consideran partidos
-            "próximos" (por defecto, hoy). Los ya jugados no interesan aquí:
-            BBR sigue siendo la fuente de histórico/box scores.
+        from_date: fecha inicial (inclusive). Por defecto, hoy.
+        to_date: fecha final (inclusive). Si se pasa, se añade el filtro
+            `gameDate[$lte]`; si no, solo se filtra por `$gte` (comportamiento
+            actual de `fetch_upcoming_games`).
 
     Returns:
         Lista de partidos con la misma forma que produce
@@ -85,7 +91,14 @@ def fetch_upcoming_games(from_date: Optional[date] = None) -> List[Dict[str, obj
         "pagination[pageSize]": 200,
         "locale": "es",
     }
-    logger.info("Obteniendo calendario oficial de baskonia.com desde %s", from_date.isoformat())
+    if to_date is not None:
+        params["filters[gameDate][$lte]"] = to_date.isoformat()
+
+    logger.info(
+        "Obteniendo calendario oficial de baskonia.com desde %s hasta %s",
+        from_date.isoformat(),
+        to_date.isoformat() if to_date else "∞",
+    )
     response = requests.get(f"{API_BASE}/games-items", params=params, headers=_headers(), timeout=config.TIMEOUT)
     response.raise_for_status()
     payload = response.json()
@@ -120,6 +133,25 @@ def fetch_upcoming_games(from_date: Optional[date] = None) -> List[Dict[str, obj
             }
         )
     return games
+
+
+def fetch_upcoming_games(from_date: Optional[date] = None) -> List[Dict[str, object]]:
+    """Descarga los próximos partidos del Baskonia desde baskonia.com.
+
+    Wrapper de `fetch_games` sin `to_date` (solo partidos desde `from_date`),
+    para no romper a los consumidores existentes (`main.py`/`app.py`).
+
+    Args:
+        from_date: fecha a partir de la cual se consideran partidos
+            "próximos" (por defecto, hoy).
+
+    Returns:
+        Lista de partidos con la misma forma que `fetch_games`.
+
+    Raises:
+        requests.RequestException: si falla la petición a la API.
+    """
+    return fetch_games(from_date=from_date)
 
 
 def fetch_current_roster() -> List[Dict[str, object]]:

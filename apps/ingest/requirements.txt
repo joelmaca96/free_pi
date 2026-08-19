@@ -1,0 +1,7 @@
+# Dependencias runtime del pipeline de ingestión (apps/ingest).
+# Instalar en el venv del repo:
+#   pip install -r apps/ingest/requirements.txt
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+SQLAlchemy>=2.0.0
+python-dotenv>=1.0.0

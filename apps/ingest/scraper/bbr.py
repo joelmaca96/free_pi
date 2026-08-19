@@ -8,8 +8,8 @@ import logging
 from typing import Dict, List, Optional
 
 from packages.baskonia_core import config
-from scraper.client import BBRClient
-from scraper import parser
+from .client import BBRClient
+from . import parser
 
 logger = logging.getLogger(__name__)
 

@@ -231,6 +231,31 @@ vez de duplicarlo.
 
 ---
 
+### ✅ F2 completada (2026-08-19)
+
+**Estado:** ✅ **COMPLETADA** — gate de salida verificado.
+
+**Entregables:**
+- `packages/baskonia_core/services/` — lógica de negocio extraída de `app.py` sin cambiar el
+  cuerpo de las funciones: `calendar.py` (`_team_games`, `past_games`, `upcoming_games`,
+  `games_in_window`, `_result_label`, `_rival_of`), `roster.py` (`current_roster`,
+  `_player_stats_row`), `matchup.py` (`head_to_head_games`), `boxscore.py`
+  (`_team_stats_for_game` + consulta de box score).
+- `packages/baskonia_core/dates.py` — `parse_bbr_date` (lo necesitan servicios y API).
+- `app.py` importa desde `core.services` y borra sus copias locales; las funciones `*_df()`
+  quedan reducidas a formato sobre el resultado del servicio.
+- `tests/test_services.py` — tests directos sobre lo extraído, reutilizando las fixtures de
+  `tests/conftest.py` (primera cobertura de código que antes no tenía ningún test).
+
+**Gate de salida verificado:**
+- Suite verde, incluida la nueva `test_services.py`.
+- Paridad estricta: `tools/parity_dump.py` idéntico a la línea base de F0.
+- `app.py` ya no contiene ninguna llamada a `session.query(...)` (verificado con `grep`).
+
+**Próxima fase:** F3 (ver tabla de fases más abajo).
+
+---
+
 ## Fase F3 — Backend: `apps/api` (FastAPI)
 
 **Objetivo:** que exista una API completa y testeada. **Streamlit sigue siendo la UI y no se toca
@@ -263,6 +288,35 @@ en esta fase.** Ambas conviven leyendo la misma BD a través del mismo dominio.
 depende de él. Única excepción: Alembic toca la tabla `alembic_version` de la BD real — hacer
 backup previo (`main.py:_backup_database()` ya existe) y documentar la reversión
 (`DROP TABLE alembic_version` + restaurar `_add_missing_columns`).
+
+---
+
+### ✅ F3 completada (2026-08-19)
+
+**Estado:** ✅ **COMPLETADA** — gate de salida verificado.
+
+**Entregables:**
+- `apps/api/` — esqueleto FastAPI (`main.py`/`create_app`, `settings.py`, `deps.py`, `errors.py`,
+  `middleware.py`), routers (`admin`, `games`, `matchups`, `meta`, `players`, `reports`, `teams`),
+  schemas Pydantic y `mappers.py` (fecha BBR → ISO, resultado → `W`/`L`, nulos reales).
+- Alembic + `db/session.py` con WAL, retirando `models._add_missing_columns()`.
+- `tests/api/` — `TestClient` + `dependency_overrides` sobre SQLite en memoria
+  (`test_contract`, `test_errors`, `test_games`, `test_matchups`, `test_meta`, `test_players`,
+  `test_reports`, `test_teams`).
+- `tools/parity_api.py` — arnés de paridad numérica API ↔ línea base de F0.
+- `openapi.json` versionado en el repo.
+
+**Gate de salida verificado:**
+- Los 19 endpoints responden `200` sobre `data/baskonia.db` real.
+- `tests/api/` verde; suite completa verde.
+- Paridad numérica API ↔ Streamlit para las 4 combinaciones de F0 (`tools/parity_api.py`).
+- Respuestas ≥400 en formato `problem+json`.
+- La app Streamlit sigue funcionando sin cambios en esta fase.
+
+**Nota:** los endpoints 17/18 (PDF/PPTX) se declaran en esta fase y devuelven `501 Not
+Implemented` con `problem+json`; su implementación real es de F6.
+
+**Próxima fase:** F4 (ver tabla de fases más abajo).
 
 ---
 
@@ -300,6 +354,70 @@ una aplicación aparte").
 
 **Rollback:** `git revert`. El pipeline es idempotente por diseño, así que una ejecución con código
 revertido no corrompe datos.
+
+---
+
+### ✅ F4 completada (2026-08-19)
+
+**Estado:** ✅ **COMPLETADA** — gate de salida verificado.
+
+**Entregables:**
+- `apps/ingest/` — pipeline de captura como aplicación autónoma:
+  - `scraper/` (movido con `git mv` desde la raíz): `client.py`, `bbr.py`, `parser.py`,
+    `baskonia_official.py`. `bbr.py` pasa sus imports internos a relativos (`.client`, `.`).
+  - `pipeline.py` (movido desde `main.py`): imports `scraper` → `apps.ingest.scraper`; eliminado
+    el bloque `argparse`/`if __name__ == "__main__"` (pasa a `cli.py`). **Sin cambios de lógica**
+    en `run()`, `fetch_opponent_scouting()`, `backfill_league()` ni auxiliares.
+  - `report.py` (movido desde la raíz, sin cambios; se invoca `python -m apps.ingest.report`).
+  - `cli.py` (nuevo): `argparse` + `main()` + `if __name__`, con los flags `--refresh-teams` y
+    `--fix-league` idénticos al histórico.
+  - `__init__.py` (nuevo): docstring de paquete.
+  - `requirements.txt` (nuevo): runtime de la ingesta (`requests`, `beautifulsoup4`, `SQLAlchemy`,
+    `python-dotenv`; sin `pandas`).
+- `main.py` (raíz) — puente de 3 líneas (`from apps.ingest.cli import main; main()`) con comentario
+  `# PUENTE DE MIGRACIÓN — eliminar en F7`.
+- `requirements.txt` (raíz) — agregador de desarrollo con comentarios que apuntan a los
+  `requirements.txt` de cada app.
+- `tests/test_architecture.py` — `FORBIDDEN_API_MODULES` ampliado con `"beautifulsoup4"`; nuevo
+  test `test_ingest_can_import_network_libs` (la ingesta es la capa de red legítima).
+- `tests/test_main.py` — imports `from main import ...` → `from apps.ingest.pipeline import ...`.
+
+**Gate de salida verificado:**
+- `python -m apps.ingest.cli --help` muestra `--refresh-teams` y `--fix-league` (además de 3 flags
+  preexistentes del workspace, ajenos a F4).
+- `python main.py --help` (puente) funciona y muestra los mismos flags.
+- Suite completa verde: `python -m pytest` → **178 passed** (1 warning de deprecación
+  httpx/starlette, preexistente).
+- Smoke import: `import apps.ingest.pipeline, apps.ingest.cli, apps.ingest.report,
+  apps.ingest.scraper` → OK.
+- `python -m apps.ingest.report --help` → funciona.
+- `import app` → OK (la app Streamlit sigue importando).
+
+**Desviaciones declaradas respecto al diseño** (detalle en `02_implementation.md`):
+- `app.py` (no contemplado en el diseño): importaba `from main import fetch_opponent_scouting` y
+  `from scraper.client import BBRClient`; al convertir `main.py` en puente que ejecuta `main()` al
+  importarse, `app.py` rompía. Se actualizaron sus imports a `apps.ingest.pipeline` /
+  `apps.ingest.scraper.client`. Cambio de ruta de import, sin lógica.
+- `tests/test_parser.py` (no contemplado en el diseño): imports `from scraper.parser import ...` →
+  `from apps.ingest.scraper.parser import ...`.
+- `apps/ingest/scraper/bbr.py`: el diseño asumía que `scraper/` se movía "sin cambios", pero
+  `bbr.py` tenía imports internos absolutos (`from scraper.client`, `from scraper import parser`)
+  que dejaban de resolver al moverse; se pasaron a relativos.
+- Test de humo de red: se afinó para comprobar la subcapa `apps/ingest/scraper/` (al menos un
+  módulo usa red), porque `cli.py`/`pipeline.py`/`bbr.py` delegan en `scraper` y no importan
+  `requests` directamente.
+
+**Hallazgos informativos del review** (no bloqueantes, ver `03_review.md`):
+- El CLI real expone 3 flags adicionales (`--backfill-season`, `--scout-team`, `--scout-season`)
+  no contemplados en el contrato CLI de `01_design.md`; provienen de trabajo preexistente del
+  workspace, ajeno a F4.
+- La frontera `apps.ingest` tiene un hueco latente en `_imported_absolute_names()` (devuelve solo
+  el primer segmento `"apps"`); diseño preexistente, no bloquea F4.
+- No-regresión del pipeline (doble ejecución sobre copia de BD real con mismos recuentos y
+  distribución `league`) no verificable en la sesión de review: requiere red a BBR/baskonia.com.
+  Riesgo bajo (cambios F4 puramente mecánicos); pendiente de verificación manual antes de cerrar.
+
+**Próxima fase:** F5 (ver tabla de fases más abajo).
 
 ---
 

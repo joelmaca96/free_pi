@@ -67,8 +67,8 @@ from packages.baskonia_core.services import (
     team_by_slug,
     upcoming_games,
 )
-from main import fetch_opponent_scouting
-from scraper.client import BBRClient
+from apps.ingest.pipeline import fetch_opponent_scouting
+from apps.ingest.scraper.client import BBRClient
 
 LOGOS_DIR = Path(__file__).parent / "assets" / "logos"
 LOGO_EXTENSIONS = (".png", ".jpg", ".jpeg", ".svg")
