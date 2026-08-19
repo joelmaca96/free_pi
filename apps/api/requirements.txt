@@ -1,0 +1,9 @@
+# Dependencias de la API (apps/api). Instalar en el venv del repo:
+#   pip install -r apps/api/requirements.txt
+fastapi>=0.115
+uvicorn[standard]>=0.30
+sqlalchemy>=2.0
+pandas>=2.0
+python-dotenv>=1.0
+alembic>=1.13
+httpx>=0.27  # TestClient

@@ -29,6 +29,11 @@ FORBIDDEN_ROOT_MODULES = {
     "scraper",
 }
 
+FORBIDDEN_API_MODULES = {
+    "requests",
+    "apps.ingest",
+}
+
 
 def _iter_py_files():
     """Itera los ficheros .py del paquete de dominio (recursivo)."""
@@ -70,3 +75,22 @@ def test_domain_does_not_import_root_or_apps(pyfile):
     assert not apps_imports, (
         f"{pyfile.relative_to(PACKAGE_DIR)} importa de apps/: {sorted(apps_imports)}"
     )
+
+
+def test_api_does_not_import_requests_or_ingest() -> None:
+    """`apps/api` must stay in read-only boundary over shared domain."""
+    api_dir = Path("apps") / "api"
+    for py_file in sorted(api_dir.rglob("*.py")):
+        if py_file.name == "__init__.py":
+            continue
+        tree = ast.parse(py_file.read_text(encoding="utf-8"), filename=str(py_file))
+        imported = _imported_absolute_names(tree)
+        bad = sorted(
+            name
+            for name in imported
+            if any(name == prefix or name.startswith(f"{prefix}.") for prefix in FORBIDDEN_API_MODULES)
+        )
+        assert not bad, (
+            f"Forbidden imports in {py_file}: {bad}. "
+            "API package must not depend on requests or apps.ingest."
+        )

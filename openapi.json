@@ -1,0 +1,2725 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Baskonia Pipeline API",
+    "description": "API de análisis de Baskonia (fase F3 de la migración strangler-fig).",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/api/v1/health": {
+      "get": {
+        "tags": [
+          "meta"
+        ],
+        "summary": "Health",
+        "description": "Estado de salud de la API (endpoint 1).",
+        "operationId": "health_api_v1_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/meta/data-freshness": {
+      "get": {
+        "tags": [
+          "meta"
+        ],
+        "summary": "Data Freshness",
+        "description": "Frescura de los datos: última fecha de partido y recuentos (endpoint 2).",
+        "operationId": "data_freshness_api_v1_meta_data_freshness_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DataFreshnessResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/teams": {
+      "get": {
+        "tags": [
+          "teams"
+        ],
+        "summary": "List Teams",
+        "description": "Lista todos los equipos conocidos (endpoint 3).",
+        "operationId": "list_teams_api_v1_teams_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/TeamResponse"
+                  },
+                  "type": "array",
+                  "title": "Response List Teams Api V1 Teams Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/teams/{slug}": {
+      "get": {
+        "tags": [
+          "teams"
+        ],
+        "summary": "Get Team Detail",
+        "description": "Detalle de un equipo por slug (endpoint 4).",
+        "operationId": "get_team_detail_api_v1_teams__slug__get",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "Slug del equipo (p.ej. 'vitoria')",
+              "title": "Slug"
+            },
+            "description": "Slug del equipo (p.ej. 'vitoria')"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeamResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/teams/{slug}/filters": {
+      "get": {
+        "tags": [
+          "teams"
+        ],
+        "summary": "Get Filters",
+        "description": "Filtros disponibles para un equipo: temporadas y competiciones (endpoint 5).",
+        "operationId": "get_filters_api_v1_teams__slug__filters_get",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "Slug del equipo (p.ej. 'vitoria')",
+              "title": "Slug"
+            },
+            "description": "Slug del equipo (p.ej. 'vitoria')"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FiltersResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/teams/{slug}/summary": {
+      "get": {
+        "tags": [
+          "teams"
+        ],
+        "summary": "Get Summary",
+        "description": "Resumen del equipo: identidad, filtros y medias avanzadas (endpoint 6).",
+        "operationId": "get_summary_api_v1_teams__slug__summary_get",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "Slug del equipo (p.ej. 'vitoria')",
+              "title": "Slug"
+            },
+            "description": "Slug del equipo (p.ej. 'vitoria')"
+          },
+          {
+            "name": "season",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Año de inicio de temporada (p.ej. 2025)",
+              "title": "Season"
+            },
+            "description": "Año de inicio de temporada (p.ej. 2025)"
+          },
+          {
+            "name": "league",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Competición: acb | euroleague | supercopa",
+              "title": "League"
+            },
+            "description": "Competición: acb | euroleague | supercopa"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SummaryResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/teams/{slug}/games": {
+      "get": {
+        "tags": [
+          "games"
+        ],
+        "summary": "List Games",
+        "description": "Partidos de un equipo (jugados y pendientes), paginados (endpoint 7).",
+        "operationId": "list_games_api_v1_teams__slug__games_get",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "Slug del equipo (p.ej. 'vitoria')",
+              "title": "Slug"
+            },
+            "description": "Slug del equipo (p.ej. 'vitoria')"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          },
+          {
+            "name": "season",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Año de inicio de temporada (p.ej. 2025)",
+              "title": "Season"
+            },
+            "description": "Año de inicio de temporada (p.ej. 2025)"
+          },
+          {
+            "name": "league",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Competición: acb | euroleague | supercopa",
+              "title": "League"
+            },
+            "description": "Competición: acb | euroleague | supercopa"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GamesResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/games/{game_id}/boxscore": {
+      "get": {
+        "tags": [
+          "games"
+        ],
+        "summary": "Get Boxscore",
+        "description": "Box score de un equipo en un partido (endpoint 16).\n\n`team_slug` es un query param obligatorio (no va en la ruta).",
+        "operationId": "get_boxscore_api_v1_games__game_id__boxscore_get",
+        "parameters": [
+          {
+            "name": "game_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Game Id"
+            }
+          },
+          {
+            "name": "team_slug",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "Slug del equipo cuyo box score se pide",
+              "title": "Team Slug"
+            },
+            "description": "Slug del equipo cuyo box score se pide"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoxScoreResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/teams/{slug}/roster": {
+      "get": {
+        "tags": [
+          "players"
+        ],
+        "summary": "Get Roster",
+        "description": "Plantilla actual de un equipo con la forma reciente de cada jugador (endpoint 8).",
+        "operationId": "get_roster_api_v1_teams__slug__roster_get",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "Slug del equipo (p.ej. 'vitoria')",
+              "title": "Slug"
+            },
+            "description": "Slug del equipo (p.ej. 'vitoria')"
+          },
+          {
+            "name": "season",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Año de inicio de temporada (p.ej. 2025)",
+              "title": "Season"
+            },
+            "description": "Año de inicio de temporada (p.ej. 2025)"
+          },
+          {
+            "name": "league",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Competición: acb | euroleague | supercopa",
+              "title": "League"
+            },
+            "description": "Competición: acb | euroleague | supercopa"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RosterResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/teams/{slug}/players/form": {
+      "get": {
+        "tags": [
+          "players"
+        ],
+        "summary": "Get Player Form",
+        "description": "Forma reciente por jugador (endpoint 9).",
+        "operationId": "get_player_form_api_v1_teams__slug__players_form_get",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "Slug del equipo (p.ej. 'vitoria')",
+              "title": "Slug"
+            },
+            "description": "Slug del equipo (p.ej. 'vitoria')"
+          },
+          {
+            "name": "last_n",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 20,
+              "minimum": 1,
+              "default": 5,
+              "title": "Last N"
+            }
+          },
+          {
+            "name": "season",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Año de inicio de temporada (p.ej. 2025)",
+              "title": "Season"
+            },
+            "description": "Año de inicio de temporada (p.ej. 2025)"
+          },
+          {
+            "name": "league",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Competición: acb | euroleague | supercopa",
+              "title": "League"
+            },
+            "description": "Competición: acb | euroleague | supercopa"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlayerFormResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/teams/{slug}/players/streaks": {
+      "get": {
+        "tags": [
+          "players"
+        ],
+        "summary": "Get Streaks",
+        "description": "Rachas de los jugadores en una temporada (endpoint 10).",
+        "operationId": "get_streaks_api_v1_teams__slug__players_streaks_get",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "Slug del equipo (p.ej. 'vitoria')",
+              "title": "Slug"
+            },
+            "description": "Slug del equipo (p.ej. 'vitoria')"
+          },
+          {
+            "name": "recent_n",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 20,
+              "minimum": 1,
+              "default": 5,
+              "title": "Recent N"
+            }
+          },
+          {
+            "name": "min_season_games",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 50,
+              "minimum": 1,
+              "default": 6,
+              "title": "Min Season Games"
+            }
+          },
+          {
+            "name": "season",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Año de inicio de temporada (p.ej. 2025)",
+              "title": "Season"
+            },
+            "description": "Año de inicio de temporada (p.ej. 2025)"
+          },
+          {
+            "name": "league",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Competición: acb | euroleague | supercopa",
+              "title": "League"
+            },
+            "description": "Competición: acb | euroleague | supercopa"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StreaksResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/teams/{slug}/players/load": {
+      "get": {
+        "tags": [
+          "players"
+        ],
+        "summary": "Get Load",
+        "description": "Carga de minutos por jugador en la ventana de días (endpoint 11).",
+        "operationId": "get_load_api_v1_teams__slug__players_load_get",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "Slug del equipo (p.ej. 'vitoria')",
+              "title": "Slug"
+            },
+            "description": "Slug del equipo (p.ej. 'vitoria')"
+          },
+          {
+            "name": "window_days",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 90,
+              "minimum": 1,
+              "default": 14,
+              "title": "Window Days"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoadResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/teams/{slug}/schedule-difficulty": {
+      "get": {
+        "tags": [
+          "matchups"
+        ],
+        "summary": "Get Schedule Difficulty",
+        "description": "Dificultad del próximo tramo de calendario (endpoint 12).",
+        "operationId": "get_schedule_difficulty_api_v1_teams__slug__schedule_difficulty_get",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "Slug del equipo (p.ej. 'vitoria')",
+              "title": "Slug"
+            },
+            "description": "Slug del equipo (p.ej. 'vitoria')"
+          },
+          {
+            "name": "next_n",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 20,
+              "minimum": 1,
+              "default": 5,
+              "title": "Next N"
+            }
+          },
+          {
+            "name": "season",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Año de inicio de temporada (p.ej. 2025)",
+              "title": "Season"
+            },
+            "description": "Año de inicio de temporada (p.ej. 2025)"
+          },
+          {
+            "name": "league",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Competición: acb | euroleague | supercopa",
+              "title": "League"
+            },
+            "description": "Competición: acb | euroleague | supercopa"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleDifficultyResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/teams/{slug}/narrative": {
+      "get": {
+        "tags": [
+          "matchups"
+        ],
+        "summary": "Get Narrative",
+        "description": "Narrativa de scouting en español (endpoint 13).",
+        "operationId": "get_narrative_api_v1_teams__slug__narrative_get",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "Slug del equipo (p.ej. 'vitoria')",
+              "title": "Slug"
+            },
+            "description": "Slug del equipo (p.ej. 'vitoria')"
+          },
+          {
+            "name": "recent_n",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 20,
+              "minimum": 1,
+              "default": 5,
+              "title": "Recent N"
+            }
+          },
+          {
+            "name": "season",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Año de inicio de temporada (p.ej. 2025)",
+              "title": "Season"
+            },
+            "description": "Año de inicio de temporada (p.ej. 2025)"
+          },
+          {
+            "name": "league",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Competición: acb | euroleague | supercopa",
+              "title": "League"
+            },
+            "description": "Competición: acb | euroleague | supercopa"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NarrativeResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/teams/{slug}/matchups/{opponent_slug}/projection": {
+      "get": {
+        "tags": [
+          "matchups"
+        ],
+        "summary": "Get Projection",
+        "description": "Proyección de marcador entre dos equipos (endpoint 14).",
+        "operationId": "get_projection_api_v1_teams__slug__matchups__opponent_slug__projection_get",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "Slug del equipo (p.ej. 'vitoria')",
+              "title": "Slug"
+            },
+            "description": "Slug del equipo (p.ej. 'vitoria')"
+          },
+          {
+            "name": "opponent_slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "Slug del rival (p.ej. 'bilbao')",
+              "title": "Opponent Slug"
+            },
+            "description": "Slug del rival (p.ej. 'bilbao')"
+          },
+          {
+            "name": "season",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Año de inicio de temporada (p.ej. 2025)",
+              "title": "Season"
+            },
+            "description": "Año de inicio de temporada (p.ej. 2025)"
+          },
+          {
+            "name": "league",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Competición: acb | euroleague | supercopa",
+              "title": "League"
+            },
+            "description": "Competición: acb | euroleague | supercopa"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/teams/{slug}/matchups/{opponent_slug}/head-to-head": {
+      "get": {
+        "tags": [
+          "matchups"
+        ],
+        "summary": "Get Head To Head",
+        "description": "Enfrentamientos directos entre dos equipos (endpoint 15).",
+        "operationId": "get_head_to_head_api_v1_teams__slug__matchups__opponent_slug__head_to_head_get",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "Slug del equipo (p.ej. 'vitoria')",
+              "title": "Slug"
+            },
+            "description": "Slug del equipo (p.ej. 'vitoria')"
+          },
+          {
+            "name": "opponent_slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "Slug del rival (p.ej. 'bilbao')",
+              "title": "Opponent Slug"
+            },
+            "description": "Slug del rival (p.ej. 'bilbao')"
+          },
+          {
+            "name": "season",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Año de inicio de temporada (p.ej. 2025)",
+              "title": "Season"
+            },
+            "description": "Año de inicio de temporada (p.ej. 2025)"
+          },
+          {
+            "name": "league",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Competición: acb | euroleague | supercopa",
+              "title": "League"
+            },
+            "description": "Competición: acb | euroleague | supercopa"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HeadToHeadResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/teams/{slug}/reports/scouting.pdf": {
+      "get": {
+        "tags": [
+          "reports"
+        ],
+        "summary": "Team Report",
+        "description": "Informe de equipo (endpoint 17) — implementado en F6.",
+        "operationId": "team_report_api_v1_teams__slug__reports_scouting_pdf_get",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "Slug del equipo (p.ej. 'vitoria')",
+              "title": "Slug"
+            },
+            "description": "Slug del equipo (p.ej. 'vitoria')"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReportNotImplemented"
+                }
+              }
+            }
+          },
+          "501": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReportNotImplemented"
+                }
+              }
+            },
+            "description": "Not Implemented"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/teams/{slug}/reports/roster.pptx": {
+      "get": {
+        "tags": [
+          "reports"
+        ],
+        "summary": "Matchup Report",
+        "description": "Informe de enfrentamiento (endpoint 18) — implementado en F6.",
+        "operationId": "matchup_report_api_v1_teams__slug__reports_roster_pptx_get",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "Slug del equipo (p.ej. 'vitoria')",
+              "title": "Slug"
+            },
+            "description": "Slug del equipo (p.ej. 'vitoria')"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReportNotImplemented"
+                }
+              }
+            }
+          },
+          "501": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReportNotImplemented"
+                }
+              }
+            },
+            "description": "Not Implemented"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/data-quality": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Data Quality",
+        "description": "Validación de calidad de datos (endpoint 19).",
+        "operationId": "data_quality_api_v1_admin_data_quality_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DataQualityResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AdvancedSummary": {
+        "properties": {
+          "avg_pace": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avg Pace"
+          },
+          "avg_off_rating": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avg Off Rating"
+          },
+          "avg_def_rating": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avg Def Rating"
+          },
+          "avg_net_rating": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avg Net Rating"
+          },
+          "avg_efg_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avg Efg Pct"
+          },
+          "avg_ts_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avg Ts Pct"
+          }
+        },
+        "type": "object",
+        "title": "AdvancedSummary",
+        "description": "Medias de estadísticas avanzadas de un equipo (cada clave puede ser null)."
+      },
+      "BoxScoreResponse": {
+        "properties": {
+          "game_id": {
+            "type": "integer",
+            "title": "Game Id"
+          },
+          "team": {
+            "$ref": "#/components/schemas/TeamRef"
+          },
+          "opponent": {
+            "$ref": "#/components/schemas/TeamRef"
+          },
+          "date": {
+            "type": "string",
+            "title": "Date"
+          },
+          "league": {
+            "type": "string",
+            "title": "League"
+          },
+          "team_score": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Team Score"
+          },
+          "opponent_score": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Opponent Score"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/BoxScoreRow"
+            },
+            "type": "array",
+            "title": "Rows"
+          }
+        },
+        "type": "object",
+        "required": [
+          "game_id",
+          "team",
+          "opponent",
+          "date",
+          "league",
+          "rows"
+        ],
+        "title": "BoxScoreResponse",
+        "description": "Box score de un equipo en un partido."
+      },
+      "BoxScoreRow": {
+        "properties": {
+          "player_name": {
+            "type": "string",
+            "title": "Player Name"
+          },
+          "minutes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Minutes"
+          },
+          "points": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Points"
+          },
+          "rebounds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rebounds"
+          },
+          "assists": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assists"
+          },
+          "steals": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Steals"
+          },
+          "blocks": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Blocks"
+          },
+          "turnovers": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Turnovers"
+          },
+          "fg_made": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fg Made"
+          },
+          "fg_attempted": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fg Attempted"
+          },
+          "fg3_made": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fg3 Made"
+          },
+          "fg3_attempted": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fg3 Attempted"
+          },
+          "ft_made": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ft Made"
+          },
+          "ft_attempted": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ft Attempted"
+          },
+          "efg_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Efg Pct"
+          },
+          "ts_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ts Pct"
+          }
+        },
+        "type": "object",
+        "required": [
+          "player_name"
+        ],
+        "title": "BoxScoreRow",
+        "description": "Fila de box score de un jugador en un partido."
+      },
+      "DataFreshnessResponse": {
+        "properties": {
+          "last_game_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Game Date"
+          },
+          "games_total": {
+            "type": "integer",
+            "title": "Games Total"
+          },
+          "boxscores_total": {
+            "type": "integer",
+            "title": "Boxscores Total"
+          },
+          "teams_total": {
+            "type": "integer",
+            "title": "Teams Total"
+          }
+        },
+        "type": "object",
+        "required": [
+          "last_game_date",
+          "games_total",
+          "boxscores_total",
+          "teams_total"
+        ],
+        "title": "DataFreshnessResponse",
+        "description": "Frescura de los datos: última fecha de partido y recuentos."
+      },
+      "DataQualityResponse": {
+        "properties": {
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings"
+          },
+          "healthy": {
+            "type": "boolean",
+            "title": "Healthy"
+          }
+        },
+        "type": "object",
+        "required": [
+          "warnings",
+          "healthy"
+        ],
+        "title": "DataQualityResponse",
+        "description": "Resultado de la validación de calidad de datos."
+      },
+      "DifficultyOpponent": {
+        "properties": {
+          "opponent_name": {
+            "type": "string",
+            "title": "Opponent Name"
+          },
+          "date": {
+            "type": "string",
+            "title": "Date"
+          },
+          "net_rating": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Net Rating"
+          }
+        },
+        "type": "object",
+        "required": [
+          "opponent_name",
+          "date"
+        ],
+        "title": "DifficultyOpponent",
+        "description": "Rival considerado en la dificultad de calendario."
+      },
+      "FiltersResponse": {
+        "properties": {
+          "seasons": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Seasons"
+          },
+          "default_season": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Season"
+          },
+          "leagues": {
+            "items": {
+              "$ref": "#/components/schemas/LeagueOption"
+            },
+            "type": "array",
+            "title": "Leagues"
+          }
+        },
+        "type": "object",
+        "required": [
+          "seasons",
+          "default_season",
+          "leagues"
+        ],
+        "title": "FiltersResponse",
+        "description": "Filtros disponibles para un equipo (cabecera de la app)."
+      },
+      "GameAdvanced": {
+        "properties": {
+          "pace": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pace"
+          },
+          "off_rating": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Off Rating"
+          },
+          "def_rating": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Def Rating"
+          },
+          "net_rating": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Net Rating"
+          }
+        },
+        "type": "object",
+        "title": "GameAdvanced",
+        "description": "Estadísticas avanzadas de un equipo en un partido."
+      },
+      "GameItem": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "date": {
+            "type": "string",
+            "title": "Date"
+          },
+          "league": {
+            "type": "string",
+            "title": "League"
+          },
+          "is_home": {
+            "type": "boolean",
+            "title": "Is Home"
+          },
+          "opponent": {
+            "$ref": "#/components/schemas/TeamRef"
+          },
+          "team_score": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Team Score"
+          },
+          "opponent_score": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Opponent Score"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
+          "advanced": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GameAdvanced"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "has_boxscore": {
+            "type": "boolean",
+            "title": "Has Boxscore",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "date",
+          "league",
+          "is_home",
+          "opponent"
+        ],
+        "title": "GameItem",
+        "description": "Un partido de un equipo (jugado o pendiente)."
+      },
+      "GamesResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/GameItem"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit"
+          },
+          "offset": {
+            "type": "integer",
+            "title": "Offset"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "limit",
+          "offset"
+        ],
+        "title": "GamesResponse",
+        "description": "Lista paginada de partidos de un equipo."
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "HeadToHeadGame": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "date": {
+            "type": "string",
+            "title": "Date"
+          },
+          "league": {
+            "type": "string",
+            "title": "League"
+          },
+          "team_score": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Team Score"
+          },
+          "opponent_score": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Opponent Score"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "date",
+          "league"
+        ],
+        "title": "HeadToHeadGame",
+        "description": "Un enfrentamiento directo entre dos equipos."
+      },
+      "HeadToHeadResponse": {
+        "properties": {
+          "team": {
+            "$ref": "#/components/schemas/TeamRef"
+          },
+          "opponent": {
+            "$ref": "#/components/schemas/TeamRef"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/HeadToHeadGame"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "team",
+          "opponent",
+          "items"
+        ],
+        "title": "HeadToHeadResponse",
+        "description": "Enfrentamientos directos entre dos equipos."
+      },
+      "HealthResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "version": {
+            "type": "string",
+            "title": "Version"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "version"
+        ],
+        "title": "HealthResponse",
+        "description": "Estado de salud de la API."
+      },
+      "LeagueOption": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "label"
+        ],
+        "title": "LeagueOption",
+        "description": "Opción de competición para el selector de filtros."
+      },
+      "LoadItem": {
+        "properties": {
+          "player_name": {
+            "type": "string",
+            "title": "Player Name"
+          },
+          "games": {
+            "type": "integer",
+            "title": "Games"
+          },
+          "total_minutes": {
+            "type": "number",
+            "title": "Total Minutes"
+          },
+          "avg_minutes": {
+            "type": "number",
+            "title": "Avg Minutes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "player_name",
+          "games",
+          "total_minutes",
+          "avg_minutes"
+        ],
+        "title": "LoadItem",
+        "description": "Carga de minutos de un jugador en la ventana."
+      },
+      "LoadResponse": {
+        "properties": {
+          "window_days": {
+            "type": "integer",
+            "title": "Window Days"
+          },
+          "games_in_window": {
+            "type": "integer",
+            "title": "Games In Window"
+          },
+          "note": {
+            "type": "string",
+            "title": "Note"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/LoadItem"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "window_days",
+          "games_in_window",
+          "note",
+          "items"
+        ],
+        "title": "LoadResponse",
+        "description": "Carga de minutos por jugador (transversal a temporada/competición)."
+      },
+      "NarrativeResponse": {
+        "properties": {
+          "season": {
+            "type": "integer",
+            "title": "Season"
+          },
+          "league": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "League"
+          },
+          "recent_n": {
+            "type": "integer",
+            "title": "Recent N"
+          },
+          "narrative": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Narrative"
+          }
+        },
+        "type": "object",
+        "required": [
+          "season",
+          "recent_n"
+        ],
+        "title": "NarrativeResponse",
+        "description": "Narrativa de scouting (único campo en español de la API)."
+      },
+      "PlayerFormItem": {
+        "properties": {
+          "player_name": {
+            "type": "string",
+            "title": "Player Name"
+          },
+          "games": {
+            "type": "integer",
+            "title": "Games"
+          },
+          "avg_minutes": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avg Minutes"
+          },
+          "avg_pts": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avg Pts"
+          },
+          "avg_pts_per36": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avg Pts Per36"
+          },
+          "avg_efg_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avg Efg Pct"
+          },
+          "avg_ts_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avg Ts Pct"
+          },
+          "avg_plus_minus": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avg Plus Minus"
+          },
+          "avg_turnovers": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avg Turnovers"
+          },
+          "fg3a_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fg3A Rate"
+          },
+          "ft_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ft Rate"
+          }
+        },
+        "type": "object",
+        "required": [
+          "player_name",
+          "games"
+        ],
+        "title": "PlayerFormItem",
+        "description": "Fila de forma reciente por jugador (mapeo 1:1 con player_recent_form)."
+      },
+      "PlayerFormResponse": {
+        "properties": {
+          "last_n": {
+            "type": "integer",
+            "title": "Last N"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/PlayerFormItem"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "last_n",
+          "items"
+        ],
+        "title": "PlayerFormResponse",
+        "description": "Forma reciente por jugador."
+      },
+      "Projection": {
+        "properties": {
+          "projected_possessions": {
+            "type": "number",
+            "title": "Projected Possessions"
+          },
+          "team_projected_rating": {
+            "type": "number",
+            "title": "Team Projected Rating"
+          },
+          "opp_projected_rating": {
+            "type": "number",
+            "title": "Opp Projected Rating"
+          },
+          "team_projected_score": {
+            "type": "number",
+            "title": "Team Projected Score"
+          },
+          "opp_projected_score": {
+            "type": "number",
+            "title": "Opp Projected Score"
+          },
+          "expected_margin": {
+            "type": "number",
+            "title": "Expected Margin"
+          }
+        },
+        "type": "object",
+        "required": [
+          "projected_possessions",
+          "team_projected_rating",
+          "opp_projected_rating",
+          "team_projected_score",
+          "opp_projected_score",
+          "expected_margin"
+        ],
+        "title": "Projection",
+        "description": "Proyección de marcador esperado entre dos equipos."
+      },
+      "ProjectionResponse": {
+        "properties": {
+          "team": {
+            "$ref": "#/components/schemas/TeamRef"
+          },
+          "opponent": {
+            "$ref": "#/components/schemas/TeamRef"
+          },
+          "season": {
+            "type": "integer",
+            "title": "Season"
+          },
+          "projection": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Projection"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "team",
+          "opponent",
+          "season"
+        ],
+        "title": "ProjectionResponse",
+        "description": "Proyección de un enfrentamiento (projection puede ser null)."
+      },
+      "ReportNotImplemented": {
+        "properties": {
+          "detail": {
+            "type": "string",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "required": [
+          "detail"
+        ],
+        "title": "ReportNotImplemented",
+        "description": "Respuesta de los endpoints de informes en F3 (se completan en F6)."
+      },
+      "RosterPlayer": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "number": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Number"
+          },
+          "position": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Position"
+          },
+          "photo_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Photo Url"
+          },
+          "form": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Form"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "RosterPlayer",
+        "description": "Jugador de la plantilla actual con su forma reciente."
+      },
+      "RosterResponse": {
+        "properties": {
+          "team": {
+            "$ref": "#/components/schemas/TeamRef"
+          },
+          "players": {
+            "items": {
+              "$ref": "#/components/schemas/RosterPlayer"
+            },
+            "type": "array",
+            "title": "Players"
+          }
+        },
+        "type": "object",
+        "required": [
+          "team",
+          "players"
+        ],
+        "title": "RosterResponse",
+        "description": "Plantilla actual de un equipo."
+      },
+      "ScheduleDifficultyResponse": {
+        "properties": {
+          "games_considered": {
+            "type": "integer",
+            "title": "Games Considered"
+          },
+          "opponents_scouted": {
+            "type": "integer",
+            "title": "Opponents Scouted"
+          },
+          "avg_opponent_net_rating": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avg Opponent Net Rating"
+          },
+          "league": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "League"
+          },
+          "opponents": {
+            "items": {
+              "$ref": "#/components/schemas/DifficultyOpponent"
+            },
+            "type": "array",
+            "title": "Opponents"
+          }
+        },
+        "type": "object",
+        "required": [
+          "games_considered",
+          "opponents_scouted",
+          "opponents"
+        ],
+        "title": "ScheduleDifficultyResponse",
+        "description": "Dificultad del próximo tramo de calendario."
+      },
+      "StreakItem": {
+        "properties": {
+          "player_name": {
+            "type": "string",
+            "title": "Player Name"
+          },
+          "games_season": {
+            "type": "integer",
+            "title": "Games Season"
+          },
+          "recent_avg_pts": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recent Avg Pts"
+          },
+          "season_avg_pts": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Season Avg Pts"
+          },
+          "season_std_pts": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Season Std Pts"
+          },
+          "z_score_pts": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Z Score Pts"
+          },
+          "recent_avg_ts_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recent Avg Ts Pct"
+          },
+          "season_avg_ts_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Season Avg Ts Pct"
+          },
+          "season_std_ts_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Season Std Ts Pct"
+          },
+          "z_score_ts": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Z Score Ts"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          }
+        },
+        "type": "object",
+        "required": [
+          "player_name",
+          "games_season",
+          "label"
+        ],
+        "title": "StreakItem",
+        "description": "Racha de un jugador dentro de una temporada."
+      },
+      "StreaksResponse": {
+        "properties": {
+          "season": {
+            "type": "integer",
+            "title": "Season"
+          },
+          "recent_n": {
+            "type": "integer",
+            "title": "Recent N"
+          },
+          "min_season_games": {
+            "type": "integer",
+            "title": "Min Season Games"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/StreakItem"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "season",
+          "recent_n",
+          "min_season_games",
+          "items"
+        ],
+        "title": "StreaksResponse",
+        "description": "Rachas de los jugadores de un equipo en una temporada."
+      },
+      "SummaryResponse": {
+        "properties": {
+          "team": {
+            "$ref": "#/components/schemas/TeamRef"
+          },
+          "filters": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Filters"
+          },
+          "advanced": {
+            "$ref": "#/components/schemas/AdvancedSummary"
+          },
+          "games_played": {
+            "type": "integer",
+            "title": "Games Played"
+          },
+          "games_upcoming": {
+            "type": "integer",
+            "title": "Games Upcoming"
+          }
+        },
+        "type": "object",
+        "required": [
+          "team",
+          "filters",
+          "advanced",
+          "games_played",
+          "games_upcoming"
+        ],
+        "title": "SummaryResponse",
+        "description": "Resumen del equipo: identidad, filtros aplicados y medias avanzadas."
+      },
+      "TeamRef": {
+        "properties": {
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "slug",
+          "name"
+        ],
+        "title": "TeamRef",
+        "description": "Referencia a un equipo (slug + nombre para mostrar)."
+      },
+      "TeamResponse": {
+        "properties": {
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "league": {
+            "type": "string",
+            "title": "League"
+          }
+        },
+        "type": "object",
+        "required": [
+          "slug",
+          "name",
+          "league"
+        ],
+        "title": "TeamResponse",
+        "description": "Equipo con su liga de origen."
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      }
+    }
+  }
+}
