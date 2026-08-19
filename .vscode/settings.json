@@ -1,0 +1,37 @@
+{
+    "workbench.colorCustomizations": {
+        "activityBar.background": "#1E1E5C",
+        "titleBar.activeBackground": "#2A2A81",
+        "titleBar.activeForeground": "#FCFCFE",
+        "titleBar.inactiveBackground": "#1E1E5C",
+        "titleBar.inactiveForeground": "#FCFCFE",
+        "statusBar.background": "#1E1E5C",
+        "statusBar.foreground": "#FCFCFE",
+        "statusBar.debuggingBackground": "#1E1E5C",
+        "statusBar.debuggingForeground": "#FCFCFE",
+        "statusBar.noFolderBackground": "#1E1E5C",
+        "statusBar.noFolderForeground": "#FCFCFE"
+    },
+    "actionButtons": {
+        "reloadButton": null,
+        "loadNpmCommands": false,
+        "commands": [
+            {
+                "name": "$(beaker) Run tests",
+                "color": "green",
+                "tooltip": "Ejecuta la suite de tests (pytest)",
+                "useVsCodeApi": true,
+                "command": "workbench.action.tasks.runTask",
+                "args": ["Run tests"]
+            },
+            {
+                "name": "$(rocket) Launch app",
+                "color": "orange",
+                "tooltip": "Lanza la aplicación Streamlit",
+                "useVsCodeApi": true,
+                "command": "workbench.action.tasks.runTask",
+                "args": ["Launch app"]
+            }
+        ]
+    }
+}

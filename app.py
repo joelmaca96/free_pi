@@ -55,10 +55,17 @@ from insights import (
 from main import fetch_opponent_scouting
 from scraper.client import BBRClient
 
-st.set_page_config(page_title="Baskonia Pipeline — Informe de partidos", page_icon="🏀", layout="wide")
-
 LOGOS_DIR = Path(__file__).parent / "assets" / "logos"
 LOGO_EXTENSIONS = (".png", ".jpg", ".jpeg", ".svg")
+
+# Escudo del Baskonia como icono de la pestaña del navegador
+BASKONIA_LOGO = LOGOS_DIR / "vitoria.jpg"
+
+st.set_page_config(
+    page_title="Baskonia Pipeline — Informe de partidos",
+    page_icon=str(BASKONIA_LOGO),
+    layout="wide",
+)
 
 # Nº de enfrentamientos directos recientes a mostrar al scoutear un próximo
 # rival (independiente de "últimos N partidos" de forma, que es sobre la

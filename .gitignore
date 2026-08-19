@@ -19,7 +19,6 @@ data/*.db.bak-*
 *.db-shm
 
 # Editor / IDE
-.vscode/
 .idea/
 *.swp
 
