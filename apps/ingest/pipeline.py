@@ -50,6 +50,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Fuente designada como principal por la feature 007 y competiciones en las que
+# se espera que aporte. Se usa para avisar cuando el backfill se completa solo
+# con fuentes de backup (ver `_report_sources`).
+PRIMARY_SOURCE = "realgm"
+PRIMARY_SOURCE_LEAGUES = ("euroleague", "acb")
+
 
 def _to_int(value: object) -> Optional[int]:
     """Convierte un valor a entero de forma segura."""
@@ -391,6 +397,43 @@ def _capture_and_store_boxscore(session, client: BBRClient, game_obj: "models.Ga
     # dentro de upsert_boxscore; aquí calculamos pace/ORtg/DRtg por equipo).
     _backfill_player_advanced(session, game_obj.id)
     _ensure_advanced_stats(session, game_obj, game_obj.home_team, game_obj.away_team)
+
+
+def fetch_game_boxscore(session, client: BBRClient, game_obj: "models.Game") -> bool:
+    """Descarga bajo demanda el box score de un partido concreto.
+
+    Pensado para el flujo de la GUI: el pipeline solo captura los box scores de
+    los últimos `config.LAST_N_GAMES` partidos y los enfrentamientos directos
+    (ver `_select_boxscores`), así que la mayoría de los partidos del calendario
+    quedan guardados sin box score. Al abrir uno de esos partidos la ficha salía
+    vacía sin explicar por qué ni ofrecer descargarlo.
+
+    Es idempotente: si el box score ya está guardado no hace red. Al terminar
+    hace `commit`, de modo que quien llama solo tiene que volver a pintar.
+
+    Args:
+        session: Sesión de base de datos.
+        client: Cliente HTTP de Basketball-Reference (aplica el rate-limiting).
+        game_obj: Partido ya persistido cuyo box score se quiere.
+
+    Returns:
+        `True` si al terminar el partido tiene box score guardado; `False` si
+        no se pudo obtener (partido sin `boxscore_url` o fallo de descarga).
+    """
+    if not game_obj.boxscore_url:
+        logger.info("El partido %s no tiene enlace a box score todavía", game_obj.id)
+        return False
+
+    logger.info(
+        "Descarga bajo demanda del box score de %s vs %s (%s)",
+        game_obj.home_team.name,
+        game_obj.away_team.name,
+        game_obj.date,
+    )
+    _capture_and_store_boxscore(session, client, game_obj)
+    session.commit()
+
+    return session.query(models.BoxScore).filter_by(game_id=game_obj.id).first() is not None
 
 
 def fetch_opponent_scouting(session, client: BBRClient, opponent_team: "models.Team", last_n: int) -> None:
@@ -854,6 +897,44 @@ def _populate_season_team_stats(session, team: "models.Team", season: int) -> No
                 season, team.name, n, wins, losses)
 
 
+def _report_sources(
+    league: str, sources: List[Tuple[str, List[Dict[str, object]]]]
+) -> None:
+    """Resume qué aportó cada fuente y avisa si la principal no aportó nada.
+
+    Cada fuente se descarga dentro de su propio `try/except`, así que un fallo
+    solo dejaba un warning entre el resto de logs y el backfill seguía adelante
+    con las fuentes de backup. El resultado era que se podía completar una
+    temporada entera creyendo que venía de RealGM cuando en realidad venía toda
+    de BBR, sin nada que lo dijera. Este resumen lo hace explícito.
+
+    Args:
+        league: Competición que se está procesando.
+        sources: Lista de `(fuente, partidos)` que sí respondieron.
+    """
+    contributions = {name: len(games) for name, games in sources}
+    logger.info(
+        "  Resumen de fuentes para %s: %s",
+        league,
+        ", ".join(f"{name}={count}" for name, count in contributions.items()) or "ninguna",
+    )
+
+    if league not in PRIMARY_SOURCE_LEAGUES:
+        return
+
+    if not contributions.get(PRIMARY_SOURCE):
+        fallbacks = [name for name, count in contributions.items() if count]
+        logger.warning(
+            "  La fuente principal (%s) no aportó ningún partido de %s. "
+            "Los datos vienen de: %s. Revisa %s antes de dar la temporada por "
+            "completa: los datos guardados NO son de la fuente principal.",
+            PRIMARY_SOURCE,
+            league,
+            ", ".join(fallbacks) or "ninguna fuente",
+            PRIMARY_SOURCE,
+        )
+
+
 def backfill_season(season: int) -> None:
     """Completa los partidos de una temporada histórica del Baskonia en las 4 competiciones.
 
@@ -932,6 +1013,8 @@ def backfill_season(season: int) -> None:
                     logger.info("  ACB API: %d partidos", len(acb_games))
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("  ACB API falló para %s: %s", league, exc)
+
+            _report_sources(league, sources)
 
             merged = merge_sources(sources)
             for game in merged:

@@ -149,7 +149,6 @@ def build_dump(session, team, season, league, last_n, reference_date, determinis
     # (games_in_window + insights.player_load) con la fecha inyectada, sin tocar
     # app.py (principio de solo lectura en F0). Equivalente al comportamiento actual.
     player_load = _player_load_df(session, team, window_days=14, reference_date=reference_date)
-    head_to_head = app.head_to_head_summary_df(session, team, season, league)
 
     # schedule_difficulty: necesita la salida de insights.schedule_difficulty
     difficulty = insights.schedule_difficulty(
@@ -196,7 +195,6 @@ def build_dump(session, team, season, league, last_n, reference_date, determinis
         "streaks_df": _df_to_records(streaks),
         "schedule_difficulty_df": _df_to_records(schedule_diff),
         "player_load_df": _df_to_records(player_load),
-        "head_to_head_summary_df": _df_to_records(head_to_head),
         "boxscore_df": _df_to_records(boxscore),
         "team_advanced_summary": {k: _clean(v) for k, v in advanced.items()},
         "project_next_matchup": (

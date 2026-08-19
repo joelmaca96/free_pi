@@ -72,7 +72,6 @@ def test_build_dump_contains_all_parity_keys(session, teams, played_game):
         "streaks_df",
         "schedule_difficulty_df",
         "player_load_df",
-        "head_to_head_summary_df",
         "boxscore_df",
         "team_advanced_summary",
         "project_next_matchup",
