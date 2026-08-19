@@ -1,0 +1,2627 @@
+{
+  "boxscore_df": [
+    {
+      "AST": 4,
+      "Jugador": "Kobi Simmons",
+      "MIN": "27:20",
+      "PTS": 18,
+      "PTS/36": 23.7,
+      "REB": 2,
+      "TS%": 71.2,
+      "eFG%": 60.0
+    },
+    {
+      "AST": null,
+      "Jugador": "Timothe Luwawu-Cabarrot",
+      "MIN": "27:42",
+      "PTS": 15,
+      "PTS/36": 19.5,
+      "REB": 2,
+      "TS%": 42.5,
+      "eFG%": 33.3
+    },
+    {
+      "AST": 2,
+      "Jugador": "Trent Forrest",
+      "MIN": "23:07",
+      "PTS": 14,
+      "PTS/36": 21.8,
+      "REB": 4,
+      "TS%": 79.9,
+      "eFG%": 78.6
+    },
+    {
+      "AST": 6,
+      "Jugador": "Mamadi Diakite",
+      "MIN": "32:34",
+      "PTS": 12,
+      "PTS/36": 13.3,
+      "REB": 7,
+      "TS%": 53.6,
+      "eFG%": 38.9
+    },
+    {
+      "AST": 1,
+      "Jugador": "Rodions Kurucs",
+      "MIN": "33:32",
+      "PTS": 11,
+      "PTS/36": 11.8,
+      "REB": 10,
+      "TS%": 69.8,
+      "eFG%": 71.4
+    },
+    {
+      "AST": 2,
+      "Jugador": "Matteo Spagnolo",
+      "MIN": "22:24",
+      "PTS": 9,
+      "PTS/36": 14.5,
+      "REB": 6,
+      "TS%": 57.1,
+      "eFG%": 57.1
+    },
+    {
+      "AST": 1,
+      "Jugador": "Eugene Omoruyi",
+      "MIN": "15:07",
+      "PTS": 5,
+      "PTS/36": 11.9,
+      "REB": 1,
+      "TS%": 66.5,
+      "eFG%": 50.0
+    },
+    {
+      "AST": 1,
+      "Jugador": "Gytis Radzevicius",
+      "MIN": "11:32",
+      "PTS": 2,
+      "PTS/36": 6.2,
+      "REB": null,
+      "TS%": 100.0,
+      "eFG%": 100.0
+    },
+    {
+      "AST": null,
+      "Jugador": "Jesse Edwards",
+      "MIN": "2:34",
+      "PTS": 2,
+      "PTS/36": 28.1,
+      "REB": null,
+      "TS%": 100.0,
+      "eFG%": 100.0
+    },
+    {
+      "AST": null,
+      "Jugador": "Clement Frisch",
+      "MIN": "0:00",
+      "PTS": null,
+      "PTS/36": null,
+      "REB": null,
+      "TS%": null,
+      "eFG%": null
+    },
+    {
+      "AST": null,
+      "Jugador": "Rafa Villar",
+      "MIN": "4:08",
+      "PTS": null,
+      "PTS/36": null,
+      "REB": null,
+      "TS%": null,
+      "eFG%": null
+    },
+    {
+      "AST": null,
+      "Jugador": "Tadas Sedekerskis",
+      "MIN": "0:00",
+      "PTS": null,
+      "PTS/36": null,
+      "REB": null,
+      "TS%": null,
+      "eFG%": null
+    }
+  ],
+  "head_to_head_summary_df": [
+    {
+      "DRtg": 109.9,
+      "Fecha": "domingo, 23 de noviembre de 2025",
+      "Net": 19.8,
+      "ORtg": 129.7,
+      "Pace": 83.8,
+      "Resultado": "110-91",
+      "Rival": "Bilbao"
+    },
+    {
+      "DRtg": 85.0,
+      "Fecha": "domingo, 15 de febrero de 2026",
+      "Net": 16.6,
+      "ORtg": 101.6,
+      "Pace": 78.0,
+      "Resultado": "76-69",
+      "Rival": "Bilbao"
+    }
+  ],
+  "meta": {
+    "deterministic": true,
+    "last_n": 5,
+    "league": null,
+    "reference_date": "2026-08-19",
+    "season": 2025,
+    "team": "vitoria"
+  },
+  "past_games": [
+    {
+      "away_score": 96,
+      "away_team": "Joventut",
+      "date": "Sun, Jun 7, 2026",
+      "home_score": 88,
+      "home_team": "Baskonia",
+      "id": 85,
+      "league": "acb"
+    },
+    {
+      "away_score": 63,
+      "away_team": "Baskonia",
+      "date": "Fri, Jun 5, 2026",
+      "home_score": 82,
+      "home_team": "Joventut",
+      "id": 84,
+      "league": "acb"
+    },
+    {
+      "away_score": 71,
+      "away_team": "Joventut",
+      "date": "Wed, Jun 3, 2026",
+      "home_score": 85,
+      "home_team": "Baskonia",
+      "id": 83,
+      "league": "acb"
+    },
+    {
+      "away_score": 89,
+      "away_team": "Unicaja",
+      "date": "Fri, May 29, 2026",
+      "home_score": 92,
+      "home_team": "Baskonia",
+      "id": 82,
+      "league": "acb"
+    },
+    {
+      "away_score": 88,
+      "away_team": "Baskonia",
+      "date": "Wed, May 27, 2026",
+      "home_score": 83,
+      "home_team": "Real Madrid",
+      "id": 81,
+      "league": "acb"
+    },
+    {
+      "away_score": 85,
+      "away_team": "Covirán Granada",
+      "date": "Sun, May 17, 2026",
+      "home_score": 121,
+      "home_team": "Baskonia",
+      "id": 79,
+      "league": "acb"
+    },
+    {
+      "away_score": 80,
+      "away_team": "UCAM Murcia",
+      "date": "Thu, May 14, 2026",
+      "home_score": 87,
+      "home_team": "Baskonia",
+      "id": 78,
+      "league": "acb"
+    },
+    {
+      "away_score": 88,
+      "away_team": "Baskonia",
+      "date": "Sun, May 10, 2026",
+      "home_score": 86,
+      "home_team": "Valencia Basket",
+      "id": 76,
+      "league": "acb"
+    },
+    {
+      "away_score": 84,
+      "away_team": "Río Breogán",
+      "date": "Sun, May 3, 2026",
+      "home_score": 112,
+      "home_team": "Baskonia",
+      "id": 75,
+      "league": "acb"
+    },
+    {
+      "away_score": 95,
+      "away_team": "Barcelona",
+      "date": "Sun, Apr 26, 2026",
+      "home_score": 92,
+      "home_team": "Baskonia",
+      "id": 74,
+      "league": "acb"
+    },
+    {
+      "away_score": 69,
+      "away_team": "Baskonia",
+      "date": "Sat, Apr 18, 2026",
+      "home_score": 81,
+      "home_team": "Joventut",
+      "id": 73,
+      "league": "acb"
+    },
+    {
+      "away_score": 79,
+      "away_team": "Baskonia",
+      "date": "Thu, Apr 16, 2026",
+      "home_score": 91,
+      "home_team": "Partizan Mozzart Bet",
+      "id": 46,
+      "league": "euroleague"
+    },
+    {
+      "away_score": 86,
+      "away_team": "Dreamland Gran Canaria",
+      "date": "Sun, Apr 12, 2026",
+      "home_score": 88,
+      "home_team": "Baskonia",
+      "id": 72,
+      "league": "acb"
+    },
+    {
+      "away_score": 82,
+      "away_team": "Baskonia",
+      "date": "Fri, Apr 10, 2026",
+      "home_score": 72,
+      "home_team": "Virtus Olidata Bologna",
+      "id": 45,
+      "league": "euroleague"
+    },
+    {
+      "away_score": 98,
+      "away_team": "Maccabi Rapyd Tel Aviv",
+      "date": "Tue, Apr 7, 2026",
+      "home_score": 101,
+      "home_team": "Baskonia",
+      "id": 44,
+      "league": "euroleague"
+    },
+    {
+      "away_score": 88,
+      "away_team": "Baskonia",
+      "date": "Sun, Apr 5, 2026",
+      "home_score": 83,
+      "home_team": "Baxi Manresa",
+      "id": 71,
+      "league": "acb"
+    },
+    {
+      "away_score": 96,
+      "away_team": "Real Madrid",
+      "date": "Fri, Apr 3, 2026",
+      "home_score": 98,
+      "home_team": "Baskonia",
+      "id": 43,
+      "league": "euroleague"
+    },
+    {
+      "away_score": 88,
+      "away_team": "Casademont Zaragoza",
+      "date": "Wed, Apr 1, 2026",
+      "home_score": 115,
+      "home_team": "Baskonia",
+      "id": 70,
+      "league": "acb"
+    },
+    {
+      "away_score": 88,
+      "away_team": "Baskonia",
+      "date": "Sun, Mar 29, 2026",
+      "home_score": 79,
+      "home_team": "MoraBanc Andorra",
+      "id": 69,
+      "league": "acb"
+    },
+    {
+      "away_score": 109,
+      "away_team": "Hapoel IBI Tel Aviv",
+      "date": "Fri, Mar 27, 2026",
+      "home_score": 118,
+      "home_team": "Baskonia",
+      "id": 42,
+      "league": "euroleague"
+    },
+    {
+      "away_score": 108,
+      "away_team": "Crvena zvezda Meridianbet",
+      "date": "Wed, Mar 25, 2026",
+      "home_score": 100,
+      "home_team": "Baskonia",
+      "id": 41,
+      "league": "euroleague"
+    },
+    {
+      "away_score": 81,
+      "away_team": "Bàsquet Girona",
+      "date": "Sun, Mar 22, 2026",
+      "home_score": 94,
+      "home_team": "Baskonia",
+      "id": 68,
+      "league": "acb"
+    },
+    {
+      "away_score": 80,
+      "away_team": "Baskonia",
+      "date": "Thu, Mar 19, 2026",
+      "home_score": 90,
+      "home_team": "Olympiacos",
+      "id": 40,
+      "league": "euroleague"
+    },
+    {
+      "away_score": 96,
+      "away_team": "Baskonia",
+      "date": "Sun, Mar 15, 2026",
+      "home_score": 107,
+      "home_team": "Recoletas Salud San Pablo Burgos",
+      "id": 67,
+      "league": "acb"
+    },
+    {
+      "away_score": 94,
+      "away_team": "Baskonia",
+      "date": "Thu, Mar 12, 2026",
+      "home_score": 100,
+      "home_team": "Dubai",
+      "id": 39,
+      "league": "euroleague"
+    },
+    {
+      "away_score": 90,
+      "away_team": "Hiopos Lleida",
+      "date": "Sun, Mar 8, 2026",
+      "home_score": 93,
+      "home_team": "Baskonia",
+      "id": 66,
+      "league": "acb"
+    },
+    {
+      "away_score": 97,
+      "away_team": "Paris Basketball",
+      "date": "Fri, Mar 6, 2026",
+      "home_score": 81,
+      "home_team": "Baskonia",
+      "id": 38,
+      "league": "euroleague"
+    },
+    {
+      "away_score": 108,
+      "away_team": "Valencia Basket",
+      "date": "Thu, Feb 26, 2026",
+      "home_score": 79,
+      "home_team": "Baskonia",
+      "id": 37,
+      "league": "euroleague"
+    },
+    {
+      "away_score": 76,
+      "away_team": "Baskonia",
+      "date": "Sun, Feb 15, 2026",
+      "home_score": 69,
+      "home_team": "Bilbao",
+      "id": 8,
+      "league": "acb"
+    },
+    {
+      "away_score": 92,
+      "away_team": "Baskonia",
+      "date": "Fri, Feb 13, 2026",
+      "home_score": 102,
+      "home_team": "AS Monaco",
+      "id": 36,
+      "league": "euroleague"
+    },
+    {
+      "away_score": 97,
+      "away_team": "Baskonia",
+      "date": "Sun, Feb 8, 2026",
+      "home_score": 75,
+      "home_team": "Dreamland Gran Canaria",
+      "id": 65,
+      "league": "acb"
+    },
+    {
+      "away_score": 97,
+      "away_team": "Barcelona",
+      "date": "Fri, Feb 6, 2026",
+      "home_score": 91,
+      "home_team": "Baskonia",
+      "id": 35,
+      "league": "euroleague"
+    },
+    {
+      "away_score": 89,
+      "away_team": "Baskonia",
+      "date": "Tue, Feb 3, 2026",
+      "home_score": 109,
+      "home_team": "EA7 Emporio Armani Milano",
+      "id": 34,
+      "league": "euroleague"
+    },
+    {
+      "away_score": 85,
+      "away_team": "Baskonia",
+      "date": "Sun, Feb 1, 2026",
+      "home_score": 89,
+      "home_team": "La Laguna Tenerife",
+      "id": 63,
+      "league": "acb"
+    },
+    {
+      "away_score": 91,
+      "away_team": "Žalgiris",
+      "date": "Fri, Jan 30, 2026",
+      "home_score": 102,
+      "home_team": "Baskonia",
+      "id": 33,
+      "league": "euroleague"
+    },
+    {
+      "away_score": 77,
+      "away_team": "Joventut",
+      "date": "Sun, Jan 25, 2026",
+      "home_score": 87,
+      "home_team": "Baskonia",
+      "id": 62,
+      "league": "acb"
+    },
+    {
+      "away_score": 71,
+      "away_team": "Baskonia",
+      "date": "Fri, Jan 23, 2026",
+      "home_score": 84,
+      "home_team": "Fenerbahçe Beko",
+      "id": 32,
+      "league": "euroleague"
+    },
+    {
+      "away_score": 74,
+      "away_team": "Baskonia",
+      "date": "Tue, Jan 20, 2026",
+      "home_score": 93,
+      "home_team": "Panathinaikos AKTOR",
+      "id": 31,
+      "league": "euroleague"
+    },
+    {
+      "away_score": 85,
+      "away_team": "Baxi Manresa",
+      "date": "Sun, Jan 18, 2026",
+      "home_score": 130,
+      "home_team": "Baskonia",
+      "id": 61,
+      "league": "acb"
+    },
+    {
+      "away_score": 89,
+      "away_team": "Baskonia",
+      "date": "Thu, Jan 15, 2026",
+      "home_score": 75,
+      "home_team": "Anadolu Efes",
+      "id": 30,
+      "league": "euroleague"
+    },
+    {
+      "away_score": 96,
+      "away_team": "Baskonia",
+      "date": "Sun, Jan 11, 2026",
+      "home_score": 85,
+      "home_team": "Bàsquet Girona",
+      "id": 60,
+      "league": "acb"
+    },
+    {
+      "away_score": 73,
+      "away_team": "LDLC ASVEL",
+      "date": "Fri, Jan 9, 2026",
+      "home_score": 78,
+      "home_team": "Baskonia",
+      "id": 29,
+      "league": "euroleague"
+    },
+    {
+      "away_score": 89,
+      "away_team": "Baskonia",
+      "date": "Wed, Jan 7, 2026",
+      "home_score": 96,
+      "home_team": "Bayern München",
+      "id": 28,
+      "league": "euroleague"
+    },
+    {
+      "away_score": 92,
+      "away_team": "MoraBanc Andorra",
+      "date": "Sun, Jan 4, 2026",
+      "home_score": 99,
+      "home_team": "Baskonia",
+      "id": 59,
+      "league": "acb"
+    },
+    {
+      "away_score": 108,
+      "away_team": "Fenerbahçe Beko",
+      "date": "Fri, Jan 2, 2026",
+      "home_score": 93,
+      "home_team": "Baskonia",
+      "id": 27,
+      "league": "euroleague"
+    },
+    {
+      "away_score": 103,
+      "away_team": "Baskonia",
+      "date": "Mon, Dec 29, 2025",
+      "home_score": 100,
+      "home_team": "Río Breogán",
+      "id": 58,
+      "league": "acb"
+    },
+    {
+      "away_score": 77,
+      "away_team": "Recoletas Salud San Pablo Burgos",
+      "date": "Sat, Dec 27, 2025",
+      "home_score": 89,
+      "home_team": "Baskonia",
+      "id": 57,
+      "league": "acb"
+    },
+    {
+      "away_score": 81,
+      "away_team": "Baskonia",
+      "date": "Tue, Dec 23, 2025",
+      "home_score": 91,
+      "home_team": "Valencia Basket",
+      "id": 26,
+      "league": "euroleague"
+    },
+    {
+      "away_score": 93,
+      "away_team": "Baskonia",
+      "date": "Sun, Dec 21, 2025",
+      "home_score": 90,
+      "home_team": "Unicaja",
+      "id": 56,
+      "league": "acb"
+    },
+    {
+      "away_score": 124,
+      "away_team": "Baskonia",
+      "date": "Fri, Dec 19, 2025",
+      "home_score": 134,
+      "home_team": "Barcelona",
+      "id": 25,
+      "league": "euroleague"
+    },
+    {
+      "away_score": 73,
+      "away_team": "AS Monaco",
+      "date": "Wed, Dec 17, 2025",
+      "home_score": 85,
+      "home_team": "Baskonia",
+      "id": 24,
+      "league": "euroleague"
+    },
+    {
+      "away_score": 87,
+      "away_team": "Baskonia",
+      "date": "Thu, Dec 11, 2025",
+      "home_score": 94,
+      "home_team": "Real Madrid",
+      "id": 23,
+      "league": "euroleague"
+    },
+    {
+      "away_score": 91,
+      "away_team": "Valencia Basket",
+      "date": "Sun, Dec 7, 2025",
+      "home_score": 89,
+      "home_team": "Baskonia",
+      "id": 54,
+      "league": "acb"
+    },
+    {
+      "away_score": 78,
+      "away_team": "EA7 Emporio Armani Milano",
+      "date": "Fri, Dec 5, 2025",
+      "home_score": 88,
+      "home_team": "Baskonia",
+      "id": 22,
+      "league": "euroleague"
+    },
+    {
+      "away_score": 67,
+      "away_team": "Baskonia",
+      "date": "Tue, Nov 25, 2025",
+      "home_score": 82,
+      "home_team": "Žalgiris",
+      "id": 21,
+      "league": "euroleague"
+    },
+    {
+      "away_score": 91,
+      "away_team": "Bilbao",
+      "date": "Sun, Nov 23, 2025",
+      "home_score": 110,
+      "home_team": "Baskonia",
+      "id": 7,
+      "league": "acb"
+    },
+    {
+      "away_score": 73,
+      "away_team": "Bayern München",
+      "date": "Fri, Nov 21, 2025",
+      "home_score": 95,
+      "home_team": "Baskonia",
+      "id": 20,
+      "league": "euroleague"
+    },
+    {
+      "away_score": 83,
+      "away_team": "Baskonia",
+      "date": "Sun, Nov 16, 2025",
+      "home_score": 91,
+      "home_team": "Barcelona",
+      "id": 53,
+      "league": "acb"
+    },
+    {
+      "away_score": 83,
+      "away_team": "Baskonia",
+      "date": "Thu, Nov 13, 2025",
+      "home_score": 89,
+      "home_team": "Maccabi Rapyd Tel Aviv",
+      "id": 19,
+      "league": "euroleague"
+    },
+    {
+      "away_score": 89,
+      "away_team": "Baskonia",
+      "date": "Tue, Nov 11, 2025",
+      "home_score": 114,
+      "home_team": "Hapoel IBI Tel Aviv",
+      "id": 18,
+      "league": "euroleague"
+    },
+    {
+      "away_score": 80,
+      "away_team": "Baskonia",
+      "date": "Sun, Nov 9, 2025",
+      "home_score": 86,
+      "home_team": "Hiopos Lleida",
+      "id": 52,
+      "league": "acb"
+    },
+    {
+      "away_score": 76,
+      "away_team": "Virtus Olidata Bologna",
+      "date": "Thu, Nov 6, 2025",
+      "home_score": 87,
+      "home_team": "Baskonia",
+      "id": 17,
+      "league": "euroleague"
+    },
+    {
+      "away_score": 79,
+      "away_team": "La Laguna Tenerife",
+      "date": "Sun, Nov 2, 2025",
+      "home_score": 89,
+      "home_team": "Baskonia",
+      "id": 51,
+      "league": "acb"
+    },
+    {
+      "away_score": 75,
+      "away_team": "Anadolu Efes",
+      "date": "Fri, Oct 31, 2025",
+      "home_score": 86,
+      "home_team": "Baskonia",
+      "id": 16,
+      "league": "euroleague"
+    },
+    {
+      "away_score": 85,
+      "away_team": "Dubai",
+      "date": "Tue, Oct 28, 2025",
+      "home_score": 92,
+      "home_team": "Baskonia",
+      "id": 15,
+      "league": "euroleague"
+    },
+    {
+      "away_score": 84,
+      "away_team": "Baskonia",
+      "date": "Sun, Oct 26, 2025",
+      "home_score": 89,
+      "home_team": "UCAM Murcia",
+      "id": 50,
+      "league": "acb"
+    },
+    {
+      "away_score": 72,
+      "away_team": "Baskonia",
+      "date": "Thu, Oct 23, 2025",
+      "home_score": 90,
+      "home_team": "Crvena zvezda Meridianbet",
+      "id": 14,
+      "league": "euroleague"
+    },
+    {
+      "away_score": 83,
+      "away_team": "Baskonia",
+      "date": "Sun, Oct 19, 2025",
+      "home_score": 80,
+      "home_team": "Covirán Granada",
+      "id": 49,
+      "league": "acb"
+    },
+    {
+      "away_score": 91,
+      "away_team": "Partizan Mozzart Bet",
+      "date": "Fri, Oct 17, 2025",
+      "home_score": 79,
+      "home_team": "Baskonia",
+      "id": 13,
+      "league": "euroleague"
+    },
+    {
+      "away_score": 87,
+      "away_team": "Baskonia",
+      "date": "Wed, Oct 15, 2025",
+      "home_score": 105,
+      "home_team": "Paris Basketball",
+      "id": 12,
+      "league": "euroleague"
+    },
+    {
+      "away_score": 100,
+      "away_team": "Real Madrid",
+      "date": "Sun, Oct 12, 2025",
+      "home_score": 105,
+      "home_team": "Baskonia",
+      "id": 48,
+      "league": "acb"
+    },
+    {
+      "away_score": 86,
+      "away_team": "Panathinaikos AKTOR",
+      "date": "Thu, Oct 9, 2025",
+      "home_score": 84,
+      "home_team": "Baskonia",
+      "id": 11,
+      "league": "euroleague"
+    },
+    {
+      "away_score": 88,
+      "away_team": "Baskonia",
+      "date": "Sun, Oct 5, 2025",
+      "home_score": 107,
+      "home_team": "Casademont Zaragoza",
+      "id": 47,
+      "league": "acb"
+    },
+    {
+      "away_score": 95,
+      "away_team": "Baskonia",
+      "date": "Fri, Oct 3, 2025",
+      "home_score": 102,
+      "home_team": "LDLC ASVEL",
+      "id": 10,
+      "league": "euroleague"
+    },
+    {
+      "away_score": 102,
+      "away_team": "Olympiacos",
+      "date": "Tue, Sep 30, 2025",
+      "home_score": 96,
+      "home_team": "Baskonia",
+      "id": 9,
+      "league": "euroleague"
+    }
+  ],
+  "player_load_df": [],
+  "project_next_matchup": {
+    "opp_projected_rating": 110.1213,
+    "opp_projected_score": 84.5984,
+    "projected_possessions": 76.8229,
+    "team_projected_rating": 115.5503,
+    "team_projected_score": 88.7691
+  },
+  "recent_form_df": [
+    {
+      "3PA%": 57.1,
+      "FTr": 0.29,
+      "Jugador": "Timothe Luwawu-Cabarrot",
+      "MIN": 24.8,
+      "PJ": 5,
+      "PTS": 15.8,
+      "PTS/36": 23.7,
+      "TS%": 55.6,
+      "eFG%": 49.4
+    },
+    {
+      "3PA%": 80.0,
+      "FTr": 0.32,
+      "Jugador": "Markus Howard",
+      "MIN": 21.6,
+      "PJ": 3,
+      "PTS": 13.0,
+      "PTS/36": 22.4,
+      "TS%": 63.9,
+      "eFG%": 59.3
+    },
+    {
+      "3PA%": 27.9,
+      "FTr": 0.47,
+      "Jugador": "Mamadi Diakite",
+      "MIN": 25.1,
+      "PJ": 5,
+      "PTS": 12.0,
+      "PTS/36": 17.3,
+      "TS%": 62.2,
+      "eFG%": 52.3
+    },
+    {
+      "3PA%": 41.7,
+      "FTr": 0.44,
+      "Jugador": "Kobi Simmons",
+      "MIN": 21.8,
+      "PJ": 5,
+      "PTS": 12.0,
+      "PTS/36": 19.2,
+      "TS%": 70.4,
+      "eFG%": 63.8
+    },
+    {
+      "3PA%": 47.6,
+      "FTr": 0.29,
+      "Jugador": "Trent Forrest",
+      "MIN": 26.8,
+      "PJ": 5,
+      "PTS": 11.6,
+      "PTS/36": 15.7,
+      "TS%": 60.4,
+      "eFG%": 54.7
+    },
+    {
+      "3PA%": 50.0,
+      "FTr": 0.25,
+      "Jugador": "Hamidou Diallo",
+      "MIN": 18.5,
+      "PJ": 1,
+      "PTS": 10.0,
+      "PTS/36": 19.4,
+      "TS%": 56.3,
+      "eFG%": 50.0
+    },
+    {
+      "3PA%": 29.0,
+      "FTr": 0.39,
+      "Jugador": "Matteo Spagnolo",
+      "MIN": 22.1,
+      "PJ": 5,
+      "PTS": 9.0,
+      "PTS/36": 14.0,
+      "TS%": 64.7,
+      "eFG%": 68.5
+    },
+    {
+      "3PA%": 37.9,
+      "FTr": 0.52,
+      "Jugador": "Eugene Omoruyi",
+      "MIN": 18.1,
+      "PJ": 5,
+      "PTS": 8.8,
+      "PTS/36": 16.2,
+      "TS%": 58.1,
+      "eFG%": 46.0
+    },
+    {
+      "3PA%": 45.5,
+      "FTr": 0.33,
+      "Jugador": "Rodions Kurucs",
+      "MIN": 23.1,
+      "PJ": 5,
+      "PTS": 7.2,
+      "PTS/36": 11.7,
+      "TS%": 46.5,
+      "eFG%": 43.5
+    },
+    {
+      "3PA%": 0.0,
+      "FTr": 1.25,
+      "Jugador": "Khalifa Diop",
+      "MIN": 9.9,
+      "PJ": 2,
+      "PTS": 5.0,
+      "PTS/36": 18.2,
+      "TS%": 80.6,
+      "eFG%": 75.0
+    },
+    {
+      "3PA%": 54.5,
+      "FTr": 0.18,
+      "Jugador": "Gytis Radzevicius",
+      "MIN": 15.5,
+      "PJ": 5,
+      "PTS": 3.4,
+      "PTS/36": 7.7,
+      "TS%": 73.9,
+      "eFG%": 70.0
+    },
+    {
+      "3PA%": 0.0,
+      "FTr": 1.0,
+      "Jugador": "Jesse Edwards",
+      "MIN": 7.8,
+      "PJ": 5,
+      "PTS": 2.2,
+      "PTS/36": 14.6,
+      "TS%": 61.3,
+      "eFG%": 60.0
+    },
+    {
+      "3PA%": 0.0,
+      "FTr": 0.0,
+      "Jugador": "Vit Hrabar",
+      "MIN": 1.4,
+      "PJ": 1,
+      "PTS": 2.0,
+      "PTS/36": 50.8,
+      "TS%": 100.0,
+      "eFG%": 100.0
+    },
+    {
+      "3PA%": 33.3,
+      "FTr": 2.33,
+      "Jugador": "Rafa Villar",
+      "MIN": 8.1,
+      "PJ": 5,
+      "PTS": 1.2,
+      "PTS/36": 6.6,
+      "TS%": 46.5,
+      "eFG%": 33.3
+    },
+    {
+      "3PA%": 50.0,
+      "FTr": 0.0,
+      "Jugador": "Clement Frisch",
+      "MIN": 2.0,
+      "PJ": 3,
+      "PTS": 0.0,
+      "PTS/36": null,
+      "TS%": 0.0,
+      "eFG%": 0.0
+    },
+    {
+      "3PA%": 50.0,
+      "FTr": 0.0,
+      "Jugador": "Tadas Sedekerskis",
+      "MIN": 9.1,
+      "PJ": 3,
+      "PTS": 0.0,
+      "PTS/36": null,
+      "TS%": 0.0,
+      "eFG%": 0.0
+    },
+    {
+      "3PA%": 100.0,
+      "FTr": 0.0,
+      "Jugador": "Stefan Joksimovic",
+      "MIN": 1.5,
+      "PJ": 1,
+      "PTS": 0.0,
+      "PTS/36": null,
+      "TS%": 0.0,
+      "eFG%": 0.0
+    }
+  ],
+  "recent_games_df": [
+    {
+      "DRtg": 106.7,
+      "Fecha": "miércoles, 27 de mayo de 2026",
+      "Net": 7.6,
+      "ORtg": 114.3,
+      "Pace": 77.4,
+      "Resultado": "88-83",
+      "Rival": "Real Madrid"
+    },
+    {
+      "DRtg": 113.8,
+      "Fecha": "viernes, 29 de mayo de 2026",
+      "Net": 13.3,
+      "ORtg": 127.1,
+      "Pace": 75.3,
+      "Resultado": "92-89",
+      "Rival": "Unicaja"
+    },
+    {
+      "DRtg": 98.1,
+      "Fecha": "miércoles, 3 de junio de 2026",
+      "Net": 16.5,
+      "ORtg": 114.6,
+      "Pace": 73.3,
+      "Resultado": "85-71",
+      "Rival": "Joventut"
+    },
+    {
+      "DRtg": 116.5,
+      "Fecha": "viernes, 5 de junio de 2026",
+      "Net": -28.7,
+      "ORtg": 87.7,
+      "Pace": 71.1,
+      "Resultado": "63-82",
+      "Rival": "Joventut"
+    },
+    {
+      "DRtg": 124.7,
+      "Fecha": "domingo, 7 de junio de 2026",
+      "Net": -9.8,
+      "ORtg": 114.9,
+      "Pace": 76.8,
+      "Resultado": "88-96",
+      "Rival": "Joventut"
+    }
+  ],
+  "schedule_difficulty_df": [
+    {
+      "Fecha": "sábado, 19 de septiembre de 2026",
+      "Net Rating": -1.1,
+      "Rival": "Joventut"
+    },
+    {
+      "Fecha": "jueves, 24 de septiembre de 2026",
+      "Net Rating": null,
+      "Rival": "Olympiacos"
+    },
+    {
+      "Fecha": "domingo, 27 de septiembre de 2026",
+      "Net Rating": -9.6,
+      "Rival": "Recoletas Salud San Pablo Burgos"
+    },
+    {
+      "Fecha": "martes, 29 de septiembre de 2026",
+      "Net Rating": 10.7,
+      "Rival": "Valencia Basket"
+    },
+    {
+      "Fecha": "viernes, 2 de octubre de 2026",
+      "Net Rating": null,
+      "Rival": "Olimpia Milano"
+    }
+  ],
+  "scouting_narrative": "Juega a ritmo alto (77.2 posesiones estimadas por partido). Balance positivo: +9.8 de Net Rating medio. Ataque muy volcado al triple: 42% de los intentos son de 3. Máximo anotador: Timothe Luwawu-Cabarrot (17.5 puntos por partido).",
+  "streaks_df": [
+    {
+      "Jugador": "Tadas Sedekerskis",
+      "PJ temporada": 7,
+      "PTS temporada": 1.9,
+      "PTS últimos 5": 2.2,
+      "Racha PTS": "➖",
+      "Racha TS%": "➖",
+      "TS% temporada": 22.7,
+      "TS% últimos 5": 26.8,
+      "z-score PTS": 0.12,
+      "z-score TS%": 0.13
+    },
+    {
+      "Jugador": "Mamadi Diakite",
+      "PJ temporada": 12,
+      "PTS temporada": 11.5,
+      "PTS últimos 5": 12.0,
+      "Racha PTS": "➖",
+      "Racha TS%": "➖",
+      "TS% temporada": 63.4,
+      "TS% últimos 5": 62.2,
+      "z-score PTS": 0.1,
+      "z-score TS%": -0.06
+    },
+    {
+      "Jugador": "Matteo Spagnolo",
+      "PJ temporada": 12,
+      "PTS temporada": 8.9,
+      "PTS últimos 5": 9.0,
+      "Racha PTS": "➖",
+      "Racha TS%": "➖",
+      "TS% temporada": 63.7,
+      "TS% últimos 5": 64.7,
+      "z-score PTS": 0.02,
+      "z-score TS%": 0.04
+    },
+    {
+      "Jugador": "Clement Frisch",
+      "PJ temporada": 9,
+      "PTS temporada": 1.8,
+      "PTS últimos 5": 1.6,
+      "Racha PTS": "➖",
+      "Racha TS%": "➖",
+      "TS% temporada": 23.1,
+      "TS% últimos 5": 16.4,
+      "z-score PTS": -0.05,
+      "z-score TS%": -0.18
+    },
+    {
+      "Jugador": "Rodions Kurucs",
+      "PJ temporada": 12,
+      "PTS temporada": 7.6,
+      "PTS últimos 5": 7.2,
+      "Racha PTS": "➖",
+      "Racha TS%": "➖",
+      "TS% temporada": 50.8,
+      "TS% últimos 5": 46.5,
+      "z-score PTS": -0.1,
+      "z-score TS%": -0.22
+    },
+    {
+      "Jugador": "Rafa Villar",
+      "PJ temporada": 12,
+      "PTS temporada": 1.5,
+      "PTS últimos 5": 1.2,
+      "Racha PTS": "➖",
+      "Racha TS%": "➖",
+      "TS% temporada": 32.5,
+      "TS% últimos 5": 40.2,
+      "z-score PTS": -0.15,
+      "z-score TS%": 0.25
+    },
+    {
+      "Jugador": "Gytis Radzevicius",
+      "PJ temporada": 11,
+      "PTS temporada": 3.9,
+      "PTS últimos 5": 3.4,
+      "Racha PTS": "➖",
+      "Racha TS%": "➖",
+      "TS% temporada": 67.1,
+      "TS% últimos 5": 73.9,
+      "z-score PTS": -0.16,
+      "z-score TS%": 0.2
+    },
+    {
+      "Jugador": "Trent Forrest",
+      "PJ temporada": 10,
+      "PTS temporada": 12.3,
+      "PTS últimos 5": 11.6,
+      "Racha PTS": "➖",
+      "Racha TS%": "➖",
+      "TS% temporada": 63.9,
+      "TS% últimos 5": 60.4,
+      "z-score PTS": -0.2,
+      "z-score TS%": -0.28
+    },
+    {
+      "Jugador": "Kobi Simmons",
+      "PJ temporada": 11,
+      "PTS temporada": 13.6,
+      "PTS últimos 5": 12.0,
+      "Racha PTS": "➖",
+      "Racha TS%": "➖",
+      "TS% temporada": 71.1,
+      "TS% últimos 5": 70.4,
+      "z-score PTS": -0.27,
+      "z-score TS%": -0.05
+    },
+    {
+      "Jugador": "Timothe Luwawu-Cabarrot",
+      "PJ temporada": 11,
+      "PTS temporada": 17.5,
+      "PTS últimos 5": 15.8,
+      "Racha PTS": "➖",
+      "Racha TS%": "➖",
+      "TS% temporada": 61.2,
+      "TS% últimos 5": 55.6,
+      "z-score PTS": -0.3,
+      "z-score TS%": -0.33
+    },
+    {
+      "Jugador": "Eugene Omoruyi",
+      "PJ temporada": 10,
+      "PTS temporada": 10.8,
+      "PTS últimos 5": 8.8,
+      "Racha PTS": "➖",
+      "Racha TS%": "➖",
+      "TS% temporada": 69.7,
+      "TS% últimos 5": 58.1,
+      "z-score PTS": -0.37,
+      "z-score TS%": -0.57
+    },
+    {
+      "Jugador": "Jesse Edwards",
+      "PJ temporada": 10,
+      "PTS temporada": 4.2,
+      "PTS últimos 5": 2.2,
+      "Racha PTS": "➖",
+      "Racha TS%": "➖",
+      "TS% temporada": 62.9,
+      "TS% últimos 5": 61.3,
+      "z-score PTS": -0.62,
+      "z-score TS%": -0.04
+    }
+  ],
+  "team_advanced_summary": {
+    "avg_def_rating": 109.1621,
+    "avg_efg_pct": 0.5297,
+    "avg_net_rating": 9.8032,
+    "avg_off_rating": 118.9653,
+    "avg_pace": 77.1583,
+    "avg_ts_pct": 0.5678
+  },
+  "team_summary_df": [
+    {
+      "DRtg": null,
+      "Fecha": "martes, 30 de septiembre de 2025",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "96-102",
+      "Rival": "Olympiacos"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "viernes, 3 de octubre de 2025",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "95-102",
+      "Rival": "LDLC ASVEL"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "domingo, 5 de octubre de 2025",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "88-107",
+      "Rival": "Casademont Zaragoza"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "jueves, 9 de octubre de 2025",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "84-86",
+      "Rival": "Panathinaikos AKTOR"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "domingo, 12 de octubre de 2025",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "105-100",
+      "Rival": "Real Madrid"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "miércoles, 15 de octubre de 2025",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "87-105",
+      "Rival": "Paris Basketball"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "viernes, 17 de octubre de 2025",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "79-91",
+      "Rival": "Partizan Mozzart Bet"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "domingo, 19 de octubre de 2025",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "83-80",
+      "Rival": "Covirán Granada"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "jueves, 23 de octubre de 2025",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "72-90",
+      "Rival": "Crvena zvezda Meridianbet"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "domingo, 26 de octubre de 2025",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "84-89",
+      "Rival": "UCAM Murcia"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "martes, 28 de octubre de 2025",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "92-85",
+      "Rival": "Dubai"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "viernes, 31 de octubre de 2025",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "86-75",
+      "Rival": "Anadolu Efes"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "domingo, 2 de noviembre de 2025",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "89-79",
+      "Rival": "La Laguna Tenerife"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "jueves, 6 de noviembre de 2025",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "87-76",
+      "Rival": "Virtus Olidata Bologna"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "domingo, 9 de noviembre de 2025",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "80-86",
+      "Rival": "Hiopos Lleida"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "martes, 11 de noviembre de 2025",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "89-114",
+      "Rival": "Hapoel IBI Tel Aviv"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "jueves, 13 de noviembre de 2025",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "83-89",
+      "Rival": "Maccabi Rapyd Tel Aviv"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "domingo, 16 de noviembre de 2025",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "83-91",
+      "Rival": "Barcelona"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "viernes, 21 de noviembre de 2025",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "95-73",
+      "Rival": "Bayern München"
+    },
+    {
+      "DRtg": 109.9,
+      "Fecha": "domingo, 23 de noviembre de 2025",
+      "Net": 19.8,
+      "ORtg": 129.7,
+      "Pace": 83.8,
+      "Resultado": "110-91",
+      "Rival": "Bilbao"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "martes, 25 de noviembre de 2025",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "67-82",
+      "Rival": "Žalgiris"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "viernes, 5 de diciembre de 2025",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "88-78",
+      "Rival": "EA7 Emporio Armani Milano"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "domingo, 7 de diciembre de 2025",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "89-91",
+      "Rival": "Valencia Basket"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "jueves, 11 de diciembre de 2025",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "87-94",
+      "Rival": "Real Madrid"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "sábado, 13 de diciembre de 2025",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "-",
+      "Rival": "Dreamland Gran Canaria"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "miércoles, 17 de diciembre de 2025",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "85-73",
+      "Rival": "AS Monaco"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "viernes, 19 de diciembre de 2025",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "124-134",
+      "Rival": "Barcelona"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "domingo, 21 de diciembre de 2025",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "93-90",
+      "Rival": "Unicaja"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "martes, 23 de diciembre de 2025",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "81-91",
+      "Rival": "Valencia Basket"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "sábado, 27 de diciembre de 2025",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "89-77",
+      "Rival": "Recoletas Salud San Pablo Burgos"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "lunes, 29 de diciembre de 2025",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "103-100",
+      "Rival": "Río Breogán"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "viernes, 2 de enero de 2026",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "93-108",
+      "Rival": "Fenerbahçe Beko"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "domingo, 4 de enero de 2026",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "99-92",
+      "Rival": "MoraBanc Andorra"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "miércoles, 7 de enero de 2026",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "89-96",
+      "Rival": "Bayern München"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "viernes, 9 de enero de 2026",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "78-73",
+      "Rival": "LDLC ASVEL"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "domingo, 11 de enero de 2026",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "96-85",
+      "Rival": "Bàsquet Girona"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "jueves, 15 de enero de 2026",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "89-75",
+      "Rival": "Anadolu Efes"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "domingo, 18 de enero de 2026",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "130-85",
+      "Rival": "Baxi Manresa"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "martes, 20 de enero de 2026",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "74-93",
+      "Rival": "Panathinaikos AKTOR"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "viernes, 23 de enero de 2026",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "71-84",
+      "Rival": "Fenerbahçe Beko"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "domingo, 25 de enero de 2026",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "87-77",
+      "Rival": "Joventut"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "viernes, 30 de enero de 2026",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "102-91",
+      "Rival": "Žalgiris"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "domingo, 1 de febrero de 2026",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "85-89",
+      "Rival": "La Laguna Tenerife"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "martes, 3 de febrero de 2026",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "89-109",
+      "Rival": "EA7 Emporio Armani Milano"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "viernes, 6 de febrero de 2026",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "91-97",
+      "Rival": "Barcelona"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "domingo, 8 de febrero de 2026",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "-",
+      "Rival": "Casademont Zaragoza"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "domingo, 8 de febrero de 2026",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "97-75",
+      "Rival": "Dreamland Gran Canaria"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "viernes, 13 de febrero de 2026",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "92-102",
+      "Rival": "AS Monaco"
+    },
+    {
+      "DRtg": 85.0,
+      "Fecha": "domingo, 15 de febrero de 2026",
+      "Net": 16.6,
+      "ORtg": 101.6,
+      "Pace": 78.0,
+      "Resultado": "76-69",
+      "Rival": "Bilbao"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "jueves, 26 de febrero de 2026",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "79-108",
+      "Rival": "Valencia Basket"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "viernes, 6 de marzo de 2026",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "81-97",
+      "Rival": "Paris Basketball"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "domingo, 8 de marzo de 2026",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "93-90",
+      "Rival": "Hiopos Lleida"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "jueves, 12 de marzo de 2026",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "94-100",
+      "Rival": "Dubai"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "domingo, 15 de marzo de 2026",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "96-107",
+      "Rival": "Recoletas Salud San Pablo Burgos"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "jueves, 19 de marzo de 2026",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "80-90",
+      "Rival": "Olympiacos"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "domingo, 22 de marzo de 2026",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "94-81",
+      "Rival": "Bàsquet Girona"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "miércoles, 25 de marzo de 2026",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "100-108",
+      "Rival": "Crvena zvezda Meridianbet"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "viernes, 27 de marzo de 2026",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "118-109",
+      "Rival": "Hapoel IBI Tel Aviv"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "domingo, 29 de marzo de 2026",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "88-79",
+      "Rival": "MoraBanc Andorra"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "miércoles, 1 de abril de 2026",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "115-88",
+      "Rival": "Casademont Zaragoza"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "viernes, 3 de abril de 2026",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "98-96",
+      "Rival": "Real Madrid"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "domingo, 5 de abril de 2026",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "88-83",
+      "Rival": "Baxi Manresa"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "martes, 7 de abril de 2026",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "101-98",
+      "Rival": "Maccabi Rapyd Tel Aviv"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "viernes, 10 de abril de 2026",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "82-72",
+      "Rival": "Virtus Olidata Bologna"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "domingo, 12 de abril de 2026",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "88-86",
+      "Rival": "Dreamland Gran Canaria"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "jueves, 16 de abril de 2026",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "79-91",
+      "Rival": "Partizan Mozzart Bet"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "sábado, 18 de abril de 2026",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "69-81",
+      "Rival": "Joventut"
+    },
+    {
+      "DRtg": 127.0,
+      "Fecha": "domingo, 26 de abril de 2026",
+      "Net": -6.6,
+      "ORtg": 120.4,
+      "Pace": 75.6,
+      "Resultado": "92-95",
+      "Rival": "Barcelona"
+    },
+    {
+      "DRtg": 108.8,
+      "Fecha": "domingo, 3 de mayo de 2026",
+      "Net": 36.3,
+      "ORtg": 145.1,
+      "Pace": 77.2,
+      "Resultado": "112-84",
+      "Rival": "Río Breogán"
+    },
+    {
+      "DRtg": 114.4,
+      "Fecha": "domingo, 10 de mayo de 2026",
+      "Net": 1.1,
+      "ORtg": 115.5,
+      "Pace": 75.7,
+      "Resultado": "88-86",
+      "Rival": "Valencia Basket"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "martes, 12 de mayo de 2026",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "-",
+      "Rival": "UCAM Murcia"
+    },
+    {
+      "DRtg": 95.9,
+      "Fecha": "jueves, 14 de mayo de 2026",
+      "Net": 10.7,
+      "ORtg": 106.6,
+      "Pace": 82.5,
+      "Resultado": "87-80",
+      "Rival": "UCAM Murcia"
+    },
+    {
+      "DRtg": 109.3,
+      "Fecha": "domingo, 17 de mayo de 2026",
+      "Net": 40.9,
+      "ORtg": 150.1,
+      "Pace": 79.2,
+      "Resultado": "121-85",
+      "Rival": "Covirán Granada"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "domingo, 24 de mayo de 2026",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "-",
+      "Rival": "Real Madrid"
+    },
+    {
+      "DRtg": 106.7,
+      "Fecha": "miércoles, 27 de mayo de 2026",
+      "Net": 7.6,
+      "ORtg": 114.3,
+      "Pace": 77.4,
+      "Resultado": "88-83",
+      "Rival": "Real Madrid"
+    },
+    {
+      "DRtg": 113.8,
+      "Fecha": "viernes, 29 de mayo de 2026",
+      "Net": 13.3,
+      "ORtg": 127.1,
+      "Pace": 75.3,
+      "Resultado": "92-89",
+      "Rival": "Unicaja"
+    },
+    {
+      "DRtg": 98.1,
+      "Fecha": "miércoles, 3 de junio de 2026",
+      "Net": 16.5,
+      "ORtg": 114.6,
+      "Pace": 73.3,
+      "Resultado": "85-71",
+      "Rival": "Joventut"
+    },
+    {
+      "DRtg": 116.5,
+      "Fecha": "viernes, 5 de junio de 2026",
+      "Net": -28.7,
+      "ORtg": 87.7,
+      "Pace": 71.1,
+      "Resultado": "63-82",
+      "Rival": "Joventut"
+    },
+    {
+      "DRtg": 124.7,
+      "Fecha": "domingo, 7 de junio de 2026",
+      "Net": -9.8,
+      "ORtg": 114.9,
+      "Pace": 76.8,
+      "Resultado": "88-96",
+      "Rival": "Joventut"
+    }
+  ],
+  "upcoming_games": [
+    {
+      "away_score": null,
+      "away_team": "Baskonia",
+      "date": "Sat, Sep 19, 2026",
+      "home_score": null,
+      "home_team": "Joventut",
+      "id": 153,
+      "league": "supercopa"
+    },
+    {
+      "away_score": null,
+      "away_team": "Olympiacos",
+      "date": "Thu, Sep 24, 2026",
+      "home_score": null,
+      "home_team": "Baskonia",
+      "id": 154,
+      "league": "euroleague"
+    },
+    {
+      "away_score": null,
+      "away_team": "Baskonia",
+      "date": "Sun, Sep 27, 2026",
+      "home_score": null,
+      "home_team": "Recoletas Salud San Pablo Burgos",
+      "id": 155,
+      "league": "acb"
+    },
+    {
+      "away_score": null,
+      "away_team": "Baskonia",
+      "date": "Tue, Sep 29, 2026",
+      "home_score": null,
+      "home_team": "Valencia Basket",
+      "id": 156,
+      "league": "euroleague"
+    },
+    {
+      "away_score": null,
+      "away_team": "Olimpia Milano",
+      "date": "Fri, Oct 02, 2026",
+      "home_score": null,
+      "home_team": "Baskonia",
+      "id": 157,
+      "league": "euroleague"
+    },
+    {
+      "away_score": null,
+      "away_team": "Bàsquet Girona",
+      "date": "Sun, Oct 04, 2026",
+      "home_score": null,
+      "home_team": "Baskonia",
+      "id": 158,
+      "league": "acb"
+    },
+    {
+      "away_score": null,
+      "away_team": "Besiktas Istanbul",
+      "date": "Fri, Oct 09, 2026",
+      "home_score": null,
+      "home_team": "Baskonia",
+      "id": 159,
+      "league": "euroleague"
+    },
+    {
+      "away_score": null,
+      "away_team": "Joventut",
+      "date": "Sun, Oct 11, 2026",
+      "home_score": null,
+      "home_team": "Baskonia",
+      "id": 160,
+      "league": "acb"
+    },
+    {
+      "away_score": null,
+      "away_team": "Dubai",
+      "date": "Tue, Oct 13, 2026",
+      "home_score": null,
+      "home_team": "Baskonia",
+      "id": 161,
+      "league": "euroleague"
+    },
+    {
+      "away_score": null,
+      "away_team": "Baskonia",
+      "date": "Fri, Oct 16, 2026",
+      "home_score": null,
+      "home_team": "Virtus Bolonia",
+      "id": 162,
+      "league": "euroleague"
+    },
+    {
+      "away_score": null,
+      "away_team": "Baskonia",
+      "date": "Sun, Oct 18, 2026",
+      "home_score": null,
+      "home_team": "La Laguna Tenerife",
+      "id": 163,
+      "league": "acb"
+    },
+    {
+      "away_score": null,
+      "away_team": "Baskonia",
+      "date": "Thu, Oct 22, 2026",
+      "home_score": null,
+      "home_team": "Panathinaikos AKTOR",
+      "id": 164,
+      "league": "euroleague"
+    },
+    {
+      "away_score": null,
+      "away_team": "Baskonia",
+      "date": "Sun, Oct 25, 2026",
+      "home_score": null,
+      "home_team": "Valencia Basket",
+      "id": 165,
+      "league": "acb"
+    },
+    {
+      "away_score": null,
+      "away_team": "Real Madrid",
+      "date": "Tue, Oct 27, 2026",
+      "home_score": null,
+      "home_team": "Baskonia",
+      "id": 166,
+      "league": "euroleague"
+    },
+    {
+      "away_score": null,
+      "away_team": "Baskonia",
+      "date": "Fri, Oct 30, 2026",
+      "home_score": null,
+      "home_team": "LDLC ASVEL",
+      "id": 167,
+      "league": "euroleague"
+    },
+    {
+      "away_score": null,
+      "away_team": "Kids&Us Manresa",
+      "date": "Sun, Nov 01, 2026",
+      "home_score": null,
+      "home_team": "Baskonia",
+      "id": 168,
+      "league": "acb"
+    },
+    {
+      "away_score": null,
+      "away_team": "Baskonia",
+      "date": "Wed, Nov 04, 2026",
+      "home_score": null,
+      "home_team": "Fenerbahçe Beko",
+      "id": 169,
+      "league": "euroleague"
+    },
+    {
+      "away_score": null,
+      "away_team": "Baskonia",
+      "date": "Sat, Nov 07, 2026",
+      "home_score": null,
+      "home_team": "Ilerna Lleida",
+      "id": 170,
+      "league": "acb"
+    },
+    {
+      "away_score": null,
+      "away_team": "Baskonia",
+      "date": "Wed, Nov 11, 2026",
+      "home_score": null,
+      "home_team": "Partizan Mozzart Bet",
+      "id": 171,
+      "league": "euroleague"
+    },
+    {
+      "away_score": null,
+      "away_team": "Real Madrid",
+      "date": "Sun, Nov 15, 2026",
+      "home_score": null,
+      "home_team": "Baskonia",
+      "id": 172,
+      "league": "acb"
+    },
+    {
+      "away_score": null,
+      "away_team": "Hapoel Tel Aviv",
+      "date": "Tue, Nov 17, 2026",
+      "home_score": null,
+      "home_team": "Baskonia",
+      "id": 173,
+      "league": "euroleague"
+    },
+    {
+      "away_score": null,
+      "away_team": "Baskonia",
+      "date": "Thu, Nov 19, 2026",
+      "home_score": null,
+      "home_team": "Bayern Munich",
+      "id": 174,
+      "league": "euroleague"
+    },
+    {
+      "away_score": null,
+      "away_team": "Baskonia",
+      "date": "Sun, Nov 22, 2026",
+      "home_score": null,
+      "home_team": "Bilbao",
+      "id": 175,
+      "league": "acb"
+    },
+    {
+      "away_score": null,
+      "away_team": "Anadolu Efes",
+      "date": "Wed, Nov 25, 2026",
+      "home_score": null,
+      "home_team": "Baskonia",
+      "id": 176,
+      "league": "euroleague"
+    },
+    {
+      "away_score": null,
+      "away_team": "Maccabi Tel Aviv",
+      "date": "Fri, Dec 04, 2026",
+      "home_score": null,
+      "home_team": "Baskonia",
+      "id": 177,
+      "league": "euroleague"
+    },
+    {
+      "away_score": null,
+      "away_team": "UCAM Murcia",
+      "date": "Sun, Dec 06, 2026",
+      "home_score": null,
+      "home_team": "Baskonia",
+      "id": 178,
+      "league": "acb"
+    },
+    {
+      "away_score": null,
+      "away_team": "Monbus Obradoiro",
+      "date": "Tue, Dec 08, 2026",
+      "home_score": null,
+      "home_team": "Baskonia",
+      "id": 179,
+      "league": "acb"
+    },
+    {
+      "away_score": null,
+      "away_team": "Baskonia",
+      "date": "Thu, Dec 10, 2026",
+      "home_score": null,
+      "home_team": "Žalgiris",
+      "id": 180,
+      "league": "euroleague"
+    },
+    {
+      "away_score": null,
+      "away_team": "Baskonia",
+      "date": "Sun, Dec 13, 2026",
+      "home_score": null,
+      "home_team": "Basquet Coruña",
+      "id": 181,
+      "league": "acb"
+    },
+    {
+      "away_score": null,
+      "away_team": "Barcelona",
+      "date": "Wed, Dec 16, 2026",
+      "home_score": null,
+      "home_team": "Baskonia",
+      "id": 182,
+      "league": "euroleague"
+    },
+    {
+      "away_score": null,
+      "away_team": "Paris Basketball",
+      "date": "Fri, Dec 18, 2026",
+      "home_score": null,
+      "home_team": "Baskonia",
+      "id": 183,
+      "league": "euroleague"
+    },
+    {
+      "away_score": null,
+      "away_team": "MoraBanc Andorra",
+      "date": "Sun, Dec 20, 2026",
+      "home_score": null,
+      "home_team": "Baskonia",
+      "id": 184,
+      "league": "acb"
+    },
+    {
+      "away_score": null,
+      "away_team": "Baskonia",
+      "date": "Wed, Dec 23, 2026",
+      "home_score": null,
+      "home_team": "KK Crvena Zvezda",
+      "id": 185,
+      "league": "euroleague"
+    },
+    {
+      "away_score": null,
+      "away_team": "Río Breogán",
+      "date": "Sun, Dec 27, 2026",
+      "home_score": null,
+      "home_team": "Baskonia",
+      "id": 186,
+      "league": "acb"
+    },
+    {
+      "away_score": null,
+      "away_team": "Valencia Basket",
+      "date": "Tue, Dec 29, 2026",
+      "home_score": null,
+      "home_team": "Baskonia",
+      "id": 187,
+      "league": "euroleague"
+    },
+    {
+      "away_score": null,
+      "away_team": "Baskonia",
+      "date": "Sun, Jan 03, 2027",
+      "home_score": null,
+      "home_team": "Barcelona",
+      "id": 188,
+      "league": "acb"
+    },
+    {
+      "away_score": null,
+      "away_team": "Baskonia",
+      "date": "Wed, Jan 06, 2027",
+      "home_score": null,
+      "home_team": "Casademont Zaragoza",
+      "id": 189,
+      "league": "acb"
+    },
+    {
+      "away_score": null,
+      "away_team": "Virtus Bolonia",
+      "date": "Fri, Jan 08, 2027",
+      "home_score": null,
+      "home_team": "Baskonia",
+      "id": 190,
+      "league": "euroleague"
+    },
+    {
+      "away_score": null,
+      "away_team": "Unicaja",
+      "date": "Sun, Jan 10, 2027",
+      "home_score": null,
+      "home_team": "Baskonia",
+      "id": 191,
+      "league": "acb"
+    },
+    {
+      "away_score": null,
+      "away_team": "Baskonia",
+      "date": "Wed, Jan 13, 2027",
+      "home_score": null,
+      "home_team": "Olympiacos",
+      "id": 192,
+      "league": "euroleague"
+    },
+    {
+      "away_score": null,
+      "away_team": "Baskonia",
+      "date": "Fri, Jan 15, 2027",
+      "home_score": null,
+      "home_team": "Besiktas Istanbul",
+      "id": 193,
+      "league": "euroleague"
+    },
+    {
+      "away_score": null,
+      "away_team": "Baskonia",
+      "date": "Sun, Jan 17, 2027",
+      "home_score": null,
+      "home_team": "Kids&Us Manresa",
+      "id": 194,
+      "league": "acb"
+    },
+    {
+      "away_score": null,
+      "away_team": "Baskonia",
+      "date": "Thu, Jan 21, 2027",
+      "home_score": null,
+      "home_team": "Paris Basketball",
+      "id": 195,
+      "league": "euroleague"
+    },
+    {
+      "away_score": null,
+      "away_team": "Baskonia",
+      "date": "Sun, Jan 24, 2027",
+      "home_score": null,
+      "home_team": "Monbus Obradoiro",
+      "id": 196,
+      "league": "acb"
+    },
+    {
+      "away_score": null,
+      "away_team": "Žalgiris",
+      "date": "Thu, Jan 28, 2027",
+      "home_score": null,
+      "home_team": "Baskonia",
+      "id": 197,
+      "league": "euroleague"
+    },
+    {
+      "away_score": null,
+      "away_team": "Bilbao",
+      "date": "Sat, Jan 30, 2027",
+      "home_score": null,
+      "home_team": "Baskonia",
+      "id": 198,
+      "league": "acb"
+    },
+    {
+      "away_score": null,
+      "away_team": "Fenerbahçe Beko",
+      "date": "Tue, Feb 02, 2027",
+      "home_score": null,
+      "home_team": "Baskonia",
+      "id": 199,
+      "league": "euroleague"
+    },
+    {
+      "away_score": null,
+      "away_team": "KK Crvena Zvezda",
+      "date": "Fri, Feb 05, 2027",
+      "home_score": null,
+      "home_team": "Baskonia",
+      "id": 200,
+      "league": "euroleague"
+    },
+    {
+      "away_score": null,
+      "away_team": "Baskonia",
+      "date": "Sun, Feb 07, 2027",
+      "home_score": null,
+      "home_team": "Real Madrid",
+      "id": 201,
+      "league": "acb"
+    },
+    {
+      "away_score": null,
+      "away_team": "Baskonia",
+      "date": "Wed, Feb 10, 2027",
+      "home_score": null,
+      "home_team": "Hapoel Tel Aviv",
+      "id": 202,
+      "league": "euroleague"
+    },
+    {
+      "away_score": null,
+      "away_team": "Recoletas Salud San Pablo Burgos",
+      "date": "Sat, Feb 13, 2027",
+      "home_score": null,
+      "home_team": "Baskonia",
+      "id": 203,
+      "league": "acb"
+    },
+    {
+      "away_score": null,
+      "away_team": "Partizan Mozzart Bet",
+      "date": "Thu, Mar 04, 2027",
+      "home_score": null,
+      "home_team": "Baskonia",
+      "id": 204,
+      "league": "euroleague"
+    },
+    {
+      "away_score": null,
+      "away_team": "Ilerna Lleida",
+      "date": "Sat, Mar 06, 2027",
+      "home_score": null,
+      "home_team": "Baskonia",
+      "id": 205,
+      "league": "acb"
+    },
+    {
+      "away_score": null,
+      "away_team": "Panathinaikos AKTOR",
+      "date": "Tue, Mar 09, 2027",
+      "home_score": null,
+      "home_team": "Baskonia",
+      "id": 206,
+      "league": "euroleague"
+    },
+    {
+      "away_score": null,
+      "away_team": "Baskonia",
+      "date": "Fri, Mar 12, 2027",
+      "home_score": null,
+      "home_team": "Barcelona",
+      "id": 207,
+      "league": "euroleague"
+    },
+    {
+      "away_score": null,
+      "away_team": "Baskonia",
+      "date": "Sun, Mar 14, 2027",
+      "home_score": null,
+      "home_team": "UCAM Murcia",
+      "id": 208,
+      "league": "acb"
+    },
+    {
+      "away_score": null,
+      "away_team": "Baskonia",
+      "date": "Thu, Mar 18, 2027",
+      "home_score": null,
+      "home_team": "Real Madrid",
+      "id": 209,
+      "league": "euroleague"
+    },
+    {
+      "away_score": null,
+      "away_team": "Baskonia",
+      "date": "Sat, Mar 20, 2027",
+      "home_score": null,
+      "home_team": "Unicaja",
+      "id": 210,
+      "league": "acb"
+    },
+    {
+      "away_score": null,
+      "away_team": "Baskonia",
+      "date": "Tue, Mar 23, 2027",
+      "home_score": null,
+      "home_team": "Dubai",
+      "id": 211,
+      "league": "euroleague"
+    },
+    {
+      "away_score": null,
+      "away_team": "Baskonia",
+      "date": "Thu, Mar 25, 2027",
+      "home_score": null,
+      "home_team": "Anadolu Efes",
+      "id": 212,
+      "league": "euroleague"
+    },
+    {
+      "away_score": null,
+      "away_team": "Casademont Zaragoza",
+      "date": "Sun, Mar 28, 2027",
+      "home_score": null,
+      "home_team": "Baskonia",
+      "id": 213,
+      "league": "acb"
+    },
+    {
+      "away_score": null,
+      "away_team": "Bayern Munich",
+      "date": "Fri, Apr 02, 2027",
+      "home_score": null,
+      "home_team": "Baskonia",
+      "id": 214,
+      "league": "euroleague"
+    },
+    {
+      "away_score": null,
+      "away_team": "Valencia Basket",
+      "date": "Sun, Apr 04, 2027",
+      "home_score": null,
+      "home_team": "Baskonia",
+      "id": 215,
+      "league": "acb"
+    },
+    {
+      "away_score": null,
+      "away_team": "LDLC ASVEL",
+      "date": "Tue, Apr 06, 2027",
+      "home_score": null,
+      "home_team": "Baskonia",
+      "id": 216,
+      "league": "euroleague"
+    },
+    {
+      "away_score": null,
+      "away_team": "Baskonia",
+      "date": "Thu, Apr 08, 2027",
+      "home_score": null,
+      "home_team": "Olimpia Milano",
+      "id": 217,
+      "league": "euroleague"
+    },
+    {
+      "away_score": null,
+      "away_team": "Baskonia",
+      "date": "Sat, Apr 10, 2027",
+      "home_score": null,
+      "home_team": "MoraBanc Andorra",
+      "id": 218,
+      "league": "acb"
+    },
+    {
+      "away_score": null,
+      "away_team": "Baskonia",
+      "date": "Thu, Apr 15, 2027",
+      "home_score": null,
+      "home_team": "Maccabi Tel Aviv",
+      "id": 219,
+      "league": "euroleague"
+    },
+    {
+      "away_score": null,
+      "away_team": "Baskonia",
+      "date": "Sun, Apr 18, 2027",
+      "home_score": null,
+      "home_team": "Bàsquet Girona",
+      "id": 220,
+      "league": "acb"
+    },
+    {
+      "away_score": null,
+      "away_team": "Basquet Coruña",
+      "date": "Sun, Apr 25, 2027",
+      "home_score": null,
+      "home_team": "Baskonia",
+      "id": 221,
+      "league": "acb"
+    },
+    {
+      "away_score": null,
+      "away_team": "Baskonia",
+      "date": "Sun, May 02, 2027",
+      "home_score": null,
+      "home_team": "Joventut",
+      "id": 222,
+      "league": "acb"
+    },
+    {
+      "away_score": null,
+      "away_team": "Barcelona",
+      "date": "Sat, May 08, 2027",
+      "home_score": null,
+      "home_team": "Baskonia",
+      "id": 223,
+      "league": "acb"
+    },
+    {
+      "away_score": null,
+      "away_team": "La Laguna Tenerife",
+      "date": "Sat, May 15, 2027",
+      "home_score": null,
+      "home_team": "Baskonia",
+      "id": 224,
+      "league": "acb"
+    },
+    {
+      "away_score": null,
+      "away_team": "Baskonia",
+      "date": "Fri, May 21, 2027",
+      "home_score": null,
+      "home_team": "Río Breogán",
+      "id": 225,
+      "league": "acb"
+    }
+  ]
+}

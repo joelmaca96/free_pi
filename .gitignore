@@ -13,6 +13,10 @@ env/
 # Datos generados (base de datos SQLite y backups)
 data/*.db
 data/*.db.bak-*
+# Ficheros sidecar transitorios de SQLite (journal/WAL/SHM)
+*.db-journal
+*.db-wal
+*.db-shm
 
 # Editor / IDE
 .vscode/
@@ -36,9 +40,23 @@ Thumbs.db
 .pytest_cache/
 
 # Logs de coverage
+.coverage
+.coverage.*
 htmlcov/
+coverage.xml
+
+# Caches de linters / type-checkers
+.mypy_cache/
+.ruff_cache/
+.pytype/
+
+# Artefactos de build / empaquetado
+build/
+dist/
+*.egg-info/
 
 informe.txt
 download_logos.py
 
+# Directorio local de trabajo del pipeline agéntico (no se versiona)
 local/

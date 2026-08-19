@@ -1,0 +1,999 @@
+{
+  "boxscore_df": [
+    {
+      "AST": 2,
+      "Jugador": "Nicolas Brussino",
+      "MIN": "31:51",
+      "PTS": 16,
+      "PTS/36": 18.1,
+      "REB": 4,
+      "TS%": 85.8,
+      "eFG%": 81.2
+    },
+    {
+      "AST": null,
+      "Jugador": "Chimezie Metu",
+      "MIN": "25:17",
+      "PTS": 15,
+      "PTS/36": 21.4,
+      "REB": 3,
+      "TS%": 54.0,
+      "eFG%": 53.8
+    },
+    {
+      "AST": 2,
+      "Jugador": "Isaiah Wong",
+      "MIN": "31:03",
+      "PTS": 14,
+      "PTS/36": 16.2,
+      "REB": 1,
+      "TS%": 52.6,
+      "eFG%": 50.0
+    },
+    {
+      "AST": 1,
+      "Jugador": "Mike Tobey",
+      "MIN": "27:04",
+      "PTS": 10,
+      "PTS/36": 13.3,
+      "REB": 6,
+      "TS%": 56.3,
+      "eFG%": 56.2
+    },
+    {
+      "AST": null,
+      "Jugador": "Pierre Pelos",
+      "MIN": "20:26",
+      "PTS": 9,
+      "PTS/36": 15.9,
+      "REB": 6,
+      "TS%": 58.0,
+      "eFG%": 41.7
+    },
+    {
+      "AST": null,
+      "Jugador": "Ziga Samar",
+      "MIN": "7:40",
+      "PTS": 7,
+      "PTS/36": 32.9,
+      "REB": 1,
+      "TS%": 58.3,
+      "eFG%": 58.3
+    },
+    {
+      "AST": null,
+      "Jugador": "Brandon Jefferson",
+      "MIN": "11:27",
+      "PTS": 6,
+      "PTS/36": 18.9,
+      "REB": null,
+      "TS%": 50.0,
+      "eFG%": 50.0
+    },
+    {
+      "AST": 1,
+      "Jugador": "Carlos Alocen",
+      "MIN": "10:00",
+      "PTS": 4,
+      "PTS/36": 14.4,
+      "REB": 3,
+      "TS%": 106.4,
+      "eFG%": 100.0
+    },
+    {
+      "AST": 3,
+      "Jugador": "Andrew Albicy",
+      "MIN": "18:33",
+      "PTS": null,
+      "PTS/36": null,
+      "REB": null,
+      "TS%": 0.0,
+      "eFG%": 0.0
+    },
+    {
+      "AST": null,
+      "Jugador": "Eric Vila",
+      "MIN": "7:13",
+      "PTS": null,
+      "PTS/36": null,
+      "REB": 2,
+      "TS%": 0.0,
+      "eFG%": 0.0
+    },
+    {
+      "AST": null,
+      "Jugador": "Kassius Robertson",
+      "MIN": "9:26",
+      "PTS": null,
+      "PTS/36": null,
+      "REB": 1,
+      "TS%": 0.0,
+      "eFG%": 0.0
+    },
+    {
+      "AST": null,
+      "Jugador": "Mervedi Miteo",
+      "MIN": "0:00",
+      "PTS": null,
+      "PTS/36": null,
+      "REB": null,
+      "TS%": null,
+      "eFG%": null
+    }
+  ],
+  "head_to_head_summary_df": [
+    {
+      "DRtg": null,
+      "Fecha": "domingo, 7 de diciembre de 2025",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "72-79",
+      "Rival": "Bilbao"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "domingo, 8 de febrero de 2026",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "75-97",
+      "Rival": "Baskonia"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "miércoles, 18 de febrero de 2026",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "97-98",
+      "Rival": "Bilbao"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "domingo, 12 de abril de 2026",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "86-88",
+      "Rival": "Baskonia"
+    }
+  ],
+  "meta": {
+    "deterministic": true,
+    "last_n": 3,
+    "league": null,
+    "reference_date": "2026-08-19",
+    "season": 2025,
+    "team": "gran-canaria"
+  },
+  "past_games": [
+    {
+      "away_score": 81,
+      "away_team": "Dreamland Gran Canaria",
+      "date": "Fri, May 29, 2026",
+      "home_score": 105,
+      "home_team": "Valencia Basket",
+      "id": 152,
+      "league": "acb"
+    },
+    {
+      "away_score": 87,
+      "away_team": "Baxi Manresa",
+      "date": "Sat, May 23, 2026",
+      "home_score": 80,
+      "home_team": "Dreamland Gran Canaria",
+      "id": 151,
+      "league": "acb"
+    },
+    {
+      "away_score": 72,
+      "away_team": "Dreamland Gran Canaria",
+      "date": "Sun, May 17, 2026",
+      "home_score": 75,
+      "home_team": "Hiopos Lleida",
+      "id": 150,
+      "league": "acb"
+    },
+    {
+      "away_score": 83,
+      "away_team": "La Laguna Tenerife",
+      "date": "Thu, May 14, 2026",
+      "home_score": 102,
+      "home_team": "Dreamland Gran Canaria",
+      "id": 149,
+      "league": "acb"
+    },
+    {
+      "away_score": 69,
+      "away_team": "Dreamland Gran Canaria",
+      "date": "Sun, May 3, 2026",
+      "home_score": 91,
+      "home_team": "Barcelona",
+      "id": 147,
+      "league": "acb"
+    },
+    {
+      "away_score": 101,
+      "away_team": "Dreamland Gran Canaria",
+      "date": "Wed, Apr 29, 2026",
+      "home_score": 100,
+      "home_team": "Unicaja",
+      "id": 146,
+      "league": "acb"
+    },
+    {
+      "away_score": 90,
+      "away_team": "Bàsquet Girona",
+      "date": "Sat, Apr 25, 2026",
+      "home_score": 100,
+      "home_team": "Dreamland Gran Canaria",
+      "id": 145,
+      "league": "acb"
+    },
+    {
+      "away_score": 78,
+      "away_team": "Casademont Zaragoza",
+      "date": "Sat, Apr 18, 2026",
+      "home_score": 74,
+      "home_team": "Dreamland Gran Canaria",
+      "id": 144,
+      "league": "acb"
+    },
+    {
+      "away_score": 86,
+      "away_team": "Dreamland Gran Canaria",
+      "date": "Sun, Apr 12, 2026",
+      "home_score": 88,
+      "home_team": "Baskonia",
+      "id": 72,
+      "league": "acb"
+    },
+    {
+      "away_score": 109,
+      "away_team": "Recoletas Salud San Pablo Burgos",
+      "date": "Sat, Apr 4, 2026",
+      "home_score": 95,
+      "home_team": "Dreamland Gran Canaria",
+      "id": 143,
+      "league": "acb"
+    },
+    {
+      "away_score": 84,
+      "away_team": "Dreamland Gran Canaria",
+      "date": "Sun, Mar 29, 2026",
+      "home_score": 92,
+      "home_team": "Joventut",
+      "id": 142,
+      "league": "acb"
+    },
+    {
+      "away_score": 83,
+      "away_team": "Río Breogán",
+      "date": "Sun, Mar 22, 2026",
+      "home_score": 75,
+      "home_team": "Dreamland Gran Canaria",
+      "id": 141,
+      "league": "acb"
+    },
+    {
+      "away_score": 76,
+      "away_team": "Dreamland Gran Canaria",
+      "date": "Sat, Mar 14, 2026",
+      "home_score": 87,
+      "home_team": "UCAM Murcia",
+      "id": 140,
+      "league": "acb"
+    },
+    {
+      "away_score": 82,
+      "away_team": "Real Madrid",
+      "date": "Sun, Mar 8, 2026",
+      "home_score": 80,
+      "home_team": "Dreamland Gran Canaria",
+      "id": 139,
+      "league": "acb"
+    },
+    {
+      "away_score": 98,
+      "away_team": "Bilbao",
+      "date": "Wed, Feb 18, 2026",
+      "home_score": 97,
+      "home_team": "Dreamland Gran Canaria",
+      "id": 105,
+      "league": "acb"
+    },
+    {
+      "away_score": 90,
+      "away_team": "Dreamland Gran Canaria",
+      "date": "Sat, Feb 14, 2026",
+      "home_score": 83,
+      "home_team": "Covirán Granada",
+      "id": 138,
+      "league": "acb"
+    },
+    {
+      "away_score": 97,
+      "away_team": "Baskonia",
+      "date": "Sun, Feb 8, 2026",
+      "home_score": 75,
+      "home_team": "Dreamland Gran Canaria",
+      "id": 65,
+      "league": "acb"
+    },
+    {
+      "away_score": 78,
+      "away_team": "Dreamland Gran Canaria",
+      "date": "Sat, Jan 31, 2026",
+      "home_score": 94,
+      "home_team": "MoraBanc Andorra",
+      "id": 136,
+      "league": "acb"
+    },
+    {
+      "away_score": 90,
+      "away_team": "Valencia Basket",
+      "date": "Sun, Jan 25, 2026",
+      "home_score": 80,
+      "home_team": "Dreamland Gran Canaria",
+      "id": 135,
+      "league": "acb"
+    },
+    {
+      "away_score": 68,
+      "away_team": "Hiopos Lleida",
+      "date": "Sat, Jan 17, 2026",
+      "home_score": 50,
+      "home_team": "Dreamland Gran Canaria",
+      "id": 134,
+      "league": "acb"
+    },
+    {
+      "away_score": 84,
+      "away_team": "Dreamland Gran Canaria",
+      "date": "Sat, Jan 10, 2026",
+      "home_score": 95,
+      "home_team": "Casademont Zaragoza",
+      "id": 133,
+      "league": "acb"
+    },
+    {
+      "away_score": 72,
+      "away_team": "UCAM Murcia",
+      "date": "Sat, Jan 3, 2026",
+      "home_score": 77,
+      "home_team": "Dreamland Gran Canaria",
+      "id": 132,
+      "league": "acb"
+    },
+    {
+      "away_score": 81,
+      "away_team": "Dreamland Gran Canaria",
+      "date": "Tue, Dec 30, 2025",
+      "home_score": 94,
+      "home_team": "Recoletas Salud San Pablo Burgos",
+      "id": 131,
+      "league": "acb"
+    },
+    {
+      "away_score": 71,
+      "away_team": "Dreamland Gran Canaria",
+      "date": "Sun, Dec 28, 2025",
+      "home_score": 70,
+      "home_team": "La Laguna Tenerife",
+      "id": 130,
+      "league": "acb"
+    },
+    {
+      "away_score": 85,
+      "away_team": "Covirán Granada",
+      "date": "Sat, Dec 20, 2025",
+      "home_score": 90,
+      "home_team": "Dreamland Gran Canaria",
+      "id": 129,
+      "league": "acb"
+    },
+    {
+      "away_score": 72,
+      "away_team": "Dreamland Gran Canaria",
+      "date": "Sun, Dec 7, 2025",
+      "home_score": 79,
+      "home_team": "Bilbao",
+      "id": 93,
+      "league": "acb"
+    },
+    {
+      "away_score": 72,
+      "away_team": "Barcelona",
+      "date": "Sun, Nov 23, 2025",
+      "home_score": 61,
+      "home_team": "Dreamland Gran Canaria",
+      "id": 128,
+      "league": "acb"
+    },
+    {
+      "away_score": 92,
+      "away_team": "Joventut",
+      "date": "Sat, Nov 15, 2025",
+      "home_score": 78,
+      "home_team": "Dreamland Gran Canaria",
+      "id": 127,
+      "league": "acb"
+    },
+    {
+      "away_score": 92,
+      "away_team": "Dreamland Gran Canaria",
+      "date": "Sat, Nov 8, 2025",
+      "home_score": 81,
+      "home_team": "Río Breogán",
+      "id": 126,
+      "league": "acb"
+    },
+    {
+      "away_score": 85,
+      "away_team": "MoraBanc Andorra",
+      "date": "Sat, Nov 1, 2025",
+      "home_score": 102,
+      "home_team": "Dreamland Gran Canaria",
+      "id": 125,
+      "league": "acb"
+    },
+    {
+      "away_score": 81,
+      "away_team": "Dreamland Gran Canaria",
+      "date": "Sun, Oct 26, 2025",
+      "home_score": 85,
+      "home_team": "Bàsquet Girona",
+      "id": 124,
+      "league": "acb"
+    },
+    {
+      "away_score": 87,
+      "away_team": "Dreamland Gran Canaria",
+      "date": "Sat, Oct 18, 2025",
+      "home_score": 80,
+      "home_team": "Baxi Manresa",
+      "id": 123,
+      "league": "acb"
+    },
+    {
+      "away_score": 81,
+      "away_team": "Unicaja",
+      "date": "Sat, Oct 11, 2025",
+      "home_score": 72,
+      "home_team": "Dreamland Gran Canaria",
+      "id": 122,
+      "league": "acb"
+    },
+    {
+      "away_score": 71,
+      "away_team": "Dreamland Gran Canaria",
+      "date": "Sun, Oct 5, 2025",
+      "home_score": 81,
+      "home_team": "Real Madrid",
+      "id": 121,
+      "league": "acb"
+    }
+  ],
+  "player_load_df": [],
+  "project_next_matchup": null,
+  "recent_form_df": [
+    {
+      "3PA%": 43.9,
+      "FTr": 0.22,
+      "Jugador": "Isaiah Wong",
+      "MIN": 28.7,
+      "PJ": 3,
+      "PTS": 17.3,
+      "PTS/36": 22.0,
+      "TS%": 59.2,
+      "eFG%": 59.2
+    },
+    {
+      "3PA%": 43.2,
+      "FTr": 0.22,
+      "Jugador": "Chimezie Metu",
+      "MIN": 30.0,
+      "PJ": 3,
+      "PTS": 13.3,
+      "PTS/36": 16.5,
+      "TS%": 49.8,
+      "eFG%": 46.1
+    },
+    {
+      "3PA%": 59.3,
+      "FTr": 0.22,
+      "Jugador": "Nicolas Brussino",
+      "MIN": 28.4,
+      "PJ": 3,
+      "PTS": 11.3,
+      "PTS/36": 13.7,
+      "TS%": 57.8,
+      "eFG%": 51.4
+    },
+    {
+      "3PA%": 36.0,
+      "FTr": 0.28,
+      "Jugador": "Pierre Pelos",
+      "MIN": 21.9,
+      "PJ": 3,
+      "PTS": 11.3,
+      "PTS/36": 18.2,
+      "TS%": 59.6,
+      "eFG%": 52.4
+    },
+    {
+      "3PA%": 25.0,
+      "FTr": 0.45,
+      "Jugador": "Mike Tobey",
+      "MIN": 21.0,
+      "PJ": 3,
+      "PTS": 9.0,
+      "PTS/36": 15.1,
+      "TS%": 53.6,
+      "eFG%": 51.1
+    },
+    {
+      "3PA%": 91.7,
+      "FTr": 0.17,
+      "Jugador": "Brandon Jefferson",
+      "MIN": 11.2,
+      "PJ": 3,
+      "PTS": 4.3,
+      "PTS/36": 13.9,
+      "TS%": 52.3,
+      "eFG%": 45.8
+    },
+    {
+      "3PA%": 50.0,
+      "FTr": 0.0,
+      "Jugador": "Kassius Robertson",
+      "MIN": 15.0,
+      "PJ": 3,
+      "PTS": 3.0,
+      "PTS/36": 9.2,
+      "TS%": 58.3,
+      "eFG%": 58.3
+    },
+    {
+      "3PA%": 75.0,
+      "FTr": 0.25,
+      "Jugador": "Andrew Albicy",
+      "MIN": 22.8,
+      "PJ": 3,
+      "PTS": 2.3,
+      "PTS/36": 4.8,
+      "TS%": 36.4,
+      "eFG%": 27.8
+    },
+    {
+      "3PA%": 40.0,
+      "FTr": 0.0,
+      "Jugador": "Ziga Samar",
+      "MIN": 6.4,
+      "PJ": 3,
+      "PTS": 2.3,
+      "PTS/36": 32.9,
+      "TS%": 19.4,
+      "eFG%": 19.4
+    },
+    {
+      "3PA%": 0.0,
+      "FTr": 4.0,
+      "Jugador": "Carlos Alocen",
+      "MIN": 8.2,
+      "PJ": 3,
+      "PTS": 2.0,
+      "PTS/36": 11.1,
+      "TS%": 110.0,
+      "eFG%": 100.0
+    },
+    {
+      "3PA%": null,
+      "FTr": null,
+      "Jugador": "Lucas Nzambi Maniema",
+      "MIN": 1.6,
+      "PJ": 1,
+      "PTS": 2.0,
+      "PTS/36": 43.6,
+      "TS%": 113.6,
+      "eFG%": null
+    },
+    {
+      "3PA%": 40.0,
+      "FTr": 0.0,
+      "Jugador": "Eric Vila",
+      "MIN": 6.4,
+      "PJ": 3,
+      "PTS": 1.3,
+      "PTS/36": 12.3,
+      "TS%": 66.7,
+      "eFG%": 66.7
+    }
+  ],
+  "recent_games_df": [
+    {
+      "DRtg": 100.5,
+      "Fecha": "domingo, 17 de mayo de 2026",
+      "Net": -6.0,
+      "ORtg": 94.5,
+      "Pace": 75.4,
+      "Resultado": "72-75",
+      "Rival": "Hiopos Lleida"
+    },
+    {
+      "DRtg": 113.6,
+      "Fecha": "sábado, 23 de mayo de 2026",
+      "Net": -10.0,
+      "ORtg": 103.6,
+      "Pace": 76.9,
+      "Resultado": "80-87",
+      "Rival": "Baxi Manresa"
+    },
+    {
+      "DRtg": 130.0,
+      "Fecha": "viernes, 29 de mayo de 2026",
+      "Net": -26.6,
+      "ORtg": 103.3,
+      "Pace": 79.6,
+      "Resultado": "81-105",
+      "Rival": "Valencia Basket"
+    }
+  ],
+  "schedule_difficulty_df": [],
+  "scouting_narrative": "Juega a ritmo alto (76.3 posesiones estimadas por partido). Balance negativo: -8.4 de Net Rating medio. Ataque muy volcado al triple: 46% de los intentos son de 3. Máximo anotador: Isaiah Wong (16.6 puntos por partido).",
+  "streaks_df": [],
+  "team_advanced_summary": {
+    "avg_def_rating": 114.7686,
+    "avg_efg_pct": 0.5223,
+    "avg_net_rating": -8.3827,
+    "avg_off_rating": 106.3859,
+    "avg_pace": 76.26,
+    "avg_ts_pct": 0.5852
+  },
+  "team_summary_df": [
+    {
+      "DRtg": null,
+      "Fecha": "domingo, 5 de octubre de 2025",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "71-81",
+      "Rival": "Real Madrid"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "sábado, 11 de octubre de 2025",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "72-81",
+      "Rival": "Unicaja"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "sábado, 18 de octubre de 2025",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "87-80",
+      "Rival": "Baxi Manresa"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "domingo, 26 de octubre de 2025",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "81-85",
+      "Rival": "Bàsquet Girona"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "sábado, 1 de noviembre de 2025",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "102-85",
+      "Rival": "MoraBanc Andorra"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "sábado, 8 de noviembre de 2025",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "92-81",
+      "Rival": "Río Breogán"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "sábado, 15 de noviembre de 2025",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "78-92",
+      "Rival": "Joventut"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "domingo, 23 de noviembre de 2025",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "61-72",
+      "Rival": "Barcelona"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "domingo, 7 de diciembre de 2025",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "72-79",
+      "Rival": "Bilbao"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "sábado, 13 de diciembre de 2025",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "-",
+      "Rival": "Baskonia"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "sábado, 20 de diciembre de 2025",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "90-85",
+      "Rival": "Covirán Granada"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "domingo, 28 de diciembre de 2025",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "71-70",
+      "Rival": "La Laguna Tenerife"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "martes, 30 de diciembre de 2025",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "81-94",
+      "Rival": "Recoletas Salud San Pablo Burgos"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "sábado, 3 de enero de 2026",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "77-72",
+      "Rival": "UCAM Murcia"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "sábado, 10 de enero de 2026",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "84-95",
+      "Rival": "Casademont Zaragoza"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "sábado, 17 de enero de 2026",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "50-68",
+      "Rival": "Hiopos Lleida"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "domingo, 25 de enero de 2026",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "80-90",
+      "Rival": "Valencia Basket"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "sábado, 31 de enero de 2026",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "78-94",
+      "Rival": "MoraBanc Andorra"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "sábado, 7 de febrero de 2026",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "-",
+      "Rival": "Bilbao"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "sábado, 7 de febrero de 2026",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "-",
+      "Rival": "Bàsquet Girona"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "domingo, 8 de febrero de 2026",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "75-97",
+      "Rival": "Baskonia"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "sábado, 14 de febrero de 2026",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "90-83",
+      "Rival": "Covirán Granada"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "miércoles, 18 de febrero de 2026",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "97-98",
+      "Rival": "Bilbao"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "domingo, 8 de marzo de 2026",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "80-82",
+      "Rival": "Real Madrid"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "sábado, 14 de marzo de 2026",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "76-87",
+      "Rival": "UCAM Murcia"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "domingo, 22 de marzo de 2026",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "75-83",
+      "Rival": "Río Breogán"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "domingo, 29 de marzo de 2026",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "84-92",
+      "Rival": "Joventut"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "sábado, 4 de abril de 2026",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "95-109",
+      "Rival": "Recoletas Salud San Pablo Burgos"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "domingo, 12 de abril de 2026",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "86-88",
+      "Rival": "Baskonia"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "sábado, 18 de abril de 2026",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "74-78",
+      "Rival": "Casademont Zaragoza"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "sábado, 25 de abril de 2026",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "100-90",
+      "Rival": "Bàsquet Girona"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "miércoles, 29 de abril de 2026",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "101-100",
+      "Rival": "Unicaja"
+    },
+    {
+      "DRtg": 123.6,
+      "Fecha": "domingo, 3 de mayo de 2026",
+      "Net": -21.0,
+      "ORtg": 102.7,
+      "Pace": 70.4,
+      "Resultado": "69-91",
+      "Rival": "Barcelona"
+    },
+    {
+      "DRtg": null,
+      "Fecha": "martes, 12 de mayo de 2026",
+      "Net": null,
+      "ORtg": null,
+      "Pace": null,
+      "Resultado": "-",
+      "Rival": "La Laguna Tenerife"
+    },
+    {
+      "DRtg": 106.1,
+      "Fecha": "jueves, 14 de mayo de 2026",
+      "Net": 21.7,
+      "ORtg": 127.8,
+      "Pace": 79.0,
+      "Resultado": "102-83",
+      "Rival": "La Laguna Tenerife"
+    },
+    {
+      "DRtg": 100.5,
+      "Fecha": "domingo, 17 de mayo de 2026",
+      "Net": -6.0,
+      "ORtg": 94.5,
+      "Pace": 75.4,
+      "Resultado": "72-75",
+      "Rival": "Hiopos Lleida"
+    },
+    {
+      "DRtg": 113.6,
+      "Fecha": "sábado, 23 de mayo de 2026",
+      "Net": -10.0,
+      "ORtg": 103.6,
+      "Pace": 76.9,
+      "Resultado": "80-87",
+      "Rival": "Baxi Manresa"
+    },
+    {
+      "DRtg": 130.0,
+      "Fecha": "viernes, 29 de mayo de 2026",
+      "Net": -26.6,
+      "ORtg": 103.3,
+      "Pace": 79.6,
+      "Resultado": "81-105",
+      "Rival": "Valencia Basket"
+    }
+  ],
+  "upcoming_games": []
+}

@@ -261,6 +261,16 @@ Queda un frente razonable para seguir (no implementado todavía):
 bugs más sutiles (emparejamiento de nombres, parsing de BBR, cálculo de
 estadísticas). Ver sección 6.2.
 
+**✅ Fase F0 de la migración a la nueva arquitectura** (2026-08-19): arnés de
+paridad `tools/parity_dump.py` que congela el comportamiento actual de las
+funciones de datos de `app.py`/`insights.py` como oráculo objetivo, antes de
+mover nada. Vuelca las 13 salidas de paridad a JSON canónico (claves
+ordenadas, flotantes a 4 decimales, `NaN`→`null`) para una combinación
+`(team, season, league, last_n)`, con fecha de referencia inyectable
+(`--reference-date`) para ser reproducible. Línea base versionada en
+`tests/parity/baseline/` (4 combinaciones que cubren los casos límite
+conocidos). Ver `doc/arquitectura/02_migration.md`.
+
 ---
 
 ## 2. Arquitectura
@@ -797,6 +807,7 @@ python -m pytest tests/test_parser.py -k "schedule"   # filtrar por test
 | `tests/test_insights.py` | Funciones puras (fechas de temporada, minutos, per-36) y agregaciones sobre BD (forma reciente, resumen avanzado, rachas por z-score, dificultad de calendario, proyección, narrativa, carga de minutos). |
 | `tests/test_main.py` | `_normalize_team_name`, `_select_boxscores` (últimos N + enfrentamientos directos + dedup + emparejamiento por subcadena) y `resolve_opponent_team` (creación, reutilización por slug, emparejamiento por subcadena, migración de slugs falsos). |
 | `tests/test_storage.py` | Upserts idempotentes de `db/storage.py` (equipos, jugadores, partidos, box scores, stats avanzadas) y cálculo automático de eFG%/TS% en `upsert_boxscore`. |
+| `tests/test_parity_dump.py` | Arnés de paridad (Fase F0 de la migración): determinismo del volcado canónico (dos ejecuciones → hash idéntico) y presencia/validez de la línea base en `tests/parity/baseline/`. |
 
 ### Fixtures compartidas (`tests/conftest.py`)
 
@@ -849,6 +860,7 @@ python -m pytest tests/test_parser.py -k "schedule"   # filtrar por test
 > Nada de esto existe todavía. Es la visión del PoC completo.
 
 **Arquitectura de la aplicación**
+- [x] Fase F0 de la migración: línea base de paridad (`tools/parity_dump.py` + `tests/parity/baseline/`), ver `doc/arquitectura/02_migration.md`.
 - [ ] Definir la arquitectura de la app (backend, frontend, capas).
 - [ ] Diseñar el modelo de datos de la app sobre los datos scrapeados.
 
