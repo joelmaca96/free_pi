@@ -1,0 +1,12 @@
+erDiagram
+    TEAMS ||--o{ PLAYERS : "tiene"
+    TEAMS ||--o{ GAMES : "local (home)"
+    TEAMS ||--o{ GAMES : "visitante (away)"
+    TEAMS ||--o{ BOXSCORES : "registra"
+    TEAMS ||--o{ TEAM_GAME_STATS : "registra"
+    TEAMS ||--o{ SEASON_TEAM_STATS : "agrega"
+    TEAMS ||--o{ INGEST_JOBS : "encola"
+    GAMES ||--o{ BOXSCORES : "contiene"
+    GAMES ||--o{ TEAM_GAME_STATS : "contiene"
+    GAMES ||--o{ PLAYER_GAME_LOGS : "contiene"
+    PLAYERS ||--o{ PLAYER_GAME_LOGS : "tiene"

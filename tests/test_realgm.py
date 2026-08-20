@@ -10,6 +10,7 @@ from bs4 import BeautifulSoup
 
 from apps.ingest.scraper.realgm import (
     _find_schedule_table,
+    _parse_player_table,
     _parse_schedule_table,
     _schedule_url,
     _teams_url,
@@ -60,10 +61,10 @@ def test_parse_schedule_table_filters_team():
     html = """
     <html><body>
     <table id="schedule">
-      <thead><tr><th>Away Team</th><th>Score</th><th>Home Team</th><th>Venue</th></tr></thead>
+      <thead><tr><th>Date</th><th>Away Team</th><th>Home Team</th><th>Result</th><th>Venue</th></tr></thead>
       <tbody>
-        <tr><td>Baskonia</td><td>85-90</td><td>Real Madrid</td><td>WiZink</td></tr>
-        <tr><td>Barcelona</td><td>70-75</td><td>Valencia</td><td>Fonteta</td></tr>
+        <tr><td>Oct 9, 2025</td><td>Baskonia</td><td>Real Madrid</td><td><a href="/international/boxscore/2025-10-09/Baskonia-at-Real-Madrid/1">85-90</a></td><td>WiZink</td></tr>
+        <tr><td>Oct 9, 2025</td><td>Barcelona</td><td>Valencia</td><td>70-75</td><td>Fonteta</td></tr>
       </tbody>
     </table>
     </body></html>
@@ -76,6 +77,11 @@ def test_parse_schedule_table_filters_team():
     assert game["opponent"] == "Real Madrid"
     assert game["is_home"] is False
     assert game["league"] == "euroleague"
+    # El marcador de RealGM es [local]-[visitante]: Real Madrid (local) 85,
+    # Baskonia (visitante) 90.
+    assert game["points"] == "90"
+    assert game["opp_points"] == "85"
+    assert game["boxscore_url"] == "/international/boxscore/2025-10-09/Baskonia-at-Real-Madrid/1"
 
 
 def test_parse_schedule_table_home():
@@ -83,9 +89,9 @@ def test_parse_schedule_table_home():
     html = """
     <html><body>
     <table id="schedule">
-      <thead><tr><th>Away Team</th><th>Score</th><th>Home Team</th><th>Venue</th></tr></thead>
+      <thead><tr><th>Date</th><th>Away Team</th><th>Home Team</th><th>Result</th><th>Venue</th></tr></thead>
       <tbody>
-        <tr><td>Real Madrid</td><td>90-85</td><td>Baskonia</td><td>Buesa</td></tr>
+        <tr><td>Oct 9, 2025</td><td>Real Madrid</td><td>Baskonia</td><td><a href="/international/boxscore/2025-10-09/Real-Madrid-at-Baskonia/2">90-85</a></td><td>Buesa</td></tr>
       </tbody>
     </table>
     </body></html>
@@ -97,3 +103,43 @@ def test_parse_schedule_table_home():
     game = games[0]
     assert game["opponent"] == "Real Madrid"
     assert game["is_home"] is True
+    # El marcador de RealGM es [local]-[visitante]: Baskonia (local) 90,
+    # Real Madrid (visitante) 85.
+    assert game["points"] == "90"
+    assert game["opp_points"] == "85"
+    assert game["boxscore_url"] == "/international/boxscore/2025-10-09/Real-Madrid-at-Baskonia/2"
+
+
+def test_parse_player_table_normalizes_headers():
+    """Normaliza las cabeceras de RealGM y descompone los campos combinados."""
+    html = """
+    <html><body>
+    <table id="box">
+      <thead><tr><th>#</th><th>Player</th><th>Min</th><th>FGM-A</th><th>3PM-A</th>
+        <th>FTM-A</th><th>Off</th><th>Def</th><th>Reb</th><th>Ast</th>
+        <th>PF</th><th>STL</th><th>TOV</th><th>BLK</th><th>PTS</th></tr></thead>
+      <tbody>
+        <tr><td>25</td><td><a href="/player/1">Kendrick Nunn</a></td><td>30:48</td>
+          <td>12-20</td><td>3-7</td><td>3-3</td><td>2</td><td>5</td><td>7</td>
+          <td>2</td><td>4</td><td>0</td><td>4</td><td>0</td><td>30</td></tr>
+      </tbody>
+    </table>
+    </body></html>
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    rows = _parse_player_table(soup.find("table"))
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["player_name"] == "Kendrick Nunn"
+    assert row["MP"] == "30:48"
+    assert row["FG"] == "12"
+    assert row["FGA"] == "20"
+    assert row["3P"] == "3"
+    assert row["3PA"] == "7"
+    assert row["FT"] == "3"
+    assert row["FTA"] == "3"
+    assert row["ORB"] == "2"
+    assert row["DRB"] == "5"
+    assert row["TRB"] == "7"
+    assert row["AST"] == "2"
+    assert row["PTS"] == "30"

@@ -23,6 +23,7 @@ dicts planos normalizados, sin imports de `db/` (regla de capas).
 """
 import logging
 import re
+import time
 from datetime import date, timedelta
 from typing import Dict, List, Optional, Tuple
 
@@ -69,6 +70,84 @@ def _new_session() -> object:
     session.headers.update({"User-Agent": config.USER_AGENT})
     return session
 
+
+# Número de reintentos ante el challenge de Cloudflare de RealGM.
+_CLOUDFLARE_RETRIES = 3
+
+
+def _is_cloudflare_challenge(response) -> bool:
+    """Indica si una respuesta es el challenge de Cloudflare de RealGM.
+
+    RealGM devuelve un 403 con una página "Just a moment..." cuando el
+    challenge de Cloudflare no se resuelve. Es intermitente: con una sesión
+    nueva (sin cookies de Cloudflare) falla ~50% de las veces, pero al
+    reintentar la misma sesión suele pasar.
+
+    Args:
+        response: Respuesta HTTP.
+
+    Returns:
+        `True` si es el challenge de Cloudflare.
+    """
+    if response.status_code != 403:
+        return False
+    text = getattr(response, "text", "") or ""
+    return "Just a moment" in text[:500]
+
+
+def _get_with_retry(session: object, url: str, timeout: float) -> object:
+    """Hace una petición GET a RealGM reintentando ante el challenge de
+    Cloudflare.
+
+    El challenge de Cloudflare de `/international/*` es intermitente: la
+    primera petición de una sesión nueva falla a menudo con 403, pero al
+    reintentar la misma sesión (que ya ha resuelto el challenge y guardado
+    las cookies) suele pasar. Se reintenta hasta `_CLOUDFLARE_RETRIES` veces
+    con una pequeña espera entre intentos.
+
+    Args:
+        session: Sesión HTTP reutilizada.
+        url: URL a pedir.
+        timeout: Timeout de la petición.
+
+    Returns:
+        Respuesta HTTP final.
+
+    Raises:
+        requests.RequestException: si todas las peticiones fallan o el
+            challenge persiste.
+    """
+    last_exc: Optional[Exception] = None
+    for attempt in range(_CLOUDFLARE_RETRIES):
+        try:
+            response = session.get(url, timeout=timeout)
+            if not _is_cloudflare_challenge(response):
+                return response
+            logger.warning(
+                "RealGM: challenge de Cloudflare en %s (intento %d/%d)",
+                url,
+                attempt + 1,
+                _CLOUDFLARE_RETRIES,
+            )
+        except requests.RequestException as exc:
+            last_exc = exc
+            logger.warning(
+                "RealGM: error de red en %s (intento %d/%d): %s",
+                url,
+                attempt + 1,
+                _CLOUDFLARE_RETRIES,
+                exc,
+            )
+        if attempt < _CLOUDFLARE_RETRIES - 1:
+            time.sleep(2 * (attempt + 1))
+    if last_exc is not None:
+        raise last_exc
+    # El challenge persistió tras todos los reintentos.
+    raise requests.HTTPError(
+        f"RealGM: challenge de Cloudflare persistente en {url} "
+        f"(status {response.status_code})"
+    )
+
 # Mapa de competición canónica -> (league id, slug) de RealGM.
 # RealGM usa un id y slug propios por competición; la competición se conoce
 # por el endpoint consultado.
@@ -89,11 +168,15 @@ _SCHEDULE_HEADERS = ["Away Team", "Home Team", "Venue"]
 
 # Normalización de cabeceras de las tablas de stats de jugador de RealGM a
 # las claves canónicas que esperan `upsert_boxscore`/`upsert_player_game_log`
-# (mismo contrato que BBR). RealGM usa abreviaturas propias (MIN, TO, FGM,
-# 3PM, FTM...); se mapean a las claves del resto de fuentes.
+# (mismo contrato que BBR). RealGM usa abreviaturas propias (Min, FGM-A,
+# 3PM-A, FTM-A, Reb, Off, Def, Ast...); se mapean a las claves del resto de
+# fuentes. Los campos combinados "hechos-intentos" (FGM-A, 3PM-A, FTM-A) se
+# descomponen en `_parse_player_table` en dos claves (FG/FGA, 3P/3PA, FT/FTA).
 _HEADER_ALIASES = {
     "MIN": "MP",
+    "Min": "MP",
     "TO": "TOV",
+    "TOV": "TOV",
     "FGM": "FG",
     "FGA": "FGA",
     "3PM": "3P",
@@ -101,15 +184,27 @@ _HEADER_ALIASES = {
     "FTM": "FT",
     "FTA": "FTA",
     "REB": "TRB",
+    "Reb": "TRB",
     "OREB": "ORB",
+    "Off": "ORB",
     "DREB": "DRB",
+    "Def": "DRB",
     "PTS": "PTS",
     "AST": "AST",
+    "Ast": "AST",
     "STL": "STL",
     "BLK": "BLK",
     "PF": "PF",
     "GS": "GS",
     "+/-": "+/-",
+}
+
+# Cabeceras combinadas "hechos-intentos" de RealGM -> (clave hechos, clave
+# intentos). Se descomponen en `_parse_player_table`.
+_COMBINED_HEADERS = {
+    "FGM-A": ("FG", "FGA"),
+    "3PM-A": ("3P", "3PA"),
+    "FTM-A": ("FT", "FTA"),
 }
 
 
@@ -232,7 +327,9 @@ def _parse_schedule_table(table, league: str, team_name: str) -> List[Dict[str, 
         if len(cells) < 3:
             continue
 
-        away_text = cells[0].get_text(strip=True)
+        # Estructura real de la tabla de calendario de RealGM (verificada):
+        #   [0] Date, [1] Away Team, [2] Home Team, [3] Result, [4] Venue
+        away_text = cells[1].get_text(strip=True)
         home_text = cells[2].get_text(strip=True)
 
         # Solo nos interesan los partidos del equipo objetivo.
@@ -242,18 +339,17 @@ def _parse_schedule_table(table, league: str, team_name: str) -> List[Dict[str, 
         is_home = home_text == team_name
         opponent = away_text if is_home else home_text
 
-        # Enlace al box score: en RealGM el enlace suele estar en la celda
-        # del equipo local o en la columna de resultado. Se busca cualquier
-        # enlace que apunte a una página de box score.
+        # Enlace al box score: en RealGM está en la columna de resultado
+        # (cells[3]) y apunta a una URL con "/boxscore/" (singular), p.ej.
+        # "/international/boxscore/2025-10-09/Panathinaikos-at-Baskonia/497588".
         boxscore_url = ""
-        for cell in cells:
-            link = cell.find("a", href=True)
-            if link and "/boxscores/" in link["href"]:
+        if len(cells) > 3:
+            link = cells[3].find("a", href=True)
+            if link and "/boxscore/" in link["href"]:
                 boxscore_url = link["href"]
-                break
 
-        # Resultado: RealGM muestra "W 85-70" o "L 70-85" en una columna.
-        # Se intenta extraer los puntos de la celda de resultado si existe.
+        # Resultado: RealGM muestra el marcador "86-84" en la columna de
+        # resultado (cells[3]). Se extraen los puntos de ambos equipos.
         points = None
         opp_points = None
         result_text = ""
@@ -306,7 +402,7 @@ def _fetch_schedule_day(
     url = _schedule_url(league, day)
     logger.debug("RealGM: consultando calendario %s de %s", league, day)
     throttle(url)
-    response = session.get(url, timeout=config.TIMEOUT)
+    response = _get_with_retry(session, url, config.TIMEOUT)
     response.raise_for_status()
     soup = BeautifulSoup(response.text, "html.parser")
     table = _find_schedule_table(soup)
@@ -394,7 +490,7 @@ def fetch_game_boxscore(
     url = boxscore_url if boxscore_url.startswith("http") else f"{REALGM_BASE}{boxscore_url}"
     logger.info("RealGM: descargando box score desde %s", url)
     throttle(url)
-    response = session.get(url, timeout=config.TIMEOUT)
+    response = _get_with_retry(session, url, config.TIMEOUT)
     response.raise_for_status()
     soup = BeautifulSoup(response.text, "html.parser")
 
@@ -424,10 +520,13 @@ def fetch_game_boxscore(
 def _parse_player_table(table) -> List[Dict[str, object]]:
     """Parsea una tabla de stats por jugador de un box score de RealGM.
 
-    Normaliza las cabeceras de RealGM (MIN, TO, FGM, 3PM, FTM...) a las
-    claves canónicas del contrato de `scraper/` (MP, TOV, FG, 3P, FT...)
-    para que el resultado sea directamente compatible con
-    `upsert_boxscore`/`upsert_player_game_log`.
+    Normaliza las cabeceras de RealGM (Min, FGM-A, 3PM-A, FTM-A, Reb, Off,
+    Def, Ast...) a las claves canónicas del contrato de `scraper/` (MP, FG,
+    FGA, 3P, 3PA, FT, FTA, TRB, ORB, DRB, AST...) para que el resultado sea
+    directamente compatible con `upsert_boxscore`/`upsert_player_game_log`.
+
+    Los campos combinados "hechos-intentos" (FGM-A, 3PM-A, FTM-A) se
+    descomponen en dos claves (FG/FGA, 3P/3PA, FT/FTA).
 
     Args:
         table: Elemento BeautifulSoup de la tabla de jugadores.
@@ -454,6 +553,12 @@ def _parse_player_table(table) -> List[Dict[str, object]]:
                 # El nombre del jugador puede estar en un enlace.
                 link = cell.find("a")
                 row["player_name"] = link.get_text(strip=True) if link else text
+            elif header in _COMBINED_HEADERS:
+                # Campo "hechos-intentos" (p.ej. "12-20") -> dos claves.
+                made_key, att_key = _COMBINED_HEADERS[header]
+                made, _, att = text.partition("-")
+                row[made_key] = made
+                row[att_key] = att
             else:
                 # Normalizar la cabecera a la clave canónica del contrato.
                 key = _HEADER_ALIASES.get(header, header)
@@ -500,7 +605,7 @@ def fetch_player_game_logs(
         game_logs_url = player_url.replace("/Summary", "/GameLogs")
         logger.info("RealGM: game logs de %s desde %s", player_name, game_logs_url)
         throttle(game_logs_url)
-        response = session.get(game_logs_url, timeout=config.TIMEOUT)
+        response = _get_with_retry(session, game_logs_url, config.TIMEOUT)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, "html.parser")
 
@@ -545,7 +650,7 @@ def _resolve_player_url(
         try:
             teams_url = _teams_url(league)
             throttle(teams_url)
-            response = session.get(teams_url, timeout=config.TIMEOUT)
+            response = _get_with_retry(session, teams_url, config.TIMEOUT)
             response.raise_for_status()
             soup = BeautifulSoup(response.text, "html.parser")
             team_link = _find_team_link(soup, team_name)
@@ -555,7 +660,7 @@ def _resolve_player_url(
             if not roster_url:
                 continue
             throttle(roster_url)
-            roster_response = session.get(roster_url, timeout=config.TIMEOUT)
+            roster_response = _get_with_retry(session, roster_url, config.TIMEOUT)
             roster_response.raise_for_status()
             roster_soup = BeautifulSoup(roster_response.text, "html.parser")
             player_link = _find_player_link(roster_soup, player_name)

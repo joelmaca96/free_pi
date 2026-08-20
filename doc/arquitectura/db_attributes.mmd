@@ -1,0 +1,116 @@
+erDiagram
+    TEAMS {
+        int id PK
+        string slug UK
+        string name
+        string league
+    }
+    PLAYERS {
+        int id PK
+        string name
+        int team_id FK
+        string position
+        string number
+        string photo_url
+    }
+    GAMES {
+        int id PK
+        string date
+        string league
+        int season
+        int home_team_id FK
+        int away_team_id FK
+        int home_score
+        int away_score
+        string boxscore_url
+        string notes
+    }
+    BOXSCORES {
+        int id PK
+        int game_id FK
+        int team_id FK
+        string player_name
+        string minutes
+        int points
+        int rebounds
+        int assists
+        int steals
+        int blocks
+        int turnovers
+        int fg_made
+        int fg_attempted
+        int fg3_made
+        int fg3_attempted
+        int ft_made
+        int ft_attempted
+        float plus_minus
+        int offensive_rebounds
+        int defensive_rebounds
+        float efg_pct
+        float ts_pct
+        int personal_fouls
+        int games_started
+    }
+    TEAM_GAME_STATS {
+        int id PK
+        int game_id FK
+        int team_id FK
+        float possessions
+        float pace
+        float off_rating
+        float def_rating
+        float net_rating
+        int team_points
+        int team_rebounds
+        int team_assists
+        int team_turnovers
+        int team_fg_attempted
+        int team_ft_attempted
+    }
+    PLAYER_GAME_LOGS {
+        int id PK
+        int player_id FK
+        int game_id FK
+        int season
+        string minutes
+        int points
+        int rebounds
+        int assists
+        int steals
+        int blocks
+        int turnovers
+        int fg_made
+        int fg_attempted
+        int fg3_made
+        int fg3_attempted
+        int ft_made
+        int ft_attempted
+        float plus_minus
+        float efg_pct
+        float ts_pct
+    }
+    SEASON_TEAM_STATS {
+        int id PK
+        int team_id FK
+        int season
+        int games_played
+        int wins
+        int losses
+        float points_per_game
+        float rebounds_per_game
+        float assists_per_game
+        float pace
+        float off_rating
+        float def_rating
+        float net_rating
+    }
+    INGEST_JOBS {
+        int id PK
+        int team_id FK
+        int last_n
+        string status
+        string error
+        datetime created_at
+        datetime started_at
+        datetime finished_at
+    }

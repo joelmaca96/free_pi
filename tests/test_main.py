@@ -179,6 +179,10 @@ def test_resolve_opponent_team_no_slug_keeps_existing_slug(session):
     [
         ("https://basketball.realgm.com/international/boxscore/123", True),
         ("http://realgm.com/x", True),
+        # Rutas relativas de RealGM (como se guardan en la BD).
+        ("/international/boxscore/2025-10-09/Panathinaikos-at-Baskonia/497588", True),
+        # BBR usa /international/boxscores/ (plural) -> no es RealGM.
+        ("/international/boxscores/2025-10-09-vitoria.html", False),
         ("https://www.basketball-reference.com/international/boxscores/x.html", False),
         ("https://www.acb.com/partido/1", False),
         ("", False),

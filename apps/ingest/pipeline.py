@@ -722,13 +722,22 @@ def _season_date_range(season: int) -> Tuple[date, date]:
 def _is_realgm_url(url: str) -> bool:
     """Indica si una URL de box score apunta a RealGM.
 
+    RealGM guarda los `boxscore_url` como rutas relativas (p.ej.
+    `/international/boxscore/2025-10-09/Panathinaikos-at-Baskonia/497588`),
+    así que además del host se comprueba el prefijo de ruta de RealGM.
+
     Args:
         url: URL guardada en `Game.boxscore_url`.
 
     Returns:
-        `True` si el host es el de RealGM.
+        `True` si la URL es de RealGM (absoluta o relativa).
     """
-    return urlparse(str(url)).netloc.endswith("realgm.com")
+    parsed = urlparse(str(url))
+    if parsed.netloc.endswith("realgm.com"):
+        return True
+    # Ruta relativa de RealGM (sin host): /international/boxscore/... (singular).
+    # Se distingue de basketball-reference, que usa /international/boxscores/ (plural).
+    return parsed.path.startswith("/international/boxscore/")
 
 
 def _capture_realgm_boxscore(session, game_obj: "models.Game") -> None:
