@@ -35,7 +35,39 @@ from .ratelimit import throttle
 
 logger = logging.getLogger(__name__)
 
+# RealGM protege `/international/*` con un challenge de Cloudflare que
+# `requests` no puede resolver (no ejecuta JS ni presenta un fingerprint TLS
+# de navegador). Si `curl_cffi` está instalado se usa una sesión que imita el
+# fingerprint TLS de Chrome, que suele pasar el challenge; si no, se cae a
+# `requests` (comportamiento original). `curl_cffi` es una dependencia
+# opcional para no romper el pipeline en entornos donde no esté instalada.
+try:
+    from curl_cffi import requests as cf_requests
+
+    _HAS_CURL_CFFI = True
+except ImportError:  # pragma: no cover - depende del entorno
+    cf_requests = None
+    _HAS_CURL_CFFI = False
+
 REALGM_BASE = "https://basketball.realgm.com"
+
+
+def _new_session() -> object:
+    """Crea una sesión HTTP para RealGM con el User-Agent configurado.
+
+    Usa `curl_cffi` (fingerprint TLS de Chrome) si está disponible para
+    intentar pasar el challenge de Cloudflare de `/international/*`; si no,
+    cae a `requests`. Ambas sesiones comparten la API `.get(url, timeout=)`.
+
+    Returns:
+        Sesión HTTP lista para usar (curl_cffi o requests).
+    """
+    if _HAS_CURL_CFFI:
+        session = cf_requests.Session(impersonate="chrome")
+    else:
+        session = requests.Session()
+    session.headers.update({"User-Agent": config.USER_AGENT})
+    return session
 
 # Mapa de competición canónica -> (league id, slug) de RealGM.
 # RealGM usa un id y slug propios por competición; la competición se conoce
@@ -253,7 +285,7 @@ def _parse_schedule_table(table, league: str, team_name: str) -> List[Dict[str, 
 
 
 def _fetch_schedule_day(
-    session: requests.Session,
+    session: object,
     league: str,
     day: date,
     team_name: str,
@@ -291,7 +323,7 @@ def fetch_team_schedule(
     team_name: str,
     season: int,
     league: str,
-    session: Optional[requests.Session] = None,
+    session: Optional[object] = None,
 ) -> List[Dict[str, object]]:
     """Descarga el calendario/resultados de un equipo en una temporada desde RealGM.
 
@@ -315,8 +347,7 @@ def fetch_team_schedule(
         requests.RequestException: si falla la petición a RealGM.
     """
     own_session = session is None
-    session = session or requests.Session()
-    session.headers.update({"User-Agent": config.USER_AGENT})
+    session = session or _new_session()
 
     # Rango de fechas de la temporada: de octubre del año de inicio a junio
     # del año siguiente (con margen para pretemporada/playoffs).
@@ -341,7 +372,7 @@ def fetch_team_schedule(
 
 def fetch_game_boxscore(
     boxscore_url: str,
-    session: Optional[requests.Session] = None,
+    session: Optional[object] = None,
 ) -> Dict[str, object]:
     """Descarga el box score completo de un partido desde RealGM.
 
@@ -358,8 +389,7 @@ def fetch_game_boxscore(
         requests.RequestException: si falla la petición a RealGM.
     """
     own_session = session is None
-    session = session or requests.Session()
-    session.headers.update({"User-Agent": config.USER_AGENT})
+    session = session or _new_session()
 
     url = boxscore_url if boxscore_url.startswith("http") else f"{REALGM_BASE}{boxscore_url}"
     logger.info("RealGM: descargando box score desde %s", url)
@@ -437,7 +467,7 @@ def fetch_player_game_logs(
     player_name: str,
     team_name: str,
     season: int,
-    session: Optional[requests.Session] = None,
+    session: Optional[object] = None,
 ) -> List[Dict[str, object]]:
     """Descarga los game logs de un jugador en una temporada desde RealGM.
 
@@ -458,8 +488,7 @@ def fetch_player_game_logs(
         `upsert_player_game_log`. Vacía si no se puede resolver la página.
     """
     own_session = session is None
-    session = session or requests.Session()
-    session.headers.update({"User-Agent": config.USER_AGENT})
+    session = session or _new_session()
 
     try:
         player_url = _resolve_player_url(session, player_name, team_name, season)
@@ -489,7 +518,7 @@ def fetch_player_game_logs(
 
 
 def _resolve_player_url(
-    session: requests.Session,
+    session: object,
     player_name: str,
     team_name: str,
     season: int,

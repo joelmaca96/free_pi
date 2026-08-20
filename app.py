@@ -2,15 +2,16 @@
 
 Pensada para usuarios sin conocimientos técnicos, sin usar la terminal:
 - Resumen: estadísticas avanzadas y forma reciente del Baskonia.
-- Partidos anteriores: elegir cualquier partido ya jugado y ver su box score.
+- Partidos anteriores: elegir cualquier partido ya jugado y ver su box score;
+  si ese partido aun no está descargado, se baja solo al abrirlo.
 - Próximos enfrentamientos: calendario pendiente; al elegir un rival del que
   aun no hay datos, un botón permite descargarlos bajo demanda (roster,
   calendario y box scores recientes) respetando el rate-limit de BBR.
 - Plantilla: mosaico de fotos de la plantilla actual (baskonia.com) y ficha
   de cada jugador (posición, dorsal, forma reciente y de temporada).
 
-Solo la descarga bajo demanda de un rival hace peticiones de red; el resto
-de la app solo lee `data/baskonia.db`.
+Solo hacen red las descargas bajo demanda (box score de un partido que falte y
+scouting de un rival); el resto de la app solo lee `data/baskonia.db`.
 
 Uso:
     streamlit run app.py
@@ -67,7 +68,7 @@ from packages.baskonia_core.services import (
     team_by_slug,
     upcoming_games,
 )
-from apps.ingest.pipeline import fetch_opponent_scouting
+from apps.ingest.pipeline import fetch_game_boxscore, fetch_opponent_scouting
 from apps.ingest.scraper.client import BBRClient
 
 LOGOS_DIR = Path(__file__).parent / "assets" / "logos"
@@ -215,23 +216,6 @@ def recent_games_df(
     return _games_to_df(session, played[-last_n:], team)
 
 
-def head_to_head_summary_df(
-    session, team: models.Team, season: "int | None" = None, league: "str | None" = None
-) -> pd.DataFrame:
-    """Tabla de los partidos jugados contra los otros equipos de `config.TEAMS`.
-
-    Separada de `recent_games_df` a propósito: un enfrentamiento directo puede
-    haberse jugado hace tiempo y quedar fuera de los últimos N partidos, así
-    que mezclarlos en una sola tabla puede dar la impresión equivocada de que
-    no hay enfrentamientos directos recientes cuando en realidad no se han
-    mirado los partidos anteriores a los últimos N.
-    """
-    rival_slugs = {slug for slug in config.TEAMS if slug != team.slug}
-    played = [g for g in _team_games(session, team, season, league) if g.home_score is not None]
-    games = [g for g in played if _rival_of(g, team).slug in rival_slugs]
-    return _games_to_df(session, games, team)
-
-
 def recent_form_df(
     session, team: models.Team, last_n: int, season: "int | None" = None, league: "str | None" = None
 ) -> pd.DataFrame:
@@ -322,6 +306,142 @@ def schedule_difficulty_df(difficulty: Dict[str, object]) -> pd.DataFrame:
         for o in difficulty["opponents"]
     ]
     return pd.DataFrame(rows)
+
+
+# Partidos cuya descarga automática ya se intentó y falló en esta sesión. Sin
+# esta memoria, cada recarga de Streamlit reintentaría la misma descarga fallida
+# y machacaría a Basketball-Reference.
+_FAILED_FETCH_KEY = "_boxscore_fetch_failed"
+
+
+def _fetch_failed(game_id: int) -> bool:
+    """Indica si la descarga de este partido ya falló en esta sesión."""
+    return game_id in st.session_state.get(_FAILED_FETCH_KEY, set())
+
+
+def _mark_fetch_failed(game_id: int) -> None:
+    """Recuerda que la descarga de este partido falló, para no reintentarla sola."""
+    st.session_state.setdefault(_FAILED_FETCH_KEY, set()).add(game_id)
+
+
+def _download_boxscore(session, game: models.Game) -> bool:
+    """Descarga el box score de un partido mostrando el progreso en la interfaz.
+
+    Args:
+        session: Sesión de base de datos.
+        game: Partido a descargar.
+
+    Returns:
+        `True` si el box score quedó guardado.
+    """
+    with st.spinner(
+        f"Descargando box score de {game.home_team.name} vs {game.away_team.name}… "
+        f"(Basketball-Reference limita a una petición cada {int(config.REQUEST_DELAY)} s)"
+    ):
+        try:
+            return fetch_game_boxscore(session, BBRClient(), game)
+        except Exception as exc:  # noqa: BLE001
+            st.error(f"No se pudo descargar el box score: {exc}")
+            return False
+
+
+def _warn_pending_downloads(session, games: list) -> None:
+    """Avisa de cuántos box scores va a descargar una lista de partidos.
+
+    En una lista, la descarga automática es secuencial y cada petición respeta
+    el rate-limit de Basketball-Reference, así que una pestaña con varios
+    partidos sin descargar tarda minutos. Sin este aviso previo, la página
+    parecería colgada.
+
+    Args:
+        session: Sesión de base de datos.
+        games: Partidos que se van a pintar.
+    """
+    pending = [
+        game
+        for game in games
+        if game.boxscore_url
+        and not _fetch_failed(game.id)
+        and not (
+            boxscore_rows(session, game.id, game.home_team_id)
+            or boxscore_rows(session, game.id, game.away_team_id)
+        )
+    ]
+    if not pending:
+        return
+
+    seconds = len(pending) * int(config.REQUEST_DELAY)
+    st.info(
+        f"Faltan {len(pending)} box scores por descargar. Se bajan solos, uno a "
+        f"uno: unos {seconds // 60} min {seconds % 60} s en total. La página se "
+        "va refrescando conforme llegan."
+    )
+
+
+def render_boxscore_pair(session, game: models.Game, key_prefix: str) -> None:
+    """Pinta el box score de los dos equipos de un partido, descargándolo si falta.
+
+    El pipeline solo captura automáticamente los últimos `config.LAST_N_GAMES`
+    partidos y los enfrentamientos directos, así que la mayoría del calendario
+    está guardada sin box score. Antes eso se veía como dos tablas vacías, sin
+    explicación ni forma de pedirlo.
+
+    Si el partido tiene enlace a box score pero no está descargado, se descarga
+    solo (con spinner). Si esa descarga falla, se recuerda para el resto de la
+    sesión y se ofrece un botón de reintento: sin esa memoria, cada recarga de
+    Streamlit repetiría la petición fallida.
+
+    Args:
+        session: Sesión de base de datos.
+        game: Partido a pintar.
+        key_prefix: Prefijo para las claves de widget de Streamlit (deben ser
+            únicas dentro de una misma página).
+    """
+    has_boxscore = bool(
+        boxscore_rows(session, game.id, game.home_team_id)
+        or boxscore_rows(session, game.id, game.away_team_id)
+    )
+
+    if not has_boxscore:
+        if not game.boxscore_url:
+            st.info(
+                "Este partido todavía no tiene box score publicado en "
+                "Basketball-Reference."
+            )
+            return
+
+        if not _fetch_failed(game.id):
+            if _download_boxscore(session, game):
+                st.rerun()
+            _mark_fetch_failed(game.id)
+
+        st.warning(
+            "No se pudo descargar el box score de este partido desde "
+            "Basketball-Reference."
+        )
+        if st.button("🔁 Reintentar descarga", key=f"{key_prefix}_retry_box_{game.id}"):
+            if _download_boxscore(session, game):
+                st.session_state.get(_FAILED_FETCH_KEY, set()).discard(game.id)
+                st.rerun()
+        return
+
+    col_home, col_away = st.columns(2)
+    with col_home:
+        show_team_logo(game.home_team.slug, width=28)
+        st.markdown(f"**{game.home_team.name}**")
+        st.dataframe(
+            boxscore_df(session, game, game.home_team),
+            use_container_width=True,
+            hide_index=True,
+        )
+    with col_away:
+        show_team_logo(game.away_team.slug, width=28)
+        st.markdown(f"**{game.away_team.name}**")
+        st.dataframe(
+            boxscore_df(session, game, game.away_team),
+            use_container_width=True,
+            hide_index=True,
+        )
 
 
 def boxscore_df(session, game: models.Game, team: models.Team) -> pd.DataFrame:
@@ -445,20 +565,6 @@ def render_team_tab(
             st.bar_chart(chart_df.set_index("Fecha")[["ORtg", "DRtg"]])
         st.dataframe(df_recent.fillna(pd.NA), use_container_width=True, hide_index=True)
 
-    other_teams = [slug for slug in config.TEAMS if slug != team.slug]
-    if other_teams:
-        st.subheader("Enfrentamientos directos")
-        st.caption(
-            "Partidos contra los otros equipos de interés configurados (TEAMS). "
-            "Pueden solaparse con los últimos partidos jugados si el enfrentamiento "
-            "es reciente, o quedar fuera de ellos si fue hace más tiempo."
-        )
-        df_h2h = head_to_head_summary_df(session, team, season, league)
-        if df_h2h.empty:
-            st.info("Sin enfrentamientos directos jugados todavía.")
-        else:
-            st.dataframe(df_h2h.fillna(pd.NA), use_container_width=True, hide_index=True)
-
     st.subheader(f"Forma reciente (últimos {last_n} partidos jugados)")
     df_form = recent_form_df(session, team, last_n, season, league)
     if df_form.empty:
@@ -491,6 +597,8 @@ def render_head_to_head_tab(
     if last_n is not None:
         games = games[-last_n:]
 
+    _warn_pending_downloads(session, games)
+
     for game in games:
         logo_col, title_col = st.columns([1, 8])
         with logo_col:
@@ -508,15 +616,7 @@ def render_head_to_head_tab(
             m2.metric(f"Net Rating {game.home_team.name}", round(stats_home.net_rating, 1) if stats_home.net_rating is not None else "-")
             m3.metric(f"Net Rating {game.away_team.name}", round(stats_away.net_rating, 1) if stats_away.net_rating is not None else "-")
 
-        col_home, col_away = st.columns(2)
-        with col_home:
-            show_team_logo(game.home_team.slug, width=28)
-            st.markdown(f"**{game.home_team.name}**")
-            st.dataframe(boxscore_df(session, game, game.home_team), use_container_width=True, hide_index=True)
-        with col_away:
-            show_team_logo(game.away_team.slug, width=28)
-            st.markdown(f"**{game.away_team.name}**")
-            st.dataframe(boxscore_df(session, game, game.away_team), use_container_width=True, hide_index=True)
+        render_boxscore_pair(session, game, key_prefix="summary")
         st.divider()
 
 
@@ -551,15 +651,7 @@ def render_past_games_tab(
         m2.metric(f"Net Rating {game.home_team.name}", _fmt(stats_home.net_rating))
         m3.metric(f"Net Rating {game.away_team.name}", _fmt(stats_away.net_rating))
 
-    col_home, col_away = st.columns(2)
-    with col_home:
-        show_team_logo(game.home_team.slug, width=28)
-        st.markdown(f"**{game.home_team.name}**")
-        st.dataframe(boxscore_df(session, game, game.home_team), use_container_width=True, hide_index=True)
-    with col_away:
-        show_team_logo(game.away_team.slug, width=28)
-        st.markdown(f"**{game.away_team.name}**")
-        st.dataframe(boxscore_df(session, game, game.away_team), use_container_width=True, hide_index=True)
+    render_boxscore_pair(session, game, key_prefix="past")
 
     pdf_bytes = build_pdf_report(session, team, rival, last_n, season, league)
     st.download_button(
