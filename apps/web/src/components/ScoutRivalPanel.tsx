@@ -32,12 +32,12 @@ export function ScoutRivalPanel({
 
   if (job?.status === "queued" || job?.status === "running") {
     return (
-      <div className="rounded-md border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+      <div className="panel-empty">
         <p>
           {job.status === "queued" ? "En cola: " : "Descargando: "}
           datos de {teamName}…
         </p>
-        <p className="mt-1 text-xs text-slate-400">
+        <p className="text-muted mt-1 text-xs">
           Respeta el rate-limit de Basketball-Reference: puede tardar varios minutos.
         </p>
       </div>
@@ -45,16 +45,21 @@ export function ScoutRivalPanel({
   }
 
   return (
-    <div className="rounded-md border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-500">
-      <p>Todavía no hay datos de {teamName} en la base de datos.</p>
+    <div className="card elev-sm flex flex-col items-start gap-3 py-6">
+      <svg width="34" height="34" viewBox="0 0 256 256" fill="var(--color-neutral-500)">
+        <path d="M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24Zm0,192a88,88,0,1,1,88-88A88.1,88.1,0,0,1,128,216Zm-8-80V80a8,8,0,0,1,16,0v56a8,8,0,0,1-16,0Zm20,36a12,12,0,1,1-12-12A12,12,0,0,1,140,172Z" />
+      </svg>
+      <p className="text-muted m-0 max-w-[44ch]">
+        Todavía no hay datos de {teamName} en la base de datos.
+      </p>
       {job?.status === "failed" && (
-        <p className="mt-1 text-xs text-rose-600">No se pudo descargar: {job.error}</p>
+        <p className="m-0 text-xs text-brand">No se pudo descargar: {job.error}</p>
       )}
       <button
         type="button"
         onClick={() => enqueue.mutate()}
         disabled={enqueue.isPending}
-        className="mt-2 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+        className="btn btn-primary"
       >
         {job?.status === "failed" ? "🔄 Reintentar descarga" : `📥 Descargar datos de ${teamName}`}
       </button>

@@ -51,7 +51,7 @@ export function GameDetail({
     <div className="space-y-4">
       <div className="flex items-center gap-3">
         <TeamLogo slug={game.opponentSlug} size={48} />
-        <h3 className="text-lg font-semibold text-slate-900">
+        <h3 className="m-0 text-lg">
           {formatDateEs(game.date)} — {homeName} {homeScore ?? "-"} - {awayScore ?? "-"} {awayName}
         </h3>
       </div>

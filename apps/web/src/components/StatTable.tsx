@@ -36,19 +36,19 @@ export function StatTable<T>({
   });
 
   if (data.length === 0) {
-    return <p className="py-3 text-sm text-slate-400">{emptyMessage}</p>;
+    return <p className="text-muted py-3 text-sm">{emptyMessage}</p>;
   }
 
   return (
-    <div className="overflow-x-auto rounded-lg border border-slate-200">
-      <table className="min-w-full divide-y divide-slate-200 text-sm">
-        <thead className="bg-slate-50">
+    <div className="overflow-x-auto rounded-md border border-divider">
+      <table className="table">
+        <thead>
           {table.getHeaderGroups().map((headerGroup) => (
             <tr key={headerGroup.id}>
               {headerGroup.headers.map((header) => (
                 <th
                   key={header.id}
-                  className="cursor-pointer select-none whitespace-nowrap px-3 py-2 text-left font-medium text-slate-600"
+                  className="cursor-pointer select-none whitespace-nowrap"
                   onClick={header.column.getToggleSortingHandler()}
                 >
                   {flexRender(header.column.columnDef.header, header.getContext())}
@@ -58,11 +58,11 @@ export function StatTable<T>({
             </tr>
           ))}
         </thead>
-        <tbody className="divide-y divide-slate-100 bg-white">
+        <tbody>
           {table.getRowModel().rows.map((row) => (
-            <tr key={row.id} className="hover:bg-slate-50">
+            <tr key={row.id}>
               {row.getVisibleCells().map((cell) => (
-                <td key={cell.id} className="whitespace-nowrap px-3 py-2 text-slate-700">
+                <td key={cell.id} className="whitespace-nowrap">
                   {flexRender(cell.column.columnDef.cell, cell.getContext())}
                 </td>
               ))}

@@ -49,7 +49,7 @@ export function PlantillaScreen() {
         return (
           <div className="space-y-6">
             <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold text-slate-800">
+              <h2 className="text-lg">
                 Plantilla actual ({data.players.length} jugadores)
               </h2>
               <ExportButton label="🎬 Generar ppt para Paolo" />
@@ -64,8 +64,8 @@ export function PlantillaScreen() {
                   key={p.name}
                   type="button"
                   onClick={() => setSelectedName(p.name)}
-                  className={`flex flex-col items-center gap-1 rounded-md p-2 text-center hover:bg-slate-100 ${
-                    player?.name === p.name ? "ring-2 ring-slate-900" : ""
+                  className={`card elev-sm flex flex-col items-center gap-1 border-none p-2 text-center hover:bg-white/5 ${
+                    player?.name === p.name ? "ring-2 ring-accent" : ""
                   }`}
                 >
                   {p.photo_url ? (
@@ -77,18 +77,18 @@ export function PlantillaScreen() {
                       className="rounded-md object-cover"
                     />
                   ) : (
-                    <div className="flex h-[100px] w-[100px] items-center justify-center rounded-md bg-slate-100 text-3xl">
+                    <div className="flex h-[100px] w-[100px] items-center justify-center rounded-md bg-neutral-800 text-3xl">
                       🏀
                     </div>
                   )}
-                  <span className="text-xs text-slate-600">
+                  <span className="text-muted text-xs">
                     #{p.number ?? "-"} {p.name}
                   </span>
                 </button>
               ))}
             </div>
 
-            <hr className="border-slate-200" />
+            <hr className="border-divider" />
 
             {player && (
               <div className="space-y-6">
@@ -102,23 +102,23 @@ export function PlantillaScreen() {
                       className="rounded-md object-cover"
                     />
                   ) : (
-                    <div className="flex h-[200px] w-[200px] items-center justify-center rounded-md bg-slate-100 text-6xl">
+                    <div className="flex h-[200px] w-[200px] items-center justify-center rounded-md bg-neutral-800 text-6xl">
                       🏀
                     </div>
                   )}
                   <div>
-                    <h3 className="text-xl font-semibold text-slate-900">{player.name}</h3>
-                    <p className="text-sm text-slate-600">
-                      <strong>Posición:</strong> {player.position ?? "-"}
+                    <h3 className="text-xl">{player.name}</h3>
+                    <p className="text-muted text-sm">
+                      <strong className="text-text">Posición:</strong> {player.position ?? "-"}
                     </p>
-                    <p className="text-sm text-slate-600">
-                      <strong>Dorsal:</strong> {player.number ?? "-"}
+                    <p className="text-muted text-sm">
+                      <strong className="text-text">Dorsal:</strong> {player.number ?? "-"}
                     </p>
                   </div>
                 </div>
 
                 <section>
-                  <h4 className="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-500">
+                  <h4 className="text-muted mb-2 text-sm font-semibold uppercase tracking-wide">
                     Forma reciente (últimos {filters.lastN} partidos jugados)
                   </h4>
                   <StatCardRow>
@@ -133,7 +133,7 @@ export function PlantillaScreen() {
                 </section>
 
                 <section>
-                  <h4 className="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-500">
+                  <h4 className="text-muted mb-2 text-sm font-semibold uppercase tracking-wide">
                     Estadísticas de la temporada
                   </h4>
                   <QueryPanel

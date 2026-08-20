@@ -14,7 +14,8 @@ import { StatTable } from "@/components/StatTable";
 import { QueryPanel } from "@/components/PanelState";
 import { BarChart } from "@/components/charts/BarChart";
 import { LastNInput } from "@/components/Filters";
-import { fmt, fmtPct, formatDateEs, scoreLabel, streakBadge } from "@/lib/format";
+import { StreakBadge } from "@/components/StreakBadge";
+import { fmt, fmtPct, formatDateEs, scoreLabel, streakKind, type StreakKind } from "@/lib/format";
 
 interface GameRow {
   id: number;
@@ -67,7 +68,7 @@ interface StreakRow {
   recentPts: number | null;
   seasonPts: number | null;
   zPts: number | null;
-  labelPts: string;
+  labelPts: StreakKind;
   recentTs: number | null;
   seasonTs: number | null;
   zTs: number | null;
@@ -80,7 +81,11 @@ function streakColumns(recentN: number): ColumnDef<StreakRow, any>[] {
     { accessorKey: "recentPts", header: `PTS últimos ${recentN}`, cell: (c) => fmt(c.getValue() as number | null) },
     { accessorKey: "seasonPts", header: "PTS temporada", cell: (c) => fmt(c.getValue() as number | null) },
     { accessorKey: "zPts", header: "z-score PTS", cell: (c) => fmt(c.getValue() as number | null) },
-    { accessorKey: "labelPts", header: "Racha PTS" },
+    {
+      accessorKey: "labelPts",
+      header: "Racha PTS",
+      cell: (c) => <StreakBadge kind={c.getValue() as StreakKind} />,
+    },
     { accessorKey: "recentTs", header: `TS% últimos ${recentN}`, cell: (c) => fmtPct(c.getValue() as number | null) },
     { accessorKey: "seasonTs", header: "TS% temporada", cell: (c) => fmtPct(c.getValue() as number | null) },
     { accessorKey: "zTs", header: "z-score TS%", cell: (c) => fmt(c.getValue() as number | null) },
@@ -175,15 +180,15 @@ export function TeamOverviewPanel({
         {(data) =>
           data.narrative ? (
             <section>
-              <h2 className="mb-2 text-lg font-semibold text-slate-800">Resumen automático</h2>
-              <p className="text-sm text-slate-700">{data.narrative}</p>
+              <h2 className="mb-2 text-lg">Resumen automático</h2>
+              <p className="text-sm">{data.narrative}</p>
             </section>
           ) : null
         }
       </QueryPanel>
 
       <section>
-        <h2 className="mb-3 text-lg font-semibold text-slate-800">Estadísticas avanzadas (medias)</h2>
+        <h2 className="mb-3 text-lg">Estadísticas avanzadas (medias)</h2>
         <QueryPanel query={summaryQuery} emptyMessage="Sin datos suficientes.">
           {(data) => (
             <StatCardRow>
@@ -199,7 +204,7 @@ export function TeamOverviewPanel({
       </section>
 
       <section>
-        <h2 className="mb-3 text-lg font-semibold text-slate-800">Últimos {lastN} partidos jugados</h2>
+        <h2 className="mb-3 text-lg">Últimos {lastN} partidos jugados</h2>
         <QueryPanel
           query={gamesQuery}
           isEmpty={() => recentPlayed.length === 0}
@@ -221,8 +226,8 @@ export function TeamOverviewPanel({
       </section>
 
       <section>
-        <h2 className="mb-2 text-lg font-semibold text-slate-800">Enfrentamientos directos</h2>
-        <p className="mb-3 text-xs text-slate-400">
+        <h2 className="mb-2 text-lg">Enfrentamientos directos</h2>
+        <p className="mb-3 text-muted text-xs">
           Rivales con más de un partido jugado en el filtro actual.
         </p>
         <QueryPanel
@@ -235,7 +240,7 @@ export function TeamOverviewPanel({
       </section>
 
       <section>
-        <h2 className="mb-3 text-lg font-semibold text-slate-800">
+        <h2 className="mb-3 text-lg">
           Forma reciente (últimos {lastN} partidos jugados)
         </h2>
         <QueryPanel
@@ -269,7 +274,7 @@ export function TeamOverviewPanel({
       </section>
 
       <section>
-        <h2 className="mb-1 text-lg font-semibold text-slate-800">Rachas (hot/cold)</h2>
+        <h2 className="mb-1 text-lg">Rachas (hot/cold)</h2>
         <QueryPanel
           query={streaksQuery}
           isEmpty={(d) => d.items.length === 0}
@@ -282,7 +287,7 @@ export function TeamOverviewPanel({
               recentPts: r.recent_avg_pts ?? null,
               seasonPts: r.season_avg_pts ?? null,
               zPts: r.z_score_pts ?? null,
-              labelPts: streakBadge(r.label),
+              labelPts: streakKind(r.label),
               recentTs: r.recent_avg_ts_pct ?? null,
               seasonTs: r.season_avg_ts_pct ?? null,
               zTs: r.z_score_ts ?? null,
@@ -294,7 +299,7 @@ export function TeamOverviewPanel({
 
       <section>
         <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-slate-800">Carga de minutos (gestión de fatiga)</h2>
+          <h2 className="text-lg">Carga de minutos (gestión de fatiga)</h2>
           <LastNInput label="Ventana de días" value={windowDays} onChange={setWindowDays} min={1} max={30} />
         </div>
         <QueryPanel

@@ -11,10 +11,10 @@ export function StatCard({
   hint?: string;
 }) {
   return (
-    <div className="rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm">
-      <p className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</p>
-      <p className="mt-1 text-2xl font-semibold text-slate-900">{value}</p>
-      {hint && <p className="mt-0.5 text-xs text-slate-400">{hint}</p>}
+    <div className="card elev-sm px-4 py-3 text-center">
+      <p className="text-muted m-0 text-[11px] font-medium uppercase tracking-wide">{label}</p>
+      <p className="m-0 mt-1.5 text-2xl">{value}</p>
+      {hint && <p className="text-muted m-0 mt-1 text-xs">{hint}</p>}
     </div>
   );
 }

@@ -9,7 +9,7 @@ export function ExportButton({ label }: { label: string }) {
       type="button"
       disabled
       title="Disponible próximamente (fase F6 de la migración)"
-      className="cursor-not-allowed rounded-md border border-slate-200 bg-slate-100 px-3 py-1.5 text-sm text-slate-400"
+      className="btn btn-secondary cursor-not-allowed opacity-50"
     >
       {label}
     </button>

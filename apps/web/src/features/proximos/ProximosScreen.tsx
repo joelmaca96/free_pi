@@ -66,18 +66,18 @@ export function ProximosScreen() {
     <div className="space-y-8">
       <section>
         <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-slate-800">
+          <h2 className="text-lg">
             Dificultad del próximo tramo de calendario
           </h2>
-          <label className="flex flex-col text-xs font-medium text-slate-500">
-            Próximos N partidos
+          <label className="field w-20">
+            <span>Próximos N partidos</span>
             <input
               type="number"
               min={1}
               max={15}
               value={nextN}
               onChange={(e) => setNextN(Number(e.target.value))}
-              className="mt-0.5 w-20 rounded-md border border-slate-300 px-2 py-1 text-sm text-slate-900"
+              className="input"
             />
           </label>
         </div>
@@ -118,10 +118,10 @@ export function ProximosScreen() {
           !game ? null : (
             <div className="space-y-8">
               <section>
-                <label className="flex flex-col text-xs font-medium text-slate-500">
-                  Próximo enfrentamiento
+                <label className="field max-w-md">
+                  <span>Próximo enfrentamiento</span>
                   <select
-                    className="mt-0.5 max-w-md rounded-md border border-slate-300 px-2 py-1.5 text-sm text-slate-900"
+                    className="input"
                     value={game.id}
                     onChange={(e) => setSelectedId(Number(e.target.value))}
                   >
@@ -135,14 +135,14 @@ export function ProximosScreen() {
 
                 <div className="mt-3 flex items-center gap-3">
                   <TeamLogo slug={game.opponent.slug} size={48} />
-                  <h3 className="text-lg font-semibold text-slate-900">
+                  <h3 className="text-lg">
                     {formatDateEs(game.date)} — {game.opponent.name} ({game.is_home ? "en casa" : "fuera"})
                   </h3>
                 </div>
               </section>
 
               <section>
-                <h2 className="mb-3 text-lg font-semibold text-slate-800">Proyección del partido</h2>
+                <h2 className="mb-3 text-lg">Proyección del partido</h2>
                 <QueryPanel
                   query={projectionQuery}
                   isEmpty={(d) => d.projection == null}
@@ -170,7 +170,7 @@ export function ProximosScreen() {
               </section>
 
               <section>
-                <h2 className="mb-3 text-lg font-semibold text-slate-800">Scouting: {game.opponent.name}</h2>
+                <h2 className="mb-3 text-lg">Scouting: {game.opponent.name}</h2>
                 <QueryPanel query={rivalDataQuery}>
                   {(data) =>
                     data.items.length === 0 ? (
@@ -187,7 +187,7 @@ export function ProximosScreen() {
               </section>
 
               <section>
-                <h2 className="mb-3 text-lg font-semibold text-slate-800">
+                <h2 className="mb-3 text-lg">
                   Últimos {H2H_LAST_N} enfrentamientos directos: {teamQuery.data?.name ?? teamSlug} vs{" "}
                   {game.opponent.name}
                 </h2>

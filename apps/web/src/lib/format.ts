@@ -42,15 +42,22 @@ export function streakBadge(label: string | null | undefined): string {
   return "➖";
 }
 
+/** Normaliza `StreakItem.label` al tipo que consume `<StreakBadge>`. */
+export function streakKind(label: string | null | undefined): StreakKind {
+  if (label === "hot") return "hot";
+  if (label === "cold") return "cold";
+  return "neutral";
+}
+
 /** "W" -> verde, "L" -> rojo, null -> "-". */
 export function resultLabel(result: string | null | undefined): string {
   return result ?? "-";
 }
 
 export function resultColorClass(result: string | null | undefined): string {
-  if (result === "W") return "text-emerald-600";
-  if (result === "L") return "text-rose-600";
-  return "text-slate-400";
+  if (result === "W") return "text-brand";
+  if (result === "L") return "text-muted";
+  return "text-muted";
 }
 
 export function scoreLabel(

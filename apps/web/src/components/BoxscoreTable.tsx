@@ -36,7 +36,7 @@ export function BoxscoreTable({ gameId, teamSlug }: { gameId: number; teamSlug: 
     <div>
       <div className="mb-2 flex items-center gap-2">
         <TeamLogo slug={teamSlug} size={28} />
-        <span className="font-medium text-slate-800">{teamSlug}</span>
+        <span className="font-medium">{teamSlug}</span>
       </div>
       <QueryPanel
         query={query}

@@ -30,10 +30,10 @@ export function AnterioresScreen() {
         const game = played.find((g) => g.id === selectedId) ?? played[played.length - 1];
         return (
           <div className="space-y-6">
-            <label className="flex flex-col text-xs font-medium text-slate-500">
-              Partido
+            <label className="field max-w-md">
+              <span>Partido</span>
               <select
-                className="mt-0.5 max-w-md rounded-md border border-slate-300 px-2 py-1.5 text-sm text-slate-900"
+                className="input"
                 value={game?.id ?? ""}
                 onChange={(e) => setSelectedId(Number(e.target.value))}
               >
