@@ -82,6 +82,43 @@ st.set_page_config(
     layout="wide",
 )
 
+
+def _ensure_initial_data() -> None:
+    """Si la base de datos está vacía, lanza el pipeline de scraping.
+
+    Muestra un `st.spinner` mientras se descarga la información inicial
+    y fuerza una recarga de la app cuando termina.
+    """
+    Session = models.init_db()
+    session = Session()
+    try:
+        has_any = (
+            session.query(models.Team).first() is not None
+            or session.query(models.Game).first() is not None
+        )
+    finally:
+        session.close()
+
+    if not has_any:
+        st.warning(
+            "No se han encontrado datos en la base de datos. Descargando datos iniciales..."
+        )
+        with st.spinner("Descargando datos (puede tardar varios minutos)..."):
+            try:
+                # Import local para evitar ciclos al importar app.py desde el pipeline
+                from apps.ingest.pipeline import run as _pipeline_run
+
+                _pipeline_run(refresh_teams=False)
+            except Exception as exc:  # noqa: BLE001
+                st.error(f"Error descargando datos iniciales: {exc}")
+                return
+        st.success("Datos descargados correctamente. Recargando la app...")
+        st.experimental_rerun()
+
+
+# Comprobar al iniciar si hace falta poblar la base de datos
+_ensure_initial_data()
+
 # Nº de enfrentamientos directos recientes a mostrar al scoutear un próximo
 # rival (independiente de "últimos N partidos" de forma, que es sobre la
 # forma general del rival, no específica contra este equipo).

@@ -57,5 +57,8 @@ dist/
 informe.txt
 download_logos.py
 
+# apps/web (Node/Vite)
+node_modules/
+
 # Directorio local de trabajo del pipeline agéntico (no se versiona)
 local/

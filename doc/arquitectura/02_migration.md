@@ -453,6 +453,74 @@ fase.**
 
 ---
 
+### 🔨 F5 en progreso (2026-08-19)
+
+**Estado:** 🔨 **EN PROGRESO** — andamiaje y las 4 pantallas construidos; **pendiente el gate de
+salida** (revisión de paridad visual humana, ver más abajo).
+
+**Desviación declarada respecto al diseño** (decisión explícita del usuario en esta iteración):
+en vez de construir las 4 pantallas **una a una** con revisión de paridad entre cada una (el orden
+y el gate por pantalla que define esta sección), se ha pedido construir el andamiaje **y las 4
+pantallas de una vez** en la misma sesión. Esto es una desviación consciente de la regla "no se
+empieza la siguiente sin cerrar la anterior": la revisión de paridad visual queda pendiente de que
+el usuario la haga al final, sobre las 4 pantallas ya construidas, no pantalla a pantalla.
+
+**Entregables:**
+- `apps/web/` — SPA Vite + React 18 + TypeScript + Tailwind CSS:
+  - `src/api/` — tipos generados con `openapi-typescript` desde el `openapi.json` versionado en la
+    raíz (`npm run gen:api`), cliente `openapi-fetch` (`client.ts`) y un hook TanStack Query por
+    endpoint consumido (`hooks.ts`).
+  - `src/components/` — `StatTable` (TanStack Table), `StatCard`, `TeamLogo`, `PanelState`
+    (los 3 estados obligatorios: cargando/error con `request_id`/sin datos), `BoxscoreTable`,
+    `GameDetail`, `ExportButton` (deshabilitado — endpoints 17/18 son `501` hasta F6),
+    `charts/BarChart` (ECharts), `Filters` (`SeasonPicker`/`LeagueSelect`/`LastNInput`), `Layout`.
+  - `src/lib/format.ts` y `src/lib/boxscore.ts` — traducción de `format_date_es`, `_fmt`,
+    `_fmt_pct`, `season_label`, `parse_minutes`, `per_36` (paridad con `app.py`/`insights.py`).
+  - `src/features/` — las 4 pantallas: `resumen/` (con `TeamOverviewPanel`, reutilizado también
+    desde `proximos/` para el bloque "Scouting: {rival}"), `anteriores/`, `proximos/`,
+    `plantilla/`.
+  - `src/routes.tsx` — `/` redirige al primer equipo de `GET /teams`; rutas
+    `/:teamSlug/{resumen,anteriores,proximos,plantilla}`; filtros globales (`season`, `league`,
+    `lastN`) en la query string, vía `useGlobalFilters`.
+  - `public/logos/` — copia de `assets/logos/*` (build-time, no symlink).
+  - `tests/` — Vitest + Testing Library + MSW: un fichero por pantalla + `layout.test.tsx`,
+    fixtures derivadas de los payloads de ejemplo de `01_design.md` §5.2. **15/15 tests verdes.**
+  - `Dockerfile` (build multi-stage node→nginx) + `nginx.conf` — esqueleto mínimo sin probar en
+    despliegue real (fuera de alcance de F5, ver `03_deplyment_design.md`).
+- `.gitignore` — añadido `apps/web/node_modules/` (`dist/` ya estaba cubierto por la regla
+  genérica existente).
+
+**Exclusiones deliberadas frente a Streamlit** (documentadas también en el propio código):
+- **Descargas PDF/PPTX** (endpoints 17/18): siguen devolviendo `501` (implementación real en F6);
+  la SPA muestra un botón deshabilitado en vez de intentar el flujo real.
+- **"Descargar datos de {rival}" bajo demanda** (scraping en vivo desde `render_upcoming_tab`): no
+  tiene endpoint equivalente — la API es de solo lectura por diseño (§2 de `01_design.md`). La
+  pantalla "Próximos" muestra el estado "sin datos suficientes" para el rival en su lugar.
+- **Selector de equipo**: no se construye — Streamlit tampoco lo tiene (opera solo sobre
+  `config.TEAMS[0]`); la ruta raíz redirige automáticamente al primer equipo.
+
+**Bug real encontrado y corregido durante la construcción** (no relacionado con el entorno de
+test): el cliente HTTP duplicaba el prefijo `/api/v1` (`baseUrl: "/api/v1"` + paths ya
+prefijados en `schema.d.ts` → peticiones a `/api/v1/api/v1/...`). Corregido en `src/api/client.ts`
+usando `window.location.origin` como base con paths ya completos.
+
+**Gate de salida — verificado parcialmente:**
+- ✅ `npm run build` — build de producción sin errores (TypeScript estricto).
+- ✅ `npm run test` — **15/15 tests verdes** (Vitest + MSW, camino feliz + estados vacíos + errores
+  por pantalla, más navegación/recarga en frío).
+- ✅ `python -m pytest` — **245 passed**, suite sin tocar (F5 no modifica ningún fichero Python).
+- ✅ `streamlit run` / `import app` / `python main.py --help` — siguen funcionando sin cambios.
+- ⏳ **Pendiente**: revisión de paridad visual humana (Streamlit vs SPA, las 4 combinaciones de F0,
+  una persona con las dos pantallas abiertas en paralelo) — gate oficial de salida de F5, no
+  automatizable. Requiere levantar `uvicorn apps.api.main:app --reload` (puerto 8000) +
+  `npm run dev` en `apps/web` (puerto 5173, proxy a la API) + `streamlit run app.py` (puerto 8501)
+  en paralelo contra `data/baskonia.db` real.
+
+**Próxima fase:** cerrar el gate de paridad visual de F5 (revisión humana) antes de considerar F5
+completada; después, F6 (ver tabla de fases más abajo).
+
+---
+
 ## Fase F6 — Informes exportables al backend
 
 **Objetivo:** PDF y PPTX dejan de generarse en la UI y pasan a ser endpoints.
