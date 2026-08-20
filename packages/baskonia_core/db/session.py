@@ -14,8 +14,7 @@ Configura un engine con las opciones que necesita un servidor HTTP síncrono
 - **`pool_pre_ping`**: descarta conexiones muertas antes de usarlas.
 
 Sustituye a `models._add_missing_columns()` en lo que respecta a la gestión del
-esquema: el esquema ahora lo versiona Alembic (ver `db/migrations/`), no un
-`ALTER TABLE` manual.
+esquema.
 """
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker

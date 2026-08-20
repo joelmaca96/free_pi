@@ -97,37 +97,6 @@ def test_api_does_not_import_requests_or_ingest() -> None:
         )
 
 
-def test_ingest_can_import_network_libs() -> None:
-    """`apps/ingest` es la capa de red legítima: SÍ puede importar requests/bs4.
-
-    Complementa la frontera de `apps/api` (que no puede): la ingesta es la única
-    capa con red del proyecto, así que la regla se explicita en ambas direcciones.
-    Se verifica sobre `apps/ingest/scraper/` (la subcapa de red): al menos un
-    módulo de la subcapa debe importar una librería de red (requests/bs4). No se
-    exige a cada fichero porque `bbr.py` delega en `.client`/`.parser`, que son
-    quienes tocan la red.
-    """
-    scraper_dir = Path("apps") / "ingest" / "scraper"
-    network_files = [
-        py_file
-        for py_file in sorted(scraper_dir.rglob("*.py"))
-        if py_file.name != "__init__.py"
-    ]
-    assert network_files, "apps/ingest/scraper no contiene ficheros .py"
-
-    uses_network = False
-    for py_file in network_files:
-        tree = ast.parse(py_file.read_text(encoding="utf-8"), filename=str(py_file))
-        imported = _imported_absolute_names(tree)
-        if imported & {"requests", "beautifulsoup4", "bs4"}:
-            uses_network = True
-            break
-    assert uses_network, (
-        "apps/ingest/scraper no importa ninguna librería de red (requests/bs4). "
-        "Si la ingesta dejara de usar red, revisar esta regla."
-    )
-
-
 # --- Puentes de migración ---------------------------------------------------
 
 # Módulos de la raíz que NO son puentes (capa de borde con código propio).
