@@ -68,7 +68,6 @@ from packages.baskonia_core.services import (
     team_by_slug,
     upcoming_games,
 )
-from apps.ingest.pipeline import fetch_game_boxscore, fetch_opponent_scouting
 from apps.ingest.scraper.client import BBRClient
 
 LOGOS_DIR = Path(__file__).parent / "assets" / "logos"
@@ -114,7 +113,11 @@ def _ensure_initial_data() -> None:
                 st.error(f"Error descargando datos iniciales: {exc}")
                 return
         st.success("Datos descargados correctamente. Recargando la app...")
-        st.experimental_rerun()
+        try:
+            st.experimental_rerun()
+        except Exception:
+            st.info("Recarga requerida — actualiza la página si no se recarga sola.")
+            st.stop()
 
 
 # Comprobar al iniciar si hace falta poblar la base de datos
@@ -339,6 +342,8 @@ def _download_boxscore(session, game: models.Game) -> bool:
         f"(Basketball-Reference limita a una petición cada {int(config.REQUEST_DELAY)} s)"
     ):
         try:
+            from apps.ingest.pipeline import fetch_game_boxscore
+
             return fetch_game_boxscore(session, BBRClient(), game)
         except Exception as exc:  # noqa: BLE001
             st.error(f"No se pudo descargar el box score: {exc}")
@@ -412,7 +417,11 @@ def render_boxscore_pair(session, game: models.Game, key_prefix: str) -> None:
 
         if not _fetch_failed(game.id):
             if _download_boxscore(session, game):
-                st.rerun()
+                try:
+                    st.experimental_rerun()
+                except Exception:
+                    st.info("Recarga requerida — actualiza la página si no se recarga sola.")
+                    st.stop()
             _mark_fetch_failed(game.id)
 
         st.warning(
@@ -420,9 +429,13 @@ def render_boxscore_pair(session, game: models.Game, key_prefix: str) -> None:
             "Basketball-Reference."
         )
         if st.button("🔁 Reintentar descarga", key=f"{key_prefix}_retry_box_{game.id}"):
-            if _download_boxscore(session, game):
-                st.session_state.get(_FAILED_FETCH_KEY, set()).discard(game.id)
-                st.rerun()
+                if _download_boxscore(session, game):
+                    st.session_state.get(_FAILED_FETCH_KEY, set()).discard(game.id)
+                    try:
+                        st.experimental_rerun()
+                    except Exception:
+                        st.info("Recarga requerida — actualiza la página si no se recarga sola.")
+                        st.stop()
         return
 
     col_home, col_away = st.columns(2)
@@ -767,11 +780,17 @@ def render_upcoming_tab(
             with st.spinner(f"Descargando roster, calendario y box scores de {rival.name}..."):
                 client = BBRClient()
                 try:
+                    from apps.ingest.pipeline import fetch_opponent_scouting
+
                     fetch_opponent_scouting(session, client, rival, int(n_rival))
                 except RuntimeError as exc:
                     st.error(str(exc))
                     return
-            st.rerun()
+            try:
+                st.experimental_rerun()
+            except Exception:
+                st.info("Recarga requerida — actualiza la página si no se recarga sola.")
+                st.stop()
         return
 
     render_matchup_projection_section(session, team, rival, season, league)

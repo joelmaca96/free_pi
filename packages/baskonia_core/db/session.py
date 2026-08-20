@@ -5,6 +5,10 @@ Configura un engine con las opciones que necesita un servidor HTTP síncrono
 
 - **WAL** (`PRAGMA journal_mode=WAL`): permite que la API siga leyendo durante
   una ejecución del pipeline (lectores y escritor no se bloquean entre sí).
+- **`busy_timeout`** (`PRAGMA busy_timeout=30000`): si dos escritores coinciden
+  (el `cron` del pipeline y el worker de `apps/ingest/worker.py` consumiendo
+  `ingest_jobs`), SQLite espera hasta 30s en vez de fallar al instante con
+  "database is locked".
 - **`check_same_thread=False`**: uvicorn atiende peticiones desde un threadpool;
   el engine debe poder usarse desde varios hilos.
 - **`pool_pre_ping`**: descarta conexiones muertas antes de usarlas.
@@ -20,9 +24,10 @@ from .. import config
 
 
 def _enable_wal(dbapi_connection, connection_record):
-    """Activa el journal mode WAL en cada conexión SQLite nueva."""
+    """Activa journal mode WAL y busy_timeout en cada conexión SQLite nueva."""
     cursor = dbapi_connection.cursor()
     cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA busy_timeout=30000")
     cursor.close()
 
 

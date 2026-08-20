@@ -8,7 +8,7 @@ import {
   useScheduleDifficulty,
   useProjection,
   useHeadToHead,
-  useRoster,
+  usePlayerForm,
 } from "@/api/hooks";
 import { QueryPanel } from "@/components/PanelState";
 import { StatCard, StatCardRow } from "@/components/StatCard";
@@ -16,6 +16,7 @@ import { StatTable } from "@/components/StatTable";
 import { GameDetail } from "@/components/GameDetail";
 import { TeamLogo } from "@/components/TeamLogo";
 import { ExportButton } from "@/components/ExportButton";
+import { ScoutRivalPanel } from "@/components/ScoutRivalPanel";
 import { fmt, formatDateEs } from "@/lib/format";
 import { TeamOverviewPanel } from "@/features/resumen/TeamOverviewPanel";
 
@@ -54,7 +55,12 @@ export function ProximosScreen() {
 
   const projectionQuery = useProjection(teamSlug, rivalSlug, filter.season ?? 0, filter.league);
   const h2hQuery = useHeadToHead(teamSlug, rivalSlug, filter);
-  const rivalRosterQuery = useRoster(rivalSlug ?? "", filter);
+  // Señal de "¿tiene datos este rival?": no puede ser el roster (`/roster` solo
+  // incluye jugadores con `photo_url`, que solo rellena el scraper oficial de
+  // baskonia.com para el equipo propio — un rival scouteado vía BBR nunca
+  // tendría roster, aunque el scouting haya funcionado). `players/form` sí
+  // refleja directamente lo que escribe `fetch_opponent_scouting`.
+  const rivalDataQuery = usePlayerForm(rivalSlug ?? "", filter, filters.lastN);
 
   return (
     <div className="space-y-8">
@@ -165,14 +171,18 @@ export function ProximosScreen() {
 
               <section>
                 <h2 className="mb-3 text-lg font-semibold text-slate-800">Scouting: {game.opponent.name}</h2>
-                <QueryPanel
-                  query={rivalRosterQuery}
-                  isEmpty={(d) => d.players.length === 0}
-                  emptyMessage={`Todavía no hay datos de ${game.opponent.name} en la base de datos.`}
-                >
-                  {() => (
-                    <TeamOverviewPanel teamSlug={game.opponent.slug} filter={filter} lastN={filters.lastN} />
-                  )}
+                <QueryPanel query={rivalDataQuery}>
+                  {(data) =>
+                    data.items.length === 0 ? (
+                      <ScoutRivalPanel
+                        teamSlug={game.opponent.slug}
+                        teamName={game.opponent.name}
+                        lastN={filters.lastN}
+                      />
+                    ) : (
+                      <TeamOverviewPanel teamSlug={game.opponent.slug} filter={filter} lastN={filters.lastN} />
+                    )
+                  }
                 </QueryPanel>
               </section>
 

@@ -1,5 +1,6 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiClient, ApiError, type ProblemDetails } from "./client";
+import type { components } from "./schema";
 
 /** staleTime generoso: la API ya cachea con ETag + Cache-Control (apps/api/middleware.py). */
 const STALE_TIME_MS = 60_000;
@@ -250,4 +251,49 @@ export function useBoxscore(gameId: number | undefined, teamSlug: string | undef
     staleTime: STALE_TIME_MS,
     enabled: gameId != null && !!teamSlug,
   });
+}
+
+export type JobResponse = components["schemas"]["JobResponse"];
+
+const ACTIVE_JOB_STATUSES = new Set(["queued", "running"]);
+
+/** Último job de scouting de `teamSlug`; hace polling mientras esté activo. */
+export function useScoutStatus(teamSlug: string) {
+  return useQuery({
+    queryKey: ["scoutStatus", teamSlug],
+    queryFn: () =>
+      unwrap(apiClient.GET("/api/v1/teams/{slug}/scout", { params: { path: { slug: teamSlug } } })),
+    enabled: !!teamSlug,
+    staleTime: 0,
+    refetchInterval: (query) => {
+      const job = query.state.data as JobResponse | null | undefined;
+      return job && ACTIVE_JOB_STATUSES.has(job.status) ? 2000 : false;
+    },
+  });
+}
+
+/** Encola el scouting de `teamSlug` (idempotente: reutiliza un job activo si ya existe). */
+export function useEnqueueScout(teamSlug: string, lastN: number) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      unwrap(
+        apiClient.POST("/api/v1/teams/{slug}/scout", {
+          params: { path: { slug: teamSlug }, query: { last_n: lastN } },
+        })
+      ),
+    onSuccess: (job) => {
+      queryClient.setQueryData(["scoutStatus", teamSlug], job);
+    },
+  });
+}
+
+/**
+ * Al completarse un job de scouting, invalida las queries de ese equipo para
+ * que el panel "Scouting: {rival}" se repinte con los datos recién llegados.
+ */
+export function invalidateTeamData(queryClient: ReturnType<typeof useQueryClient>, teamSlug: string) {
+  for (const key of ["roster", "filters", "summary", "games", "playerForm"]) {
+    queryClient.invalidateQueries({ queryKey: [key, teamSlug], exact: false });
+  }
 }

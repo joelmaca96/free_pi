@@ -1242,6 +1242,157 @@
           }
         }
       }
+    },
+    "/api/v1/teams/{slug}/scout": {
+      "post": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Enqueue Scout",
+        "description": "Encola el scouting de `team` (idempotente: si ya hay uno activo, lo devuelve).",
+        "operationId": "enqueue_scout_api_v1_teams__slug__scout_post",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "Slug del equipo (p.ej. 'vitoria')",
+              "title": "Slug"
+            },
+            "description": "Slug del equipo (p.ej. 'vitoria')"
+          },
+          {
+            "name": "last_n",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 15,
+              "minimum": 1,
+              "default": 5,
+              "title": "Last N"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Get Latest Scout",
+        "description": "Último trabajo de scouting de `team`, o `null` si nunca se ha pedido.",
+        "operationId": "get_latest_scout_api_v1_teams__slug__scout_get",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "Slug del equipo (p.ej. 'vitoria')",
+              "title": "Slug"
+            },
+            "description": "Slug del equipo (p.ej. 'vitoria')"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/JobResponse"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Response Get Latest Scout Api V1 Teams  Slug  Scout Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/jobs/{job_id}": {
+      "get": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Get Job",
+        "description": "Estado de un trabajo de scouting por id (para hacer polling tras encolar).",
+        "operationId": "get_job_api_v1_jobs__job_id__get",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1984,6 +2135,72 @@
         ],
         "title": "HealthResponse",
         "description": "Estado de salud de la API."
+      },
+      "JobResponse": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "team": {
+            "$ref": "#/components/schemas/TeamRef"
+          },
+          "last_n": {
+            "type": "integer",
+            "title": "Last N"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "team",
+          "last_n",
+          "status",
+          "created_at"
+        ],
+        "title": "JobResponse",
+        "description": "Estado de un trabajo de scouting encolado desde la SPA."
       },
       "LeagueOption": {
         "properties": {

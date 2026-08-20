@@ -18,6 +18,7 @@ from packages.baskonia_core.db import models
 from packages.baskonia_core.insights import ZSCORE_COLD_THRESHOLD, ZSCORE_HOT_THRESHOLD
 
 from .schemas import games as games_schemas
+from .schemas import jobs as jobs_schemas
 from .schemas import matchups as matchups_schemas
 from .schemas import players as players_schemas
 from .schemas import teams as teams_schemas
@@ -144,4 +145,18 @@ def h2h_game(game: models.Game, team: models.Team) -> matchups_schemas.HeadToHea
         team_score=team_score,
         opponent_score=opp_score,
         result=_result_label(game, team),
+    )
+
+
+def job_ref(job: models.IngestJob) -> jobs_schemas.JobResponse:
+    """Convierte un `models.IngestJob` a `JobResponse`."""
+    return jobs_schemas.JobResponse(
+        id=job.id,
+        team=team_ref(job.team),
+        last_n=job.last_n,
+        status=job.status,
+        error=job.error,
+        created_at=job.created_at.isoformat(),
+        started_at=job.started_at.isoformat() if job.started_at else None,
+        finished_at=job.finished_at.isoformat() if job.finished_at else None,
     )

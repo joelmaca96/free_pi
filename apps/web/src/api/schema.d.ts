@@ -386,6 +386,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/teams/{slug}/scout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Latest Scout
+         * @description Último trabajo de scouting de `team`, o `null` si nunca se ha pedido.
+         */
+        get: operations["get_latest_scout_api_v1_teams__slug__scout_get"];
+        put?: never;
+        /**
+         * Enqueue Scout
+         * @description Encola el scouting de `team` (idempotente: si ya hay uno activo, lo devuelve).
+         */
+        post: operations["enqueue_scout_api_v1_teams__slug__scout_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/jobs/{job_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Job
+         * @description Estado de un trabajo de scouting por id (para hacer polling tras encolar).
+         */
+        get: operations["get_job_api_v1_jobs__job_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -615,6 +659,27 @@ export interface components {
             status: string;
             /** Version */
             version: string;
+        };
+        /**
+         * JobResponse
+         * @description Estado de un trabajo de scouting encolado desde la SPA.
+         */
+        JobResponse: {
+            /** Id */
+            id: number;
+            team: components["schemas"]["TeamRef"];
+            /** Last N */
+            last_n: number;
+            /** Status */
+            status: string;
+            /** Error */
+            error?: string | null;
+            /** Created At */
+            created_at: string;
+            /** Started At */
+            started_at?: string | null;
+            /** Finished At */
+            finished_at?: string | null;
         };
         /**
          * LeagueOption
@@ -1522,6 +1587,103 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DataQualityResponse"];
+                };
+            };
+        };
+    };
+    get_latest_scout_api_v1_teams__slug__scout_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Slug del equipo (p.ej. 'vitoria') */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobResponse"] | null;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    enqueue_scout_api_v1_teams__slug__scout_post: {
+        parameters: {
+            query?: {
+                last_n?: number;
+            };
+            header?: never;
+            path: {
+                /** @description Slug del equipo (p.ej. 'vitoria') */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_job_api_v1_jobs__job_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

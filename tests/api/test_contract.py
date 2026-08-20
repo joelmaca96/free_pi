@@ -27,10 +27,13 @@ def test_openapi_matches_versioned_contract():
     )
 
 
-def test_contract_has_19_endpoints():
-    """El contrato expone los 19 endpoints del §5.1 (17/18 como 501)."""
+def test_contract_has_21_endpoints():
+    """El contrato expone los 19 endpoints del §5.1 (17/18 como 501) más los 2
+    de la cola de scouting bajo demanda (`/teams/{slug}/scout`, `/jobs/{id}`),
+    añadidos fuera del alcance original de F3-F5 (ver doc/arquitectura/02_migration.md).
+    """
     spec = create_app().openapi()
     paths = spec["paths"]
-    # 19 endpoints de negocio + docs/openapi/redoc no cuentan como paths de negocio
+    # paths de negocio + docs/openapi/redoc no cuentan como paths de negocio
     business_paths = [p for p in paths if not p.endswith(("/docs", "/redoc", "/openapi.json"))]
-    assert len(business_paths) == 19, f"Se esperaban 19 endpoints, hay {len(business_paths)}"
+    assert len(business_paths) == 21, f"Se esperaban 21 endpoints, hay {len(business_paths)}"

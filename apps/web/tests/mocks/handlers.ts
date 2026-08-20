@@ -52,6 +52,8 @@ export const handlers = [
   ),
 
   http.get(`${BASE}/games/:gameId/boxscore`, () => HttpResponse.json(f.boxscore)),
+
+  http.get(`${BASE}/teams/:slug/scout`, () => HttpResponse.json(null)),
 ];
 
 export const notFoundHandler = (path: string) =>

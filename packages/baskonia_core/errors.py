@@ -29,6 +29,14 @@ class GameNotFound(DomainError):
         super().__init__(f"No existe ningún partido con id '{game_id}'.")
 
 
+class JobNotFound(DomainError):
+    """No existe ningún trabajo de scouting con el id solicitado."""
+
+    def __init__(self, job_id: int):
+        self.job_id = job_id
+        super().__init__(f"No existe ningún job con id '{job_id}'.")
+
+
 class InvalidFilter(DomainError):
     """Un parámetro de filtro no es aplicable al recurso solicitado.
 

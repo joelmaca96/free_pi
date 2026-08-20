@@ -263,3 +263,17 @@ export const problem = {
   instance: "/api/v1/teams/valencia/summary",
   request_id: "01J9F3K2QW8ZC4M7",
 };
+
+export function scoutJob(overrides: Partial<Record<string, unknown>> = {}) {
+  return {
+    id: 1,
+    team: { slug: "bilbao", name: "Bilbao Basket" },
+    last_n: 5,
+    status: "queued",
+    error: null,
+    created_at: "2026-08-20T09:00:00+00:00",
+    started_at: null,
+    finished_at: null,
+    ...overrides,
+  };
+}

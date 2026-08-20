@@ -440,6 +440,7 @@ conectado y recalcula en cada interacción; con la API, N usuarios comparten res
 | 8 | `docker compose run` deja contenedores huérfanos si el proceso se interrumpe | `--rm` en todas las invocaciones + `docker compose run --rm` en el `.service` |
 | 9 | La generación de PDF/PPTX es la operación más pesada de la API en ARM | `proxy_read_timeout 120s` en nginx; si se queda corto, el siguiente paso es generar el informe de forma asíncrona (fuera de alcance del PoC) |
 | 10 | Sin métricas ni alertas: un fallo del cron pasa desapercibido | `meta/data-freshness` es visible en la propia UI: un dato viejo se ve a simple vista. Es la señal de salud adecuada al nivel del PoC |
+| 11 | Falta un servicio `worker` en `docker-compose` para la cola de scouting bajo demanda (`apps/ingest/worker.py`, ver `02_migration.md` "Adición fuera de alcance") | Pendiente de diseño: sería un cuarto servicio de larga duración (`restart: unless-stopped`), con las mismas dependencias de red que `ingest` y montaje `data:rw`. No implementado — hoy se ejecuta a mano (`python -m apps.ingest.worker`) |
 
 ## Preguntas abiertas para el usuario
 

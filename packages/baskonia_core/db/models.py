@@ -198,6 +198,29 @@ class SeasonTeamStats(Base):
     team = relationship("Team")
 
 
+class IngestJob(Base):
+    """Trabajo de scouting bajo demanda de un rival, encolado desde la SPA.
+
+    Tabla de control (no de dominio): la API solo inserta/lee filas aquí; la
+    escritura real de datos de scouting (roster, calendario, box scores) la
+    hace el worker (`apps/ingest/worker.py`), el único proceso que importa
+    `apps.ingest`/`requests`/`beautifulsoup4`.
+    """
+
+    __tablename__ = "ingest_jobs"
+
+    id = Column(Integer, primary_key=True)
+    team_id = Column(Integer, ForeignKey("teams.id"), nullable=False)
+    last_n = Column(Integer, nullable=False)
+    status = Column(String, nullable=False, default="queued")  # queued|running|done|failed
+    error = Column(String, nullable=True)
+    created_at = Column(DateTime, nullable=False)
+    started_at = Column(DateTime, nullable=True)
+    finished_at = Column(DateTime, nullable=True)
+
+    team = relationship("Team")
+
+
 def init_db() -> sessionmaker:
     """Inicializa la base de datos y devuelve una fábrica de sesiones.
 

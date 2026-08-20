@@ -521,6 +521,70 @@ completada; después, F6 (ver tabla de fases más abajo).
 
 ---
 
+### ➕ Adición fuera de alcance: cola de scouting bajo demanda (2026-08-20)
+
+**Estado:** ✅ **COMPLETADA** y verificada end-to-end contra `data/baskonia.db` real.
+
+**Motivo:** al probar la SPA, el usuario detectó que "Próximos enfrentamientos" no permitía
+descargar los datos de un rival sin scoutear — a diferencia de Streamlit
+(`render_upcoming_tab`, `app.py:660-683`). Esto no era un bug de F5: `01_design.md` §2 prohíbe
+explícitamente que la API dispare scraping síncrono, y el propio documento señala la solución
+correcta como trabajo futuro fuera de alcance: *"cola de trabajos (tabla `ingest_jobs` + worker),
+no una petición HTTP síncrona"*. El usuario pidió construir exactamente eso.
+
+**Diseño:** la API gana una única escritura — insertar una fila en `ingest_jobs` (tabla de
+control, nueva y aditiva; no toca las 5 tablas de dominio). El scraping real lo sigue haciendo
+solo `apps/ingest`, ahora también desde un proceso worker nuevo, nunca la API (que sigue sin
+importar `requests`/`beautifulsoup4`/`apps.ingest` — frontera verificada por
+`tests/test_architecture.py`).
+
+**Entregables:**
+- `packages/baskonia_core/db/models.py` — modelo `IngestJob` (`ingest_jobs`: `team_id`, `last_n`,
+  `status`, `error`, `created_at`/`started_at`/`finished_at`).
+- Migración Alembic `54ee881061b7_add_ingest_jobs.py` (aditiva, con `downgrade()`) — aplicada a
+  `data/baskonia.db` real (con backup previo). La BD real no estaba `stamp`eada desde F3; se
+  corrigió con `alembic stamp head` sobre el head anterior antes de aplicar la nueva revisión.
+- `packages/baskonia_core/db/session.py` — `PRAGMA busy_timeout=30000` añadido junto al WAL ya
+  existente, para que el worker y el `cron` del pipeline no colisionen si coinciden escribiendo.
+- `packages/baskonia_core/errors.py` / `apps/api/errors.py` — excepción `JobNotFound` → `404`.
+- `apps/api/routers/jobs.py` (+ `schemas/jobs.py`, mapper `job_ref`) — `POST /teams/{slug}/scout`
+  (idempotente mientras haya un job activo), `GET /teams/{slug}/scout` (último job o `null`),
+  `GET /jobs/{id}`. Contrato regenerado: `openapi.json` (21 endpoints) y
+  `apps/web/src/api/schema.d.ts`.
+- `apps/ingest/worker.py` (nuevo) — bucle secuencial que reclama jobs `queued` (`UPDATE`
+  condicional, evita doble reclamo) y llama a `fetch_opponent_scouting` (ya idempotente, sin
+  cambios). Se ejecuta con `python -m apps.ingest.worker`.
+- `apps/web/src/components/ScoutRivalPanel.tsx` + hooks `useScoutStatus`/`useEnqueueScout`
+  (`apps/web/src/api/hooks.ts`) — sustituye el hueco de "sin datos suficientes" en
+  `ProximosScreen.tsx` por un botón real, con polling de estado y repintado automático del panel
+  "Scouting: {rival}" al completarse (invalidación de queries por `teamSlug`).
+- **Hallazgo corregido durante la implementación**: la señal de "¿este rival tiene datos?" no
+  puede ser el roster (`/roster` solo incluye jugadores con `photo_url`, que únicamente rellena el
+  scraper oficial de baskonia.com — un rival scouteado vía BBR nunca tendría roster aunque el
+  scouting funcionase). Se usa `players/form` en su lugar, que sí refleja directamente lo que
+  escribe `fetch_opponent_scouting`.
+- Tests: `tests/api/test_jobs.py` (8), `tests/test_worker.py` (5, con `fetch_opponent_scouting`
+  mockeado — sin red), `apps/web/tests/proximos.test.tsx` (caso nuevo: clic → cola → polling →
+  repintado, con MSW).
+
+**Gate de salida verificado:**
+- ✅ `python -m pytest` — **258 passed** (245 + 8 + 5), incluida `test_architecture.py` (frontera
+  API↔ingest intacta) y `test_contract.py` (contrato congelado, ahora 21 endpoints).
+- ✅ `npm run build` + `npx vitest run` en `apps/web` — **16/16 tests verdes**.
+- ✅ **End-to-end real**: `uvicorn` + `python -m apps.ingest.worker` + `POST
+  /teams/bilbao/scout?last_n=1` contra `data/baskonia.db` real → el worker descargó roster,
+  calendario y un box score reales de Basketball-Reference (respetando `REQUEST_DELAY`), el job
+  pasó a `done`, y `GET /teams/bilbao/players/form` devolvió los datos recién descargados.
+
+**Riesgo aceptado y documentado:** sin lock entre procesos más allá de `busy_timeout`, si el
+`cron` nocturno del pipeline y el worker coinciden escribiendo, uno de los dos esperará hasta 30s
+antes de fallar (en vez de fallar al instante). No se ha añadido un lock explícito — se considera
+suficiente para un despliegue de un solo usuario. El despliegue del worker como servicio de larga
+duración en `docker-compose`/`systemd` queda pendiente (documentado, no implementado — mismo
+alcance que se dejó fuera para F5).
+
+---
+
 ## Fase F6 — Informes exportables al backend
 
 **Objetivo:** PDF y PPTX dejan de generarse en la UI y pasan a ser endpoints.
