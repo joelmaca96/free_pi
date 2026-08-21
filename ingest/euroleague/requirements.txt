@@ -1,0 +1,4 @@
+# Dependencia opcional de la fuente Euroliga (ingest/euroleague).
+#   pip install -r ingest/euroleague/requirements.txt
+euroleague-api>=0.1.1
+pandas>=2.0.0

@@ -18,6 +18,7 @@ TABLE_NAMES = [
     "seasons",
     "competitions",
     "teams",
+    "team_external_ids",
     "court_zones",
     "players",
     "player_external_ids",

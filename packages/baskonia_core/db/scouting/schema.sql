@@ -27,6 +27,17 @@ CREATE TABLE teams (
   is_own_team INTEGER NOT NULL DEFAULT 0 CHECK (is_own_team IN (0,1))
 );
 
+-- Puente de identidad: un mismo equipo real (p.ej. Valencia Basket) aparece
+-- con id/nombre distinto en cada fuente (ACB, Euroliga) - sin esto se crean
+-- equipos duplicados al cargar competiciones distintas del mismo club.
+CREATE TABLE team_external_ids (
+  team_id     TEXT NOT NULL REFERENCES teams(id),
+  source      TEXT NOT NULL CHECK (source IN ('baskonia_web','acb','euroleague')),
+  external_id TEXT NOT NULL,
+  PRIMARY KEY (source, external_id)
+);
+CREATE INDEX idx_team_external_team ON team_external_ids(team_id);
+
 CREATE TABLE court_zones (
   id    INTEGER PRIMARY KEY,
   label TEXT UNIQUE NOT NULL,         -- 'Pintura', 'Triple exterior'...

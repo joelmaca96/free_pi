@@ -1,0 +1,7 @@
+# Dependencias runtime del nuevo pipeline de ingesta (ingest/).
+#   pip install -r ingest/requirements.txt
+# La fuente Euroliga tiene su propia dependencia opcional, ver
+# ingest/euroleague/requirements.txt (euroleague-api + pandas).
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+SQLAlchemy>=2.0.0

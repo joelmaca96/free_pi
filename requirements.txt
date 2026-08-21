@@ -1,9 +1,12 @@
 # Dependencias agregadas de desarrollo (raíz del repo).
 # Cada aplicación tiene su propio requirements.txt:
+#   - ingest/requirements.txt       (pipeline de ingesta: acb/baskonia_web)
+#   - ingest/euroleague/requirements.txt (opcional: euroleague-api)
 #   - apps/api/requirements.txt     (backend FastAPI)
 # Este fichero agrega todo para desarrollo local en un solo `pip install -r requirements.txt`.
 
 requests>=2.31.0
+beautifulsoup4>=4.12.0
 SQLAlchemy>=2.0.0
 python-dotenv>=1.0.0
 
@@ -22,6 +25,9 @@ Pillow>=10.0.0
 
 # --- Análisis / datos ---
 pandas>=2.0.0
+
+# --- Fuente Euroliga (opcional, ver ingest/euroleague/requirements.txt) ---
+euroleague-api>=0.1.1
 
 # --- Dependencias de desarrollo (tests) ---
 pytest>=8.0.0
