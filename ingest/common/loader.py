@@ -2,7 +2,8 @@
 
 Estrategia de idempotencia (re-ejecutar el pipeline no duplica filas):
 - Tablas con clave natural real (`games`, `game_advanced_stats`,
-  `player_game_stats`, `game_zone_stats`): `INSERT ... ON CONFLICT DO UPDATE`.
+  `game_team_quarter_stats`, `player_game_stats`, `game_zone_stats`):
+  `INSERT ... ON CONFLICT DO UPDATE`.
 - Tablas "detalle" sin clave natural (`lineups`+`lineup_players`, `shots`,
   `key_events`): se borran las filas de ese `game_id` y se reinsertan enteras.
   Es más simple y igual de idempotente que intentar casar cada fila.
@@ -28,6 +29,8 @@ def load_game(conn: Connection, game: NormalizedGame) -> None:
     _upsert_game(conn, game)
     for advanced in game.advanced:
         _upsert_game_advanced_stats(conn, game.id, advanced)
+    for quarter_stat in game.quarter_stats:
+        _upsert_quarter_stats(conn, game.id, quarter_stat)
     for stat in game.boxscore:
         _upsert_player_game_stats(conn, game.id, stat)
     _replace_lineups(conn, game.id, game.lineups)
@@ -83,9 +86,11 @@ def _upsert_game_advanced_stats(conn: Connection, game_id: str, advanced) -> Non
         text(
             """
             INSERT INTO game_advanced_stats
-                (game_id, team_id, ortg, drtg, net_rating, efg_pct, ts_pct, tov_pct, orb_pct)
+                (game_id, team_id, ortg, drtg, net_rating, efg_pct, ts_pct, tov_pct, orb_pct,
+                 ast_pct, stl_pct, blk_pct, ft_rate, ast_to_ratio)
             VALUES
-                (:game_id, :team_id, :ortg, :drtg, :net_rating, :efg_pct, :ts_pct, :tov_pct, :orb_pct)
+                (:game_id, :team_id, :ortg, :drtg, :net_rating, :efg_pct, :ts_pct, :tov_pct, :orb_pct,
+                 :ast_pct, :stl_pct, :blk_pct, :ft_rate, :ast_to_ratio)
             ON CONFLICT (game_id, team_id) DO UPDATE SET
                 ortg = excluded.ortg,
                 drtg = excluded.drtg,
@@ -93,7 +98,12 @@ def _upsert_game_advanced_stats(conn: Connection, game_id: str, advanced) -> Non
                 efg_pct = excluded.efg_pct,
                 ts_pct = excluded.ts_pct,
                 tov_pct = excluded.tov_pct,
-                orb_pct = excluded.orb_pct
+                orb_pct = excluded.orb_pct,
+                ast_pct = excluded.ast_pct,
+                stl_pct = excluded.stl_pct,
+                blk_pct = excluded.blk_pct,
+                ft_rate = excluded.ft_rate,
+                ast_to_ratio = excluded.ast_to_ratio
             """
         ),
         {
@@ -106,6 +116,32 @@ def _upsert_game_advanced_stats(conn: Connection, game_id: str, advanced) -> Non
             "ts_pct": advanced.ts_pct,
             "tov_pct": advanced.tov_pct,
             "orb_pct": advanced.orb_pct,
+            "ast_pct": advanced.ast_pct,
+            "stl_pct": advanced.stl_pct,
+            "blk_pct": advanced.blk_pct,
+            "ft_rate": advanced.ft_rate,
+            "ast_to_ratio": advanced.ast_to_ratio,
+        },
+    )
+
+
+def _upsert_quarter_stats(conn: Connection, game_id: str, quarter_stat) -> None:
+    conn.execute(
+        text(
+            """
+            INSERT INTO game_team_quarter_stats (game_id, team_id, quarter, points_for, points_against)
+            VALUES (:game_id, :team_id, :quarter, :points_for, :points_against)
+            ON CONFLICT (game_id, team_id, quarter) DO UPDATE SET
+                points_for = excluded.points_for,
+                points_against = excluded.points_against
+            """
+        ),
+        {
+            "game_id": game_id,
+            "team_id": quarter_stat.team_id,
+            "quarter": quarter_stat.quarter,
+            "points_for": quarter_stat.points_for,
+            "points_against": quarter_stat.points_against,
         },
     )
 

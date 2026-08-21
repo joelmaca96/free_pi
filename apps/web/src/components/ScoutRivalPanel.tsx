@@ -3,10 +3,9 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useEnqueueScout, useScoutStatus, invalidateTeamData } from "@/api/hooks";
 
 /**
- * Sustituye al botón "Descargar datos de {rival}" de Streamlit
- * (`render_upcoming_tab`, app.py:660-683) por la versión asíncrona vía la
- * cola de trabajos (`ingest_jobs` + `apps/ingest/worker.py`). El scraping en
- * sí lo hace el worker, nunca la API — ver doc/arquitectura/01_design.md §2.
+ * Botón de scouting bajo demanda: encola la descarga de datos de un rival
+ * vía la cola de trabajos (`ingest_jobs` + `apps/ingest/worker.py`). El scraping
+ * lo hace el worker, nunca la API — ver doc/arquitectura/01_design.md §2.
  */
 export function ScoutRivalPanel({
   teamSlug,

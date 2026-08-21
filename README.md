@@ -216,7 +216,8 @@ que presente **todos los datos necesarios para preparar los partidos**, cargando
 ### Siguiente paso recomendado
 
 El caso de uso central del PoC ya no es solo "preparar un Baskonia vs Bilbao":
-la **GUI web** (`streamlit run app.py`) está centrada en el Baskonia y cubre
+la **interfaz web** (SPA React en `apps/web/` + API FastAPI en `apps/api/`)
+está centrada en el Baskonia y cubre
 también cualquier rival de la temporada — partidos anteriores, próximos
 enfrentamientos con datos reales de la 26/27, plantilla actual con fichas de
 jugador, y scouting bajo demanda del próximo rival. Se sigue sin ampliar
@@ -319,9 +320,6 @@ desarrollo. Sin cambios de lógica en el pipeline; suite verde (178 tests). Ver
 baskonia-pipeline/
 ├── requirements.txt      # agregador de desarrollo (apunta a los requirements de cada app)
 ├── .env.example          # plantilla de configuración (copiada a .env)
-├── baskonia_core.py      # PUENTE DE MIGRACIÓN (F1): reexporta el dominio compartido
-├── main.py               # PUENTE DE MIGRACIÓN (F4): delega en apps.ingest.cli.main (eliminar en F7)
-├── app.py                # GUI (Streamlit) para usuarios sin conocimientos técnicos
 ├── apps/
 │   ├── ingest/           # pipeline de captura autónomo (F4)
 │   │   ├── __init__.py
@@ -335,7 +333,8 @@ baskonia-pipeline/
 │   │       ├── parser.py             # parsea tablas HTML de BBR → estructuras limpias
 │   │       ├── bbr.py                # construye URLs de BBR y orquesta llamadas
 │   │       └── baskonia_official.py  # API JSON de baskonia.com: calendario 26/27 y plantilla actual
-│   └── api/               # backend FastAPI (F3)
+│   ├── api/               # backend FastAPI (F3)
+│   └── web/               # SPA React (única UI)
 └── packages/
     └── baskonia_core/        # dominio compartido (F1/F2 de la migración)
         ├── __init__.py
@@ -354,13 +353,6 @@ baskonia-pipeline/
             ├── models.py     # SQLAlchemy: teams, players, games, boxscores, team_game_stats
             └── storage.py    # upserts idempotentes
 ```
-
-> **Nota (F4):** el pipeline de captura vive ahora en `apps/ingest/` como aplicación
-> autónoma con su propio `requirements.txt`. `main.py` en la raíz es un **puente
-> temporal** (`# PUENTE DE MIGRACIÓN — eliminar en F7`) que delega en
-> `apps.ingest.cli.main` para mantener funcionando la documentación, el `cron` y la
-> memoria muscular durante la transición. La ruta canónica de invocación es
-> `python -m apps.ingest.cli`.
 
 ### Flujo del pipeline (`apps/ingest/pipeline.py`)
 1. Obtiene la **clasificación** de las ligas configuradas.
@@ -631,11 +623,18 @@ mismo informe se vuelca a un fichero de texto en vez de imprimirse en pantalla.
 
 ### GUI para usuarios sin conocimientos técnicos
 
+La interfaz web es una SPA React (`apps/web/`) respaldada por la API FastAPI
+(`apps/api/`). Para desarrollo local:
+
 ```bash
-streamlit run app.py
+# Terminal 1 — API
+uvicorn apps.api.main:app --reload
+
+# Terminal 2 — SPA
+cd apps/web && npm run dev
 ```
 
-Abre una página web local (por defecto `http://localhost:8501`) **centrada en
+Abre `http://localhost:5173` **centrada en
 el Baskonia** (primer slug de `config.TEAMS`). La cabecera es **global a las
 cuatro pestañas**: escudo, selector numérico de N partidos (forma reciente) y,
 desde la feature de análisis diferencial de la sección 7.3, dos selectores
@@ -749,17 +748,18 @@ de BBR se muestra como "Baskonia").
 ### Arquitectura
 
 ```
-[ Colega ] ──HTTPS──▶ [ Cloudflare Tunnel ] ──▶ [ cloudflared (RPi) ] ──▶ [ Streamlit :8501 (RPi) ]
+[ Colega ] ──HTTPS──▶ [ Cloudflare Tunnel ] ──▶ [ cloudflared (RPi) ] ──▶ [ API :8000 + SPA (RPi) ]
 ```
 
-- **Streamlit** sirve la app en `http://localhost:8501` dentro de la RPi.
+- **API FastAPI** sirve el backend en `http://localhost:8000` dentro de la RPi.
+- **SPA React** (build estático servido por la API o un servidor web).
 - **`cloudflared`** (Cloudflare Tunnel) crea un túnel saliente hacia
   Cloudflare y expone la app con una URL pública `https://<nombre>.trycloudflare.com`
   (o un dominio propio si se configura). No hace falta abrir puertos en el router.
 - El túnel es **gratuito** (plan free de Cloudflare) y da HTTPS automático.
 
 ### Requisitos en la RPi
-- Raspberry Pi con **Docker** (recomendado) o Python 3.10+ instalado.
+- Raspberry Pi con **Docker** (recomendado) o Python 3.10+ y Node.js 18+ instalados.
 - `cloudflared` instalado (binario ARM64).
 
 ### Opción A — Con Docker (recomendada)
@@ -767,7 +767,7 @@ de BBR se muestra como "Baskonia").
 **1. `Dockerfile`** (en la raíz del repo):
 
 ```dockerfile
-FROM python:3.12-slim
+FROM python:3.12-slim AS backend
 
 WORKDIR /app
 
@@ -780,11 +780,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-# Puerto de Streamlit
-EXPOSE 8501
+EXPOSE 8000
 
-# Arranca la app (sin auto-reload, en modo servidor)
-CMD ["streamlit", "run", "app.py", "--server.port=8501", "--server.address=0.0.0.0", "--server.headless=true"]
+CMD ["uvicorn", "apps.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
 ```
 
 **2. `docker-compose.yml`** (opcional, para levantar app + túnel juntos):
@@ -794,14 +792,14 @@ services:
   app:
     build: .
     ports:
-      - "8501:8501"
+      - "8000:8000"
     volumes:
       - ./data:/app/data   # persiste la BD fuera del contenedor
     restart: unless-stopped
 
   tunnel:
     image: cloudflare/cloudflared:latest
-    command: tunnel --no-autoupdate --url http://app:8501
+    command: tunnel --no-autoupdate --url http://app:8000
     depends_on:
       - app
     restart: unless-stopped
@@ -829,16 +827,16 @@ pip install -r requirements.txt
 cp .env.example .env   # ajustar si hace falta
 ```
 
-**2. Servicio `systemd` para Streamlit** (`/etc/systemd/system/baskonia.service`):
+**2. Servicio `systemd` para la API** (`/etc/systemd/system/baskonia.service`):
 
 ```ini
 [Unit]
-Description=Baskonia Pipeline (Streamlit)
+Description=Baskonia Pipeline (API)
 After=network.target
 
 [Service]
 WorkingDirectory=/opt/baskonia-pipeline
-ExecStart=/opt/baskonia-pipeline/.venv/bin/streamlit run app.py --server.port=8501 --server.address=0.0.0.0 --server.headless=true
+ExecStart=/opt/baskonia-pipeline/.venv/bin/uvicorn apps.api.main:app --host 0.0.0.0 --port 8000
 Restart=always
 User=pi
 
@@ -860,7 +858,7 @@ sudo mv cloudflared-linux-arm64 /usr/local/bin/cloudflared
 sudo chmod +x /usr/local/bin/cloudflared
 
 # Probar el túnel (muestra la URL pública)
-cloudflared tunnel --url http://localhost:8501
+cloudflared tunnel --url http://localhost:8000
 ```
 
 Para un túnel persistente con URL estable, configurar un **túnel con nombre**
@@ -870,7 +868,7 @@ servicio `systemd` que lo mantenga levantado.
 ### Notas
 - **Datos**: la BD `data/baskonia.db` debe copiarse a la RPi (o montarse como
   volumen en Docker) para que la app tenga los partidos.
-- **Arquitectura ARM**: la RPi es ARM64; `pandas`/`numpy`/`streamlit` tienen
+- **Arquitectura ARM**: la RPi es ARM64; `pandas`/`numpy` tienen
   wheels para ARM64, así que no debería haber problemas de instalación.
 - **Seguridad**: el túnel `trycloudflare.com` es temporal (la URL cambia al
   reiniciar). Para una URL estable y más control, usar un dominio propio con
@@ -879,8 +877,7 @@ servicio `systemd` que lo mantenga levantado.
 - **Actualización del pipeline**: para que la GUI muestre datos al día, hay
   que ejecutar `python -m apps.ingest.cli` periódicamente en la RPi (tarea
   `cron` o `systemd timer`) — ver "Automatizar la ejecución periódica" en la
-  sección 7. Durante la transición, `python main.py` (puente) sigue
-  funcionando igual.
+  sección 7.
 
 ### Despliegue profesional (app definitiva)
 
@@ -956,7 +953,7 @@ python -m pytest tests/test_parser.py -k "schedule"   # filtrar por test
 - [x] Forma reciente por jugador (medias últimos N partidos) y stats por-36-minutos (`insights.py`).
 - [x] Informe exportable a fichero de texto (`report.py --export`).
 - [x] Validaciones básicas de calidad de datos (resultado vs box score, minutos faltantes).
-- [x] GUI (Streamlit) para usuarios sin conocimientos técnicos (`app.py`).
+- [x] GUI (SPA React + API FastAPI) para usuarios sin conocimientos técnicos.
 - [x] Resolver el equipo rival por su slug real de BBR (extraído del enlace del
       calendario) en vez de adivinarlo normalizando el nombre de display; migra
       automáticamente los equipos ya creados con el slug "falso" de antes de este fix.
@@ -1020,13 +1017,13 @@ python -m pytest tests/test_parser.py -k "schedule"   # filtrar por test
 - [x] Presentación de enfrentamientos anteriores (head-to-head) — pestaña "Partidos anteriores"/"Próximos enfrentamientos" en `app.py`.
 
 **Interfaz de usuario**
-- [x] GUI básica (Streamlit) con tablas y gráficos interactivos (`app.py`).
+- [x] GUI básica (SPA React + API FastAPI) con tablas y gráficos interactivos.
 - [x] GUI centrada en el Baskonia: navegación por cualquier partido anterior y
       calendario de próximos enfrentamientos con scouting bajo demanda del rival.
 - [x] Pestaña "Plantilla": mosaico de fotos de la plantilla actual y ficha por
       jugador (posición, dorsal, forma reciente y de temporada).
-- [ ] Dashboard web "de producto" (framework propio, no Streamlit) si el PoC avanza a producto real.
-- [x] Generación de informes exportables en PDF (`app.py` → `build_pdf_report()`, botón de descarga en la GUI; `report.py --export` sigue disponible para texto plano).
+- [x] Dashboard web de producto (SPA React en `apps/web/` + API FastAPI en `apps/api/`).
+- [x] Generación de informes exportables en PDF (pendiente de reimplementar en la API; `report.py --export` sigue disponible para texto plano).
 
 **Infraestructura**
 - [x] Despliegue documentado en el NAS (Raspberry Pi) con Cloudflare Tunnel (sección 6.1).

@@ -10,7 +10,10 @@ las dos, así la resolución de identidad/carga se escribe una sola vez:
   "home_team": {"id": "...", "name": "..."}, "away_team": {"id": "...", "name": "..."},
   "home_score": 88, "away_score": 82, "pace": 71.2, "narrative": None,
   "team_stats": [{"team_id":.., "efg_pct":.., "ts_pct":.., "tov_pct":.., "orb_pct":..,
-                  "ortg":.., "drtg":..}, ...],
+                  "ortg":.., "drtg":.., "ast_pct":.., "stl_pct":.., "blk_pct":..,
+                  "ft_rate":.., "ast_to_ratio":..}, ...],
+                 # los últimos 5 son opcionales (fieles a 04_team_stats.R de
+                 # OpenACB: S_assist/S_steal/S_blocks/FT_rate/ast_to_ratio).
   "players": [{"player_id":.., "team_id":.., "name":.., "number":.., "position":..,
                "minutes":.., "pts":.., "reb":.., "ast":.., "efg_pct":..}, ...],
   "lineups": [{"team_id":.., "player_ids":[...], "minutes":.., "plus_minus":..}, ...],
@@ -23,6 +26,8 @@ las dos, así la resolución de identidad/carga se escribe una sola vez:
            # del adapter de esa fuente (ver `ingest/acb/parser.py`).
   "events": [{"team_id":.., "quarter":.., "clock":.., "label":..}, ...],
   "score_progression": [{"step":.., "home":.., "away":..}, ...],
+  "quarter_stats": [{"team_id":.., "quarter": 1..4, "points_for":.., "points_against":..}, ...],
+           # opcional, fiel a la parte "quarters" de 09_team_pace.R.
   "starters": {"home": [player_id, ...5], "away": [player_id, ...5]},  # opcional
   "play_by_play": [  # opcional, ids externos (se resuelven con player_lookup)
       {"team_id":.., "type": "sub_in"|"sub_out"|"score", "quarter":.., "clock":..,
@@ -50,6 +55,7 @@ from ingest.common.schema_types import (
     LineupRecord,
     NormalizedGame,
     PlayerGameStat,
+    QuarterStat,
     ScoreStep,
     ShotRecord,
 )
@@ -90,8 +96,18 @@ def parse_and_resolve(conn: Connection, raw: Dict[str, Any], source: str) -> Nor
             team_id=team_lookup[row["team_id"]], efg_pct=row["efg_pct"], ts_pct=row["ts_pct"],
             tov_pct=row["tov_pct"], orb_pct=row["orb_pct"], ortg=row.get("ortg"), drtg=row.get("drtg"),
             net_rating=(row["ortg"] - row["drtg"]) if row.get("ortg") is not None and row.get("drtg") is not None else None,
+            ast_pct=row.get("ast_pct"), stl_pct=row.get("stl_pct"), blk_pct=row.get("blk_pct"),
+            ft_rate=row.get("ft_rate"), ast_to_ratio=row.get("ast_to_ratio"),
         )
         for row in raw.get("team_stats", [])
+    ]
+
+    quarter_stats = [
+        QuarterStat(
+            team_id=team_lookup[row["team_id"]], quarter=row["quarter"],
+            points_for=row["points_for"], points_against=row["points_against"],
+        )
+        for row in raw.get("quarter_stats", [])
     ]
 
     lineups = [
@@ -147,6 +163,7 @@ def parse_and_resolve(conn: Connection, raw: Dict[str, Any], source: str) -> Nor
         shots=shots,
         key_events=key_events,
         score_progression=score_progression,
+        quarter_stats=quarter_stats,
     )
 
 

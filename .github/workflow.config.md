@@ -7,14 +7,16 @@ Adaptador de proyecto para el pipeline agéntico ([AGENTIC_WORKFLOW.md](AGENTIC_
 
 - Producto: PoC de herramienta de scouting para asistentes de entrenador del Baskonia. Pipeline
   de scraping (Basketball-Reference + web oficial baskonia.com) que persiste equipos/jugadores/
-  partidos/box scores/estadísticas avanzadas en SQLite, expuestos vía app Streamlit con
+  partidos/box scores/estadísticas avanzadas en SQLite, expuestos vía SPA React (`apps/web/`)
+  respaldada por una API FastAPI (`apps/api/`) con
   navegación por partidos anteriores, próximos enfrentamientos, plantilla e informes exportables.
 - Plataforma / runtime: Python 3 (venv local en `.venv/`), sin compilación — interpretado. UI con
-  Streamlit; persistencia con SQLAlchemy sobre SQLite (`data/baskonia.db`).
+  React SPA + FastAPI; persistencia con SQLAlchemy sobre SQLite (`data/baskonia.db`).
 - Comunicación / interfaces clave: HTTP contra `basketball-reference.com` (scraping HTML,
   `requests`+`BeautifulSoup`) y contra la API pública JSON de `cms.deportivoalaves.com` (CMS
-  Strapi que usa baskonia.com). Sin API propia expuesta; todo el consumo es interno (CLI `main.py`
-  y la app Streamlit `app.py` leen directamente de la BD vía SQLAlchemy).
+  Strapi que usa baskonia.com). API REST propia (`apps/api/`) consumida por la SPA
+  (`apps/web/`); el pipeline de ingesta (`ingest/`) y el CLI de consulta
+  (`apps/ingest/report.py`) leen directamente de la BD vía SQLAlchemy.
 
 ## Workspace (estructura de repos / carpetas)
 
@@ -25,12 +27,11 @@ Adaptador de proyecto para el pipeline agéntico ([AGENTIC_WORKFLOW.md](AGENTIC_
 | `stats.py` | Cálculo puro de estadísticas avanzadas (eFG%, TS%, posesiones, pace, ORtg/DRtg, Net Rating) — sin red ni sesión de BD, solo funciones sobre dicts/valores |
 | `insights.py` | Agregados sobre datos ya persistidos vía sesión SQLAlchemy (`player_recent_form`, `team_advanced_summary`, `validate_data`) — sin red |
 | `main.py` | Orquestador CLI del pipeline de scraping (`python main.py [--refresh-teams]`) |
-| `app.py` | App Streamlit: `get_session()`, funciones de preparación de datos (`*_df`, devuelven `pandas.DataFrame`) y funciones `render_*_tab()` que dibujan cada pestaña; también genera PDF (`build_pdf_report`) y PPTX (`build_roster_pptx`) |
-| `report.py` | Export a texto plano por CLI (`--export`), alternativa ligera al PDF de `app.py` |
+| `report.py` | Export a texto plano por CLI (`--export`), alternativa ligera al PDF |
 | `config.py` | Configuración centralizada vía `.env` (rutas, rate-limit, temporada, equipos) |
 | `download_logos.py` | Utilidad puntual de descarga de assets, no forma parte del pipeline principal |
 | `data/` | `baskonia.db` (SQLite, con datos reales ya cargados) |
-| `assets/` | Logos/imágenes estáticas usadas por `app.py` |
+| `assets/` | Logos/imágenes estáticas usadas por la SPA |
 
 No hay submódulos ni monorepo: un solo paquete Python plano en la raíz. **Sí es un repositorio
 git** (existe `.git/`, verificado con `git rev-parse --is-inside-work-tree` → `true`). El pipeline
@@ -40,24 +41,24 @@ rollback) cuando aporten valor, sin asumir una convención de commits concreta.
 ## Capas (regla de dependencia, si aplica)
 
 ```
-scraper/  →  db/  →  stats.py / insights.py  →  app.py (UI Streamlit) / report.py / main.py
+scraper/  →  db/  →  stats.py / insights.py  →  apps/api/ (API REST) + apps/web/ (SPA React) / report.py / ingest/
 ```
 
-- `scraper/` no importa nada de `db/`, `stats.py`, `insights.py` ni `app.py` — solo hace HTTP y
+- `scraper/` no importa nada de `db/`, `stats.py`, `insights.py` ni `apps/api/` — solo hace HTTP y
   devuelve estructuras (dicts/listas) planas. Es la única capa con red.
 - `db/` (modelos + upserts) no depende de `scraper/`; recibe dicts ya parseados. No contiene
   lógica de cálculo.
 - `stats.py` es cálculo puro (sin red, sin sesión de BD): recibe valores/dicts, devuelve valores.
-  Reusable desde `main.py` (al persistir) o desde `app.py`/`insights.py` (al mostrar).
+  Reusable desde `ingest/` (al persistir) o desde `apps/api/`/`insights.py` (al mostrar).
 - `insights.py` agrega sobre datos ya persistidos vía sesión SQLAlchemy (`db.models`); no hace
   peticiones de red y no debe importar `scraper/`.
-- `app.py`, `report.py` y `main.py` son las capas "de borde": orquestan sesión + scraper + stats +
-  insights para servir CLI, export o UI. Las nuevas funcionalidades de análisis van en
-  `stats.py`/`insights.py` (cálculo) y se exponen en `app.py` (presentación), nunca al revés.
-- Dominios/capas de trabajo a efectos de paquetes de trabajo (WP) del Architect, ya que este
-  proyecto no tiene especialistas de hardware: **scraping** (`scraper/`), **modelo de datos**
-  (`db/`), **analítica** (`stats.py`/`insights.py`), **UI Streamlit** (`app.py`), **docs**
-  (`README.md`).
+- `apps/api/`, `apps/web/`, `report.py` e `ingest/` son las capas "de borde": orquestan sesión +
+  scraper + stats + insights para servir API, SPA, export o CLI. Las nuevas funcionalidades de
+  análisis van en `stats.py`/`insights.py` (cálculo) y se exponen en `apps/api/` (presentación),
+  nunca al revés.
+- Dominios/capas de trabajo a efectos de paquetes de trabajo (WP) del Architect: **scraping**
+  (`scraper/`), **modelo de datos** (`db/`), **analítica** (`stats.py`/`insights.py`), **API**
+  (`apps/api/`), **SPA** (`apps/web/`), **docs** (`README.md`).
 - Contrato de retorno / manejo de errores: funciones de cálculo devuelven `None` (u `Optional[...]`)
   ante datos insuficientes en vez de lanzar excepción (ver `stats.py`/`insights.py` — patrón
   `if not fga: return None`). El scraping de la fuente no oficial (`baskonia_official.py`) se
@@ -119,9 +120,7 @@ Condición de salida: los imports y `py_compile` no lanzan excepción/`SyntaxErr
    de 7.3 deben reutilizar en vez de reimplementar.
 3. `db/models.py` — esquema real disponible (`Team`, `Player`, `Game`, `BoxScore`,
    `TeamGameStats`) antes de proponer cualquier columna o tabla nueva.
-4. `app.py` — convenciones de la UI: `get_session()`, funciones `*_df()` que devuelven
-   `pandas.DataFrame` y funciones `render_*_tab()` que las pintan; patrón de pestañas
-   (`st.tabs`) y de botones de exportación (PDF/PPTX).
+4. `apps/api/` — API FastAPI: routers, settings, middleware. La SPA (`apps/web/`) la consume.
 5. `scraper/baskonia_official.py` — `fetch_upcoming_games()`, necesaria para la idea de
    "dificultad del próximo tramo de calendario" de 7.3; no se toca su lógica de red, solo se
    consume su salida ya persistida por `main.py` (`persist_schedule`).
@@ -131,7 +130,7 @@ Condición de salida: los imports y `py_compile` no lanzan excepción/`SyntaxErr
 Vacío: este proyecto no tiene agentes de dominio locales en `.github/agents/` (no aplica un roster
 tipo HAL/STM32 — es un pipeline Python plano de un solo paquete). El Feature Developer implementa
 directamente en las capas relevantes (**scraping**, **modelo de datos**, **analítica**,
-**UI Streamlit**, **docs** — ver sección "Capas" arriba), apoyándose en la skill
+**API** (`apps/api/`), **SPA** (`apps/web/`), **docs** — ver sección "Capas" arriba), apoyándose en la skill
 `karpathy-guidelines` al generar código, sin delegar en subagentes de dominio salvo que el
 proyecto crezca y se registren agentes locales.
 

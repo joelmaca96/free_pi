@@ -34,7 +34,7 @@ def create_app() -> FastAPI:
     # Middleware de contexto (request_id, ETag, cache) antes que CORS.
     app.add_middleware(RequestContextMiddleware)
 
-    # CORS para la UI Streamlit y el frontend de desarrollo.
+    # CORS para el frontend de desarrollo.
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,

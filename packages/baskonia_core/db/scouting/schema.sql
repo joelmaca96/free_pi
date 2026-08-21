@@ -98,16 +98,37 @@ CREATE TABLE games (
 -- desacoplado de los partidos concretos (dato de ejemplo inconsistente);
 -- aquí si se registran de verdad van ligados al partido.
 CREATE TABLE game_advanced_stats (
-  game_id     TEXT NOT NULL REFERENCES games(id),
-  team_id     TEXT NOT NULL REFERENCES teams(id),
-  ortg        REAL,
-  drtg        REAL,
-  net_rating  REAL,
-  efg_pct     REAL NOT NULL,
-  ts_pct      REAL NOT NULL,
-  tov_pct     REAL NOT NULL,
-  orb_pct     REAL NOT NULL,
+  game_id       TEXT NOT NULL REFERENCES games(id),
+  team_id       TEXT NOT NULL REFERENCES teams(id),
+  ortg          REAL,
+  drtg          REAL,
+  net_rating    REAL,
+  efg_pct       REAL NOT NULL,
+  ts_pct        REAL NOT NULL,
+  tov_pct       REAL NOT NULL,
+  orb_pct       REAL NOT NULL,
+  -- Extras fieles a los "four factors"/tasas de 04_team_stats.R de OpenACB
+  -- (S_assist/S_steal/S_blocks/FT_rate/ast_to_ratio); nullable porque
+  -- ast_to_ratio es indefinido si el equipo no tuvo pérdidas.
+  ast_pct       REAL,
+  stl_pct       REAL,
+  blk_pct       REAL,
+  ft_rate       REAL,
+  ast_to_ratio  REAL,
   PRIMARY KEY (game_id, team_id)
+);
+
+-- Puntos anotados/encajados por cuarto (fiel a la parte "quarters" de
+-- 09_team_pace.R; los segmentos de 2 minutos y la eficiencia post-tiempo
+-- muerto de ese script necesitan play-by-play con marcas de tiempo, que
+-- ninguna fuente ofrece hoy - fuera de alcance, ver ingest/acb/client.py).
+CREATE TABLE game_team_quarter_stats (
+  game_id         TEXT NOT NULL REFERENCES games(id),
+  team_id         TEXT NOT NULL REFERENCES teams(id),
+  quarter         INTEGER NOT NULL CHECK (quarter BETWEEN 1 AND 4),
+  points_for      INTEGER NOT NULL,
+  points_against  INTEGER NOT NULL,
+  PRIMARY KEY (game_id, team_id, quarter)
 );
 
 -- Boxscore real por partido (hoy generado con ruido aleatorio en el

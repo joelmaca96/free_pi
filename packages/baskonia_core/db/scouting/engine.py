@@ -24,6 +24,7 @@ TABLE_NAMES = [
     "player_external_ids",
     "games",
     "game_advanced_stats",
+    "game_team_quarter_stats",
     "player_game_stats",
     "lineups",
     "lineup_players",

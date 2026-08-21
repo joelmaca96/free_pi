@@ -19,6 +19,12 @@ class GameAdvancedStat:
     ortg: Optional[float] = None
     drtg: Optional[float] = None
     net_rating: Optional[float] = None
+    # Extras fieles a 04_team_stats.R de OpenACB (S_assist/S_steal/S_blocks/FT_rate/ast_to_ratio).
+    ast_pct: Optional[float] = None
+    stl_pct: Optional[float] = None
+    blk_pct: Optional[float] = None
+    ft_rate: Optional[float] = None
+    ast_to_ratio: Optional[float] = None
 
 
 @dataclass
@@ -64,6 +70,16 @@ class ScoreStep:
 
 
 @dataclass
+class QuarterStat:
+    """Puntos anotados/encajados por cuarto (fiel a la parte "quarters" de 09_team_pace.R)."""
+
+    team_id: str
+    quarter: int
+    points_for: int
+    points_against: int
+
+
+@dataclass
 class NormalizedGame:
     id: str
     season_id: int
@@ -81,3 +97,4 @@ class NormalizedGame:
     shots: List[ShotRecord] = field(default_factory=list)
     key_events: List[KeyEvent] = field(default_factory=list)
     score_progression: List[ScoreStep] = field(default_factory=list)
+    quarter_stats: List[QuarterStat] = field(default_factory=list)

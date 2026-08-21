@@ -26,8 +26,9 @@ temporada 2025 / gamecode 7 - Virtus Bologna vs Real Madrid):
   (`"MM:SS"` restantes en el periodo).
 
 `game_advanced_stats` se deriva agregando el boxscore por equipo (eFG%/TS%/
-TOV%/ORB% con las fórmulas estándar); `ortg`/`drtg` quedan `None` (no
-derivables sin posesiones estimadas). `lineups` se reconstruye a partir del
+TOV%/ORB% con las fórmulas estándar; `ortg`/`drtg` con posesiones estimadas
+vía la fórmula Dean Oliver - fiel a `oer`/`der` de `04_team_stats.R`, ver
+`_estimate_possessions`). `lineups` se reconstruye a partir del
 play-by-play (`ingest.common.lineups.reconstruct_lineups`, invocado desde
 `ingest.common.raw_game.parse_and_resolve`) usando `IsStarter` como quinteto
 titular; si no se pasa play-by-play, o ningún jugador viene marcado
@@ -94,20 +95,55 @@ def _team_totals(boxscore_records: list, team_code: str) -> Dict[str, float]:
         "tov": sum(r.get("Turnovers", 0) or 0 for r in rows),
         "orb": sum(r.get("OffensiveRebounds", 0) or 0 for r in rows),
         "drb": sum(r.get("DefensiveRebounds", 0) or 0 for r in rows),
+        "ast": sum(r.get("Assistances", 0) or 0 for r in rows),
+        # Steals/BlocksFavour: nombres de columna ASUMIDOS (no verificados en
+        # vivo, a diferencia del resto de esta función) - si difieren, esto
+        # degrada en silencio a 0 en vez de romper la carga del partido.
+        "stl": sum(r.get("Steals", 0) or 0 for r in rows),
+        "blk": sum(r.get("BlocksFavour", 0) or 0 for r in rows),
     }
 
 
+def _estimate_possessions(totals: Dict[str, float]) -> float:
+    """Posesiones estimadas (fórmula estándar Dean Oliver: FGA - ORB + TOV + 0.44*FTA).
+
+    Igual que en `ingest/acb/adapter.py`: `04_team_stats.R` usa un contador
+    exacto de viajes a la línea (`FT_trip`, del play-by-play) que no
+    tenemos, así que se aproxima con `0.44*FTA` (estándar de boxscore).
+    `ortg`/`drtg` siguen la misma fórmula que `oer`/`der` en
+    `04_team_stats.R`: `puntos / posesiones * 100`.
+    """
+    return totals["fga"] - totals["orb"] + totals["tov"] + 0.44 * totals["fta"]
+
+
 def _advanced_stats_for_team(team_id: str, own: Dict[str, float], opponent: Dict[str, float]) -> Dict[str, Any]:
-    possessions_denom = own["fga"] + 0.44 * own["fta"] + own["tov"]
     efg_pct = round(100 * (own["fgm"] + 0.5 * own["fgm3"]) / own["fga"], 1) if own["fga"] else 0.0
     ts_denom = 2 * (own["fga"] + 0.44 * own["fta"])
     ts_pct = round(100 * own["pts"] / ts_denom, 1) if ts_denom else 0.0
-    tov_pct = round(100 * own["tov"] / possessions_denom, 1) if possessions_denom else 0.0
+    # TOV% de basketball-reference: denominador sin restar ORB (distinto del
+    # estimador de posesiones de partido completo usado para ortg/drtg/pace).
+    tov_denom = own["fga"] + 0.44 * own["fta"] + own["tov"]
+    tov_pct = round(100 * own["tov"] / tov_denom, 1) if tov_denom else 0.0
     orb_denom = own["orb"] + opponent["drb"]
     orb_pct = round(100 * own["orb"] / orb_denom, 1) if orb_denom else 0.0
+
+    own_poss = _estimate_possessions(own)
+    opp_poss = _estimate_possessions(opponent)
+    ortg = round(100 * own["pts"] / own_poss, 1) if own_poss else 0.0
+    drtg = round(100 * opponent["pts"] / opp_poss, 1) if opp_poss else 0.0
+
+    # Extras fieles a 04_team_stats.R: S_assist/S_steal/S_blocks/FT_rate/ast_to_ratio.
+    ast_pct = round(100 * own["ast"] / own["fgm"], 1) if own["fgm"] else 0.0
+    stl_pct = round(100 * own["stl"] / opp_poss, 1) if opp_poss else 0.0
+    blk_pct = round(100 * own["blk"] / opp_poss, 1) if opp_poss else 0.0
+    ft_rate = round(100 * own["ftm"] / own["fga"], 1) if own["fga"] else 0.0
+    ast_to_ratio = round(own["ast"] / own["tov"], 2) if own["tov"] else None
+
     return {
         "team_id": team_id, "efg_pct": efg_pct, "ts_pct": ts_pct, "tov_pct": tov_pct, "orb_pct": orb_pct,
-        "ortg": None, "drtg": None,  # requieren posesiones estimadas por play-by-play, fuera de alcance
+        "ortg": ortg, "drtg": drtg,
+        "ast_pct": ast_pct, "stl_pct": stl_pct, "blk_pct": blk_pct,
+        "ft_rate": ft_rate, "ast_to_ratio": ast_to_ratio,
     }
 
 
@@ -206,6 +242,7 @@ def build_raw_game(
         _advanced_stats_for_team(home_team["id"], home_totals, away_totals),
         _advanced_stats_for_team(away_team["id"], away_totals, home_totals),
     ]
+    pace = round((_estimate_possessions(home_totals) + _estimate_possessions(away_totals)) / 2, 1)
 
     shots = []
     for row in shot_records:
@@ -217,30 +254,3 @@ def build_raw_game(
         x, y = _rescale_shot_coords(float(coord_x), float(coord_y))
         shots.append(
             {
-                "player_id": _clean_id(row["ID_PLAYER"]),
-                "team_id": team_ids_by_code.get(_clean_id(row.get("TEAM", "")), row.get("TEAM")),
-                "x": x,
-                "y": y,
-                "made": made,
-            }
-        )
-
-    return {
-        "game_id": str(metadata["Gamecode"]),
-        "date": _parse_date(metadata["Date"]),
-        "season": int(metadata["Season"]),
-        "competition": COMPETITION_NAME,
-        "home_team": home_team,
-        "away_team": away_team,
-        "home_score": int(metadata["ScoreA"]),
-        "away_score": int(metadata["ScoreB"]),
-        "pace": 0.0,  # no viene en la metadata; requeriría estimarlo por posesiones
-        "narrative": None,
-        "team_stats": team_stats,
-        "players": players,
-        "lineups": [],  # se reconstruyen desde play_by_play si se ha pasado (ver parse_and_resolve)
-        "shots": shots,
-        "events": [],
-        "score_progression": [],
-        "play_by_play": _convert_play_by_play(play_by_play_records or [], team_ids_by_code),
-    }

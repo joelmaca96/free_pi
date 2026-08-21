@@ -36,7 +36,7 @@ class ApiSettings:
         self.database_url: str = os.getenv("API_DATABASE_URL", core_config.DATABASE_URL)
         self.cors_origins: list[str] = [
             o.strip()
-            for o in os.getenv("CORS_ORIGINS", "http://localhost:8501,http://localhost:5173").split(",")
+            for o in os.getenv("CORS_ORIGINS", "http://localhost:5173").split(",")
             if o.strip()
         ]
         self.log_level: str = os.getenv("LOG_LEVEL", "INFO")

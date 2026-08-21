@@ -4,8 +4,7 @@ import { useFilters } from "@/api/hooks";
 
 /**
  * Filtros globales (`season`, `league`, `lastN`) en la query string — única
- * fuente de verdad, persisten al navegar entre pestañas y al recargar en frío
- * (gate de salida F5). Replica los defaults del header de app.py:1049-1069.
+ * fuente de verdad, persisten al navegar entre pestañas y al recargar en frío.
  */
 export function useGlobalFilters(teamSlug: string) {
   const [searchParams, setSearchParams] = useSearchParams();

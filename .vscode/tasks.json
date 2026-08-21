@@ -17,22 +17,6 @@
                 "isDefault": true
             },
             "problemMatcher": []
-        },
-        {
-            "label": "Launch app",
-            "type": "shell",
-            "command": "${workspaceFolder}/.venv/Scripts/python.exe",
-            "args": [
-                "-m",
-                "streamlit",
-                "run",
-                "app.py"
-            ],
-            "options": {
-                "cwd": "${workspaceFolder}"
-            },
-            "isBackground": true,
-            "problemMatcher": []
         }
     ]
 }

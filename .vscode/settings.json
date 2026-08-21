@@ -25,16 +25,6 @@
                 "args": [
                     "Run tests"
                 ]
-            },
-            {
-                "name": "$(rocket) Launch app",
-                "color": "orange",
-                "tooltip": "Lanza la aplicación Streamlit",
-                "useVsCodeApi": true,
-                "command": "workbench.action.tasks.runTask",
-                "args": [
-                    "Launch app"
-                ]
             }
         ]
     }

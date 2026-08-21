@@ -611,12 +611,27 @@ alcance que se dejó fuera para F5).
 
 ---
 
-## Fase F7 — Retirada de Streamlit y limpieza
+## Fase F7 — Retirada de Streamlit y limpieza ✅ (completada 2026-08-21)
 
 **Objetivo:** eliminar la duplicidad. Solo se ejecuta cuando el usuario confirma que la SPA cubre
 su trabajo diario (ver pregunta abierta 3 de [01_design.md](01_design.md)).
 
-**Trabajo:**
+**Ejecución real (diferencias con el plan original):**
+
+- `app.py` se borró definitivamente (`git rm app.py`) en vez de moverlo a `legacy/`. La SPA ya
+  es la única GUI y no hay plan de volver a Streamlit; el historial queda conservado por git.
+- Los módulos puente de la raíz (`config.py`, `stats.py`, `insights.py`, `db/`, `main.py`) ya
+  habían sido retirados en F4. El único artefacto Streamlit restante era `app.py`.
+- `fpdf2`, `python-pptx` y `Pillow` se eliminaron de la raíz sin moverlos a
+  `apps/api/requirements.txt` — la API no los usa (sus endpoints de informes son placeholders 501).
+  La exportación PDF/PPTX queda sin implementar hasta que se haga F6.
+- `tools/parity_api.py` (arnés de paridad API↔Streamlit) se borró; su propósito desaparece al
+  retirar Streamlit. `tools/parity_dump.py` y la línea base `tests/parity/baseline/` se conservan.
+- README actualizado (secciones 2, 6, 6.1, roadmap 7.2).
+- `.github/workflow.config.md` actualizado (identidad, capas, dominios de trabajo).
+- Limpieza de referencias a Streamlit en la API, la SPA y `.vscode/`.
+
+**Trabajo original (plan, para referencia):**
 
 1. `git mv app.py legacy/app_streamlit.py`, con una nota de "no mantenido" en cabecera. Se borra
    definitivamente tras una temporada de uso real.
@@ -626,9 +641,11 @@ su trabajo diario (ver pregunta abierta 3 de [01_design.md](01_design.md)).
    python-pptx y Pillow pasan a `apps/api/requirements.txt`).
 4. Actualizar README: secciones 2 (Arquitectura), 6 (Cómo ejecutar), 6.1 (Despliegue) y 6.2 (Tests).
 
-**Gate de salida:**
-- `grep -r "import streamlit" --include="*.py"` no devuelve nada fuera de `legacy/`.
-- Suite verde; los 4 contenedores levantan; el `cron` sigue produciendo datos frescos.
+**Gate de salida (verificado):**
+- `grep -ri "streamlit"` sobre el repo (excluyendo `.git/`, `.venv/`, `node_modules/`, `local/`)
+  no devuelve nada salvo los docs históricos `01_design.md`, `03_deplyment_design.md` y este
+  registro en `02_migration.md`.
+- Suite `pytest` verde; `npm run build` y `npm test` verdes; smoke import de la API OK.
 
 ---
 
@@ -639,7 +656,10 @@ Es el mecanismo que sostiene la promesa de "no romper nada". Dos scripts:
 | Script | Qué hace | Se usa en |
 |---|---|---|
 | `tools/parity_dump.py` | Vuelca a JSON canónico la salida de las funciones de datos actuales | F0 (crear línea base), F1, F2 (comprobar igualdad estricta) |
-| `tools/parity_api.py` | Llama a los endpoints equivalentes y compara contra la línea base | F3 en adelante |
+
+> `tools/parity_api.py` existía para comparar los endpoints de la API contra la línea base (F3 en
+> adelante). Se eliminó en F7 al retirar Streamlit (su propósito — paridad API↔Streamlit —
+> desapareció).
 
 **Reglas de comparación en `parity_api.py`** (lo que se admite como diferencia y lo que no):
 
