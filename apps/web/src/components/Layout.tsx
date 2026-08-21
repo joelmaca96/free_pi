@@ -31,13 +31,13 @@ export function Layout() {
           <LastNInput value={filters.lastN} onChange={filters.setLastN} />
           <SeasonPicker
             seasons={filters.filtersQuery.data?.seasons ?? []}
-            value={filters.season}
+            value={filters.seasonLabel}
             onChange={filters.setSeason}
           />
           <LeagueSelect
-            leagues={filters.filtersQuery.data?.leagues ?? []}
-            value={filters.league}
-            onChange={filters.setLeague}
+            competitions={filters.filtersQuery.data?.competitions ?? []}
+            value={filters.competition}
+            onChange={filters.setCompetition}
           />
         </div>
       </header>

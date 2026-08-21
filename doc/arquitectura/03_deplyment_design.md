@@ -355,7 +355,7 @@ puntual, asumiendo URL cambiante.
 | Reiniciar la UI | `docker compose restart web` |
 | Actualizar código | `git pull && docker compose up -d --build` (u opción A: `docker compose pull && up -d`) |
 | Backup manual de la BD | `cp data/baskonia.db data/baskonia.db.bak-$(date +%s)` |
-| Verificar calidad del dato | `curl -s http://127.0.0.1:8080/api/v1/admin/data-quality` (= `insights.validate_data`) |
+| Verificar calidad del dato | `curl -s http://127.0.0.1:8080/api/v1/meta/data-freshness` (recuentos de datos; el endpoint `/admin/data-quality` se eliminó en la feature 012) |
 
 **Rollback de un despliegue:** `git checkout <tag-anterior> && docker compose up -d --build`. Las
 imágenes son sin estado; el único estado es `data/baskonia.db`, que no cambia al revertir código.

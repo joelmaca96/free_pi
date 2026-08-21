@@ -13,7 +13,7 @@ export interface paths {
         };
         /**
          * Health
-         * @description Estado de salud de la API (endpoint 1).
+         * @description Estado de salud de la API.
          */
         get: operations["health_api_v1_health_get"];
         put?: never;
@@ -33,7 +33,10 @@ export interface paths {
         };
         /**
          * Data Freshness
-         * @description Frescura de los datos: última fecha de partido y recuentos (endpoint 2).
+         * @description Frescura de los datos: última fecha de partido y recuentos.
+         *
+         *     Recuentos directos sobre el esquema de scouting (seasons/competitions/
+         *     teams/players/games/upcoming_matchups).
          */
         get: operations["data_freshness_api_v1_meta_data_freshness_get"];
         put?: never;
@@ -53,7 +56,7 @@ export interface paths {
         };
         /**
          * List Teams
-         * @description Lista todos los equipos conocidos (endpoint 3).
+         * @description Lista todos los equipos conocidos (id TEXT + nombre + condición de propio).
          */
         get: operations["list_teams_api_v1_teams_get"];
         put?: never;
@@ -64,7 +67,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/teams/{slug}": {
+    "/api/v1/teams/{team_id}": {
         parameters: {
             query?: never;
             header?: never;
@@ -73,9 +76,9 @@ export interface paths {
         };
         /**
          * Get Team Detail
-         * @description Detalle de un equipo por slug (endpoint 4).
+         * @description Detalle de un equipo por id TEXT.
          */
-        get: operations["get_team_detail_api_v1_teams__slug__get"];
+        get: operations["get_team_detail_api_v1_teams__team_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -84,7 +87,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/teams/{slug}/filters": {
+    "/api/v1/teams/{team_id}/filters": {
         parameters: {
             query?: never;
             header?: never;
@@ -93,9 +96,9 @@ export interface paths {
         };
         /**
          * Get Filters
-         * @description Filtros disponibles para un equipo: temporadas y competiciones (endpoint 5).
+         * @description Filtros disponibles para un equipo: temporadas y competiciones.
          */
-        get: operations["get_filters_api_v1_teams__slug__filters_get"];
+        get: operations["get_filters_api_v1_teams__team_id__filters_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -104,7 +107,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/teams/{slug}/summary": {
+    "/api/v1/teams/{team_id}/summary": {
         parameters: {
             query?: never;
             header?: never;
@@ -113,9 +116,9 @@ export interface paths {
         };
         /**
          * Get Summary
-         * @description Resumen del equipo: identidad, filtros y medias avanzadas (endpoint 6).
+         * @description Resumen del equipo: identidad, filtros aplicados y medias avanzadas.
          */
-        get: operations["get_summary_api_v1_teams__slug__summary_get"];
+        get: operations["get_summary_api_v1_teams__team_id__summary_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -124,7 +127,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/teams/{slug}/games": {
+    "/api/v1/teams/{team_id}/games": {
         parameters: {
             query?: never;
             header?: never;
@@ -133,9 +136,112 @@ export interface paths {
         };
         /**
          * List Games
-         * @description Partidos de un equipo (jugados y pendientes), paginados (endpoint 7).
+         * @description Partidos de un equipo (jugados y pendientes), paginados.
          */
-        get: operations["list_games_api_v1_teams__slug__games_get"];
+        get: operations["list_games_api_v1_teams__team_id__games_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/teams/{team_id}/roster": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Roster
+         * @description Plantilla de un equipo para una temporada (por defecto la última).
+         */
+        get: operations["get_roster_api_v1_teams__team_id__roster_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/teams/{team_id}/rating-trend": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Rating Trend
+         * @description Tendencia ORtg/DRtg de un equipo en sus últimos N partidos.
+         */
+        get: operations["get_rating_trend_api_v1_teams__team_id__rating_trend_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/teams/{team_id}/schedule-difficulty": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Schedule Difficulty
+         * @description Dificultad del próximo tramo de calendario (de upcoming_matchups).
+         */
+        get: operations["get_schedule_difficulty_api_v1_teams__team_id__schedule_difficulty_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/teams/{team_id}/narrative": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Narrative
+         * @description Narrativa de scouting derivada de los últimos partidos del equipo.
+         *
+         *     Si no hay datos suficientes, devuelve `narrative: null` (degradado, no
+         *     inventa contenido).
+         */
+        get: operations["get_narrative_api_v1_teams__team_id__narrative_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/games/{game_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Game Detail
+         * @description Detalle completo de un partido (resultado, advanced, lineups, zonas, eventos).
+         */
+        get: operations["get_game_detail_api_v1_games__game_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -153,9 +259,7 @@ export interface paths {
         };
         /**
          * Get Boxscore
-         * @description Box score de un equipo en un partido (endpoint 16).
-         *
-         *     `team_slug` es un query param obligatorio (no va en la ruta).
+         * @description Box score de un partido (filas de ambos equipos, sin filtrar por equipo).
          */
         get: operations["get_boxscore_api_v1_games__game_id__boxscore_get"];
         put?: never;
@@ -166,27 +270,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/teams/{slug}/roster": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Roster
-         * @description Plantilla actual de un equipo con la forma reciente de cada jugador (endpoint 8).
-         */
-        get: operations["get_roster_api_v1_teams__slug__roster_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/teams/{slug}/players/form": {
+    "/api/v1/teams/{team_id}/players/form": {
         parameters: {
             query?: never;
             header?: never;
@@ -195,9 +279,12 @@ export interface paths {
         };
         /**
          * Get Player Form
-         * @description Forma reciente por jugador (endpoint 9).
+         * @description Forma reciente de un jugador (o de todos los de la plantilla si no se da id).
+         *
+         *     Si `player_id` no se da, devuelve la forma del primer jugador de la
+         *     plantilla del equipo (degradado documentado; la SPA debe pasar `player_id`).
          */
-        get: operations["get_player_form_api_v1_teams__slug__players_form_get"];
+        get: operations["get_player_form_api_v1_teams__team_id__players_form_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -206,27 +293,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/teams/{slug}/players/streaks": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Streaks
-         * @description Rachas de los jugadores en una temporada (endpoint 10).
-         */
-        get: operations["get_streaks_api_v1_teams__slug__players_streaks_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/teams/{slug}/players/load": {
+    "/api/v1/teams/{team_id}/players/load": {
         parameters: {
             query?: never;
             header?: never;
@@ -235,9 +302,9 @@ export interface paths {
         };
         /**
          * Get Load
-         * @description Carga de minutos por jugador en la ventana de días (endpoint 11).
+         * @description Carga de minutos por jugador en la ventana de días (transversal).
          */
-        get: operations["get_load_api_v1_teams__slug__players_load_get"];
+        get: operations["get_load_api_v1_teams__team_id__players_load_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -246,7 +313,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/teams/{slug}/schedule-difficulty": {
+    "/api/v1/upcoming-matchups": {
         parameters: {
             query?: never;
             header?: never;
@@ -254,10 +321,10 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Get Schedule Difficulty
-         * @description Dificultad del próximo tramo de calendario (endpoint 12).
+         * List Upcoming Matchups
+         * @description Próximos rivales, ordenados por fecha de partido.
          */
-        get: operations["get_schedule_difficulty_api_v1_teams__slug__schedule_difficulty_get"];
+        get: operations["list_upcoming_matchups_api_v1_upcoming_matchups_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -266,27 +333,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/teams/{slug}/narrative": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Narrative
-         * @description Narrativa de scouting en español (endpoint 13).
-         */
-        get: operations["get_narrative_api_v1_teams__slug__narrative_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/teams/{slug}/matchups/{opponent_slug}/projection": {
+    "/api/v1/teams/{team_id}/matchups/{opponent_id}/projection": {
         parameters: {
             query?: never;
             header?: never;
@@ -295,9 +342,13 @@ export interface paths {
         };
         /**
          * Get Projection
-         * @description Proyección de marcador entre dos equipos (endpoint 14).
+         * @description Proyección de marcador esperado entre dos equipos.
+         *
+         *     Derivada de las tendencias ORtg/DRtg de ambos equipos y del próximo
+         *     enfrentamiento registrado en `upcoming_matchups`. Si no hay datos
+         *     suficientes, `projection` es null (degradado, no inventa).
          */
-        get: operations["get_projection_api_v1_teams__slug__matchups__opponent_slug__projection_get"];
+        get: operations["get_projection_api_v1_teams__team_id__matchups__opponent_id__projection_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -306,7 +357,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/teams/{slug}/matchups/{opponent_slug}/head-to-head": {
+    "/api/v1/teams/{team_id}/matchups/{opponent_id}/head-to-head": {
         parameters: {
             query?: never;
             header?: never;
@@ -315,113 +366,9 @@ export interface paths {
         };
         /**
          * Get Head To Head
-         * @description Enfrentamientos directos entre dos equipos (endpoint 15).
+         * @description Enfrentamientos directos entre dos equipos.
          */
-        get: operations["get_head_to_head_api_v1_teams__slug__matchups__opponent_slug__head_to_head_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/teams/{slug}/reports/scouting.pdf": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Team Report
-         * @description Informe de equipo (endpoint 17) — implementado en F6.
-         */
-        get: operations["team_report_api_v1_teams__slug__reports_scouting_pdf_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/teams/{slug}/reports/roster.pptx": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Matchup Report
-         * @description Informe de enfrentamiento (endpoint 18) — implementado en F6.
-         */
-        get: operations["matchup_report_api_v1_teams__slug__reports_roster_pptx_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/admin/data-quality": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Data Quality
-         * @description Validación de calidad de datos (endpoint 19).
-         */
-        get: operations["data_quality_api_v1_admin_data_quality_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/teams/{slug}/scout": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Latest Scout
-         * @description Último trabajo de scouting de `team`, o `null` si nunca se ha pedido.
-         */
-        get: operations["get_latest_scout_api_v1_teams__slug__scout_get"];
-        put?: never;
-        /**
-         * Enqueue Scout
-         * @description Encola el scouting de `team` (idempotente: si ya hay uno activo, lo devuelve).
-         */
-        post: operations["enqueue_scout_api_v1_teams__slug__scout_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/jobs/{job_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Job
-         * @description Estado de un trabajo de scouting por id (para hacer polling tras encolar).
-         */
-        get: operations["get_job_api_v1_jobs__job_id__get"];
+        get: operations["get_head_to_head_api_v1_teams__team_id__matchups__opponent_id__head_to_head_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -439,38 +386,54 @@ export interface components {
          * @description Medias de estadísticas avanzadas de un equipo (cada clave puede ser null).
          */
         AdvancedSummary: {
-            /** Avg Pace */
-            avg_pace?: number | null;
-            /** Avg Off Rating */
-            avg_off_rating?: number | null;
-            /** Avg Def Rating */
-            avg_def_rating?: number | null;
+            /** Avg Ortg */
+            avg_ortg?: number | null;
+            /** Avg Drtg */
+            avg_drtg?: number | null;
             /** Avg Net Rating */
             avg_net_rating?: number | null;
             /** Avg Efg Pct */
             avg_efg_pct?: number | null;
             /** Avg Ts Pct */
             avg_ts_pct?: number | null;
+            /** Avg Tov Pct */
+            avg_tov_pct?: number | null;
+            /** Avg Orb Pct */
+            avg_orb_pct?: number | null;
+            /** Avg Ast Pct */
+            avg_ast_pct?: number | null;
+            /** Avg Stl Pct */
+            avg_stl_pct?: number | null;
+            /** Avg Blk Pct */
+            avg_blk_pct?: number | null;
+            /** Avg Ft Rate */
+            avg_ft_rate?: number | null;
+            /** Avg Ast To Ratio */
+            avg_ast_to_ratio?: number | null;
+        };
+        /**
+         * BaskoniaBlock
+         * @description Bloque de Baskonia dentro del detalle de partido.
+         */
+        BaskoniaBlock: {
+            /** Is Home */
+            is_home: boolean;
+            /** Opponent Id */
+            opponent_id: string;
+            /** Opponent Name */
+            opponent_name: string;
+            /** Score For */
+            score_for: number;
+            /** Score Against */
+            score_against: number;
         };
         /**
          * BoxScoreResponse
-         * @description Box score de un equipo en un partido.
+         * @description Box score de un partido (filas de ambos equipos).
          */
         BoxScoreResponse: {
             /** Game Id */
-            game_id: number;
-            team: components["schemas"]["TeamRef"];
-            opponent: components["schemas"]["TeamRef"];
-            /** Date */
-            date: string;
-            /** League */
-            league: string;
-            /** Team Score */
-            team_score?: number | null;
-            /** Opponent Score */
-            opponent_score?: number | null;
-            /** Result */
-            result?: string | null;
+            game_id: string;
             /** Rows */
             rows: components["schemas"]["BoxScoreRow"][];
         };
@@ -479,38 +442,32 @@ export interface components {
          * @description Fila de box score de un jugador en un partido.
          */
         BoxScoreRow: {
-            /** Player Name */
-            player_name: string;
+            /** Game Id */
+            game_id: string;
+            /** Player Id */
+            player_id: string;
+            /** Name */
+            name: string;
             /** Minutes */
-            minutes?: string | null;
-            /** Points */
-            points?: number | null;
-            /** Rebounds */
-            rebounds?: number | null;
-            /** Assists */
-            assists?: number | null;
-            /** Steals */
-            steals?: number | null;
-            /** Blocks */
-            blocks?: number | null;
-            /** Turnovers */
-            turnovers?: number | null;
-            /** Fg Made */
-            fg_made?: number | null;
-            /** Fg Attempted */
-            fg_attempted?: number | null;
-            /** Fg3 Made */
-            fg3_made?: number | null;
-            /** Fg3 Attempted */
-            fg3_attempted?: number | null;
-            /** Ft Made */
-            ft_made?: number | null;
-            /** Ft Attempted */
-            ft_attempted?: number | null;
+            minutes?: number | null;
+            /** Pts */
+            pts?: number | null;
+            /** Reb */
+            reb?: number | null;
+            /** Ast */
+            ast?: number | null;
             /** Efg Pct */
             efg_pct?: number | null;
-            /** Ts Pct */
-            ts_pct?: number | null;
+        };
+        /**
+         * CompetitionOption
+         * @description Opción de competición para el selector de filtros.
+         */
+        CompetitionOption: {
+            /** Id */
+            id: number;
+            /** Name */
+            name: string;
         };
         /**
          * DataFreshnessResponse
@@ -521,32 +478,45 @@ export interface components {
             last_game_date: string | null;
             /** Games Total */
             games_total: number;
-            /** Boxscores Total */
-            boxscores_total: number;
+            /** Players Total */
+            players_total: number;
             /** Teams Total */
             teams_total: number;
-        };
-        /**
-         * DataQualityResponse
-         * @description Resultado de la validación de calidad de datos.
-         */
-        DataQualityResponse: {
-            /** Warnings */
-            warnings: string[];
-            /** Healthy */
-            healthy: boolean;
+            /** Upcoming Matchups Total */
+            upcoming_matchups_total: number;
         };
         /**
          * DifficultyOpponent
          * @description Rival considerado en la dificultad de calendario.
          */
         DifficultyOpponent: {
+            /** Opponent Id */
+            opponent_id: string;
             /** Opponent Name */
             opponent_name: string;
-            /** Date */
-            date: string;
-            /** Net Rating */
-            net_rating?: number | null;
+            /** Match Date */
+            match_date: string;
+            /** Is Home */
+            is_home: boolean;
+            /** Predicted Net Rating */
+            predicted_net_rating?: number | null;
+            /** Predicted Pace */
+            predicted_pace?: number | null;
+            /** Predicted Ortg */
+            predicted_ortg?: number | null;
+            /**
+             * Has Scouting Data
+             * @default false
+             */
+            has_scouting_data: boolean;
+            /** Key Player Note */
+            key_player_note?: string | null;
+            /** H2H Wins */
+            h2h_wins?: number | null;
+            /** H2H Losses */
+            h2h_losses?: number | null;
+            /** H2H Last Result */
+            h2h_last_result?: string | null;
         };
         /**
          * FiltersResponse
@@ -554,25 +524,74 @@ export interface components {
          */
         FiltersResponse: {
             /** Seasons */
-            seasons: number[];
+            seasons: string[];
             /** Default Season */
-            default_season: number | null;
-            /** Leagues */
-            leagues: components["schemas"]["LeagueOption"][];
+            default_season: string | null;
+            /** Competitions */
+            competitions: components["schemas"]["CompetitionOption"][];
         };
         /**
          * GameAdvanced
-         * @description Estadísticas avanzadas de un equipo en un partido.
+         * @description Estadísticas avanzadas de un partido (four factors).
          */
         GameAdvanced: {
-            /** Pace */
-            pace?: number | null;
-            /** Off Rating */
-            off_rating?: number | null;
-            /** Def Rating */
-            def_rating?: number | null;
+            /** Ortg */
+            ortg?: number | null;
+            /** Drtg */
+            drtg?: number | null;
             /** Net Rating */
             net_rating?: number | null;
+            /** Efg Pct */
+            efg_pct?: number | null;
+            /** Ts Pct */
+            ts_pct?: number | null;
+            /** Tov Pct */
+            tov_pct?: number | null;
+            /** Orb Pct */
+            orb_pct?: number | null;
+            /** Ast Pct */
+            ast_pct?: number | null;
+            /** Stl Pct */
+            stl_pct?: number | null;
+            /** Blk Pct */
+            blk_pct?: number | null;
+            /** Ft Rate */
+            ft_rate?: number | null;
+            /** Ast To Ratio */
+            ast_to_ratio?: number | null;
+        };
+        /**
+         * GameDetailResponse
+         * @description Detalle completo de un partido.
+         */
+        GameDetailResponse: {
+            /** Id */
+            id: string;
+            /** Season Label */
+            season_label: string;
+            /** Competition Name */
+            competition_name: string;
+            home_team: components["schemas"]["TeamRef"];
+            away_team: components["schemas"]["TeamRef"];
+            /** Game Date */
+            game_date: string;
+            /** Home Score */
+            home_score?: number | null;
+            /** Away Score */
+            away_score?: number | null;
+            /** Pace */
+            pace?: number | null;
+            /** Narrative */
+            narrative?: string | null;
+            baskonia?: components["schemas"]["BaskoniaBlock"] | null;
+            /** Advanced */
+            advanced: components["schemas"]["GameAdvanced"][];
+            /** Lineups */
+            lineups: components["schemas"]["Lineup"][];
+            /** Zone Stats */
+            zone_stats: components["schemas"]["ZoneStat"][];
+            /** Key Events */
+            key_events: components["schemas"]["KeyEvent"][];
         };
         /**
          * GameItem
@@ -580,11 +599,11 @@ export interface components {
          */
         GameItem: {
             /** Id */
-            id: number;
+            id: string;
             /** Date */
             date: string;
-            /** League */
-            league: string;
+            /** Competition Name */
+            competition_name: string;
             /** Is Home */
             is_home: boolean;
             opponent: components["schemas"]["TeamRef"];
@@ -594,14 +613,9 @@ export interface components {
             opponent_score?: number | null;
             /** Result */
             result?: string | null;
-            /** Notes */
-            notes?: string | null;
+            /** Pace */
+            pace?: number | null;
             advanced?: components["schemas"]["GameAdvanced"] | null;
-            /**
-             * Has Boxscore
-             * @default false
-             */
-            has_boxscore: boolean;
         };
         /**
          * GamesResponse
@@ -628,11 +642,11 @@ export interface components {
          */
         HeadToHeadGame: {
             /** Id */
-            id: number;
+            id: string;
             /** Date */
             date: string;
-            /** League */
-            league: string;
+            /** Competition Name */
+            competition_name: string;
             /** Team Score */
             team_score?: number | null;
             /** Opponent Score */
@@ -661,49 +675,46 @@ export interface components {
             version: string;
         };
         /**
-         * JobResponse
-         * @description Estado de un trabajo de scouting encolado desde la SPA.
+         * KeyEvent
+         * @description Evento clave del partido.
          */
-        JobResponse: {
-            /** Id */
-            id: number;
-            team: components["schemas"]["TeamRef"];
-            /** Last N */
-            last_n: number;
-            /** Status */
-            status: string;
-            /** Error */
-            error?: string | null;
-            /** Created At */
-            created_at: string;
-            /** Started At */
-            started_at?: string | null;
-            /** Finished At */
-            finished_at?: string | null;
+        KeyEvent: {
+            /** Team Id */
+            team_id: string;
+            /** Team Name */
+            team_name: string;
+            /** Quarter */
+            quarter?: string | null;
+            /** Game Clock */
+            game_clock?: string | null;
+            /** Label */
+            label?: string | null;
         };
         /**
-         * LeagueOption
-         * @description Opción de competición para el selector de filtros.
+         * Lineup
+         * @description Quinteto con su rendimiento en el partido.
          */
-        LeagueOption: {
-            /** Code */
-            code: string;
-            /** Label */
-            label: string;
+        Lineup: {
+            /** Id */
+            id: number;
+            /** Minutes */
+            minutes?: number | null;
+            /** Plus Minus */
+            plus_minus?: number | null;
+            /** Players */
+            players: components["schemas"]["TeamRef"][];
         };
         /**
          * LoadItem
          * @description Carga de minutos de un jugador en la ventana.
          */
         LoadItem: {
-            /** Player Name */
-            player_name: string;
-            /** Games */
-            games: number;
+            /** Player Id */
+            player_id: string;
+            /** Name */
+            name: string;
             /** Total Minutes */
             total_minutes: number;
-            /** Avg Minutes */
-            avg_minutes: number;
         };
         /**
          * LoadResponse
@@ -712,10 +723,8 @@ export interface components {
         LoadResponse: {
             /** Window Days */
             window_days: number;
-            /** Games In Window */
-            games_in_window: number;
-            /** Note */
-            note: string;
+            /** As Of */
+            as_of: string;
             /** Items */
             items: components["schemas"]["LoadItem"][];
         };
@@ -724,48 +733,36 @@ export interface components {
          * @description Narrativa de scouting (único campo en español de la API).
          */
         NarrativeResponse: {
-            /** Season */
-            season: number;
-            /** League */
-            league?: string | null;
-            /** Recent N */
-            recent_n: number;
+            /** Team Id */
+            team_id: string;
             /** Narrative */
             narrative?: string | null;
         };
         /**
          * PlayerFormItem
-         * @description Fila de forma reciente por jugador (mapeo 1:1 con player_recent_form).
+         * @description Fila de forma reciente de un jugador en un partido.
          */
         PlayerFormItem: {
-            /** Player Name */
-            player_name: string;
-            /** Games */
-            games: number;
-            /** Avg Minutes */
-            avg_minutes?: number | null;
-            /** Avg Pts */
-            avg_pts?: number | null;
-            /** Avg Pts Per36 */
-            avg_pts_per36?: number | null;
-            /** Avg Efg Pct */
-            avg_efg_pct?: number | null;
-            /** Avg Ts Pct */
-            avg_ts_pct?: number | null;
-            /** Avg Plus Minus */
-            avg_plus_minus?: number | null;
-            /** Avg Turnovers */
-            avg_turnovers?: number | null;
-            /** Fg3A Rate */
-            fg3a_rate?: number | null;
-            /** Ft Rate */
-            ft_rate?: number | null;
+            /** Game Id */
+            game_id: string;
+            /** Game Date */
+            game_date: string;
+            /** Pts */
+            pts?: number | null;
+            /** Reb */
+            reb?: number | null;
+            /** Ast */
+            ast?: number | null;
+            /** Efg Pct */
+            efg_pct?: number | null;
         };
         /**
          * PlayerFormResponse
-         * @description Forma reciente por jugador.
+         * @description Forma reciente de un jugador.
          */
         PlayerFormResponse: {
+            /** Player Id */
+            player_id: string;
             /** Last N */
             last_n: number;
             /** Items */
@@ -776,18 +773,14 @@ export interface components {
          * @description Proyección de marcador esperado entre dos equipos.
          */
         Projection: {
-            /** Projected Possessions */
-            projected_possessions: number;
-            /** Team Projected Rating */
-            team_projected_rating: number;
-            /** Opp Projected Rating */
-            opp_projected_rating: number;
-            /** Team Projected Score */
-            team_projected_score: number;
-            /** Opp Projected Score */
-            opp_projected_score: number;
+            /** Predicted Net Rating */
+            predicted_net_rating?: number | null;
+            /** Predicted Pace */
+            predicted_pace?: number | null;
+            /** Predicted Ortg */
+            predicted_ortg?: number | null;
             /** Expected Margin */
-            expected_margin: number;
+            expected_margin?: number | null;
         };
         /**
          * ProjectionResponse
@@ -796,42 +789,83 @@ export interface components {
         ProjectionResponse: {
             team: components["schemas"]["TeamRef"];
             opponent: components["schemas"]["TeamRef"];
-            /** Season */
-            season: number;
             projection?: components["schemas"]["Projection"] | null;
         };
         /**
-         * ReportNotImplemented
-         * @description Respuesta de los endpoints de informes en F3 (se completan en F6).
+         * RatingTrendItem
+         * @description Punto de la tendencia ORtg/DRtg de un equipo.
          */
-        ReportNotImplemented: {
-            /** Detail */
-            detail: string;
+        RatingTrendItem: {
+            /** Game Id */
+            game_id: string;
+            /** Game Date */
+            game_date: string;
+            /** Ortg */
+            ortg?: number | null;
+            /** Drtg */
+            drtg?: number | null;
+        };
+        /**
+         * RatingTrendResponse
+         * @description Tendencia ORtg/DRtg de un equipo en sus últimos N partidos.
+         */
+        RatingTrendResponse: {
+            /** Team Id */
+            team_id: string;
+            /** Last N */
+            last_n: number;
+            /** Items */
+            items: components["schemas"]["RatingTrendItem"][];
         };
         /**
          * RosterPlayer
-         * @description Jugador de la plantilla actual con su forma reciente.
+         * @description Jugador de la plantilla con sus medias de temporada.
          */
         RosterPlayer: {
+            /** Id */
+            id: string;
             /** Name */
             name: string;
             /** Number */
-            number?: string | null;
+            number?: number | null;
             /** Position */
             position?: string | null;
+            /** Team Id */
+            team_id: string;
+            /**
+             * Active
+             * @default true
+             */
+            active: boolean;
             /** Photo Url */
             photo_url?: string | null;
-            /** Form */
-            form?: {
-                [key: string]: unknown;
-            } | null;
+            /** Height Cm */
+            height_cm?: number | null;
+            /** Birth Date */
+            birth_date?: string | null;
+            /** Nationality */
+            nationality?: string | null;
+            /** Gp */
+            gp?: number | null;
+            /** Min Avg */
+            min_avg?: number | null;
+            /** Pts Avg */
+            pts_avg?: number | null;
+            /** Reb Avg */
+            reb_avg?: number | null;
+            /** Ast Avg */
+            ast_avg?: number | null;
+            /** Efg Pct */
+            efg_pct?: number | null;
         };
         /**
          * RosterResponse
-         * @description Plantilla actual de un equipo.
+         * @description Plantilla de un equipo para una temporada.
          */
         RosterResponse: {
             team: components["schemas"]["TeamRef"];
+            /** Season Label */
+            season_label: string;
             /** Players */
             players: components["schemas"]["RosterPlayer"][];
         };
@@ -846,52 +880,8 @@ export interface components {
             opponents_scouted: number;
             /** Avg Opponent Net Rating */
             avg_opponent_net_rating?: number | null;
-            /** League */
-            league?: string | null;
             /** Opponents */
             opponents: components["schemas"]["DifficultyOpponent"][];
-        };
-        /**
-         * StreakItem
-         * @description Racha de un jugador dentro de una temporada.
-         */
-        StreakItem: {
-            /** Player Name */
-            player_name: string;
-            /** Games Season */
-            games_season: number;
-            /** Recent Avg Pts */
-            recent_avg_pts?: number | null;
-            /** Season Avg Pts */
-            season_avg_pts?: number | null;
-            /** Season Std Pts */
-            season_std_pts?: number | null;
-            /** Z Score Pts */
-            z_score_pts?: number | null;
-            /** Recent Avg Ts Pct */
-            recent_avg_ts_pct?: number | null;
-            /** Season Avg Ts Pct */
-            season_avg_ts_pct?: number | null;
-            /** Season Std Ts Pct */
-            season_std_ts_pct?: number | null;
-            /** Z Score Ts */
-            z_score_ts?: number | null;
-            /** Label */
-            label: string;
-        };
-        /**
-         * StreaksResponse
-         * @description Rachas de los jugadores de un equipo en una temporada.
-         */
-        StreaksResponse: {
-            /** Season */
-            season: number;
-            /** Recent N */
-            recent_n: number;
-            /** Min Season Games */
-            min_season_games: number;
-            /** Items */
-            items: components["schemas"]["StreakItem"][];
         };
         /**
          * SummaryResponse
@@ -911,25 +901,59 @@ export interface components {
         };
         /**
          * TeamRef
-         * @description Referencia a un equipo (slug + nombre para mostrar).
+         * @description Referencia a un equipo (id TEXT + nombre para mostrar).
          */
         TeamRef: {
-            /** Slug */
-            slug: string;
+            /** Id */
+            id: string;
             /** Name */
             name: string;
         };
         /**
          * TeamResponse
-         * @description Equipo con su liga de origen.
+         * @description Equipo con su condición de equipo propio.
          */
         TeamResponse: {
-            /** Slug */
-            slug: string;
+            /** Id */
+            id: string;
             /** Name */
             name: string;
-            /** League */
-            league: string;
+            /** Is Own Team */
+            is_own_team: boolean;
+        };
+        /**
+         * UpcomingMatchup
+         * @description Próximo partido de un equipo (de upcoming_matchups).
+         */
+        UpcomingMatchup: {
+            /** Id */
+            id: number;
+            opponent: components["schemas"]["TeamRef"];
+            /** Competition Name */
+            competition_name: string;
+            /** Match Date */
+            match_date: string;
+            /** Is Home */
+            is_home: boolean;
+            /** Predicted Net Rating */
+            predicted_net_rating?: number | null;
+            /** Predicted Pace */
+            predicted_pace?: number | null;
+            /** Predicted Ortg */
+            predicted_ortg?: number | null;
+            /**
+             * Has Scouting Data
+             * @default false
+             */
+            has_scouting_data: boolean;
+            /** Key Player Note */
+            key_player_note?: string | null;
+            /** H2H Wins */
+            h2h_wins?: number | null;
+            /** H2H Losses */
+            h2h_losses?: number | null;
+            /** H2H Last Result */
+            h2h_last_result?: string | null;
         };
         /** ValidationError */
         ValidationError: {
@@ -943,6 +967,24 @@ export interface components {
             input?: unknown;
             /** Context */
             ctx?: Record<string, never>;
+        };
+        /**
+         * ZoneStat
+         * @description Estadística por zona de la cancha.
+         */
+        ZoneStat: {
+            /** Team Id */
+            team_id: string;
+            /** Team Name */
+            team_name: string;
+            /** Zone Id */
+            zone_id: number;
+            /** Label */
+            label: string;
+            /** Fg Pct */
+            fg_pct?: number | null;
+            /** Volume */
+            volume?: number | null;
         };
     };
     responses: never;
@@ -1013,13 +1055,13 @@ export interface operations {
             };
         };
     };
-    get_team_detail_api_v1_teams__slug__get: {
+    get_team_detail_api_v1_teams__team_id__get: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                /** @description Slug del equipo (p.ej. 'vitoria') */
-                slug: string;
+                /** @description Id TEXT del equipo (p.ej. 'bas') */
+                team_id: string;
             };
             cookie?: never;
         };
@@ -1045,13 +1087,13 @@ export interface operations {
             };
         };
     };
-    get_filters_api_v1_teams__slug__filters_get: {
+    get_filters_api_v1_teams__team_id__filters_get: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                /** @description Slug del equipo (p.ej. 'vitoria') */
-                slug: string;
+                /** @description Id TEXT del equipo (p.ej. 'bas') */
+                team_id: string;
             };
             cookie?: never;
         };
@@ -1077,18 +1119,16 @@ export interface operations {
             };
         };
     };
-    get_summary_api_v1_teams__slug__summary_get: {
+    get_summary_api_v1_teams__team_id__summary_get: {
         parameters: {
             query?: {
-                /** @description Año de inicio de temporada (p.ej. 2025) */
-                season?: number | null;
-                /** @description Competición: acb | euroleague | supercopa */
-                league?: string | null;
+                /** @description Etiqueta de temporada (p.ej. '2025-2026') */
+                season_label?: string | null;
             };
             header?: never;
             path: {
-                /** @description Slug del equipo (p.ej. 'vitoria') */
-                slug: string;
+                /** @description Id TEXT del equipo (p.ej. 'bas') */
+                team_id: string;
             };
             cookie?: never;
         };
@@ -1114,20 +1154,18 @@ export interface operations {
             };
         };
     };
-    list_games_api_v1_teams__slug__games_get: {
+    list_games_api_v1_teams__team_id__games_get: {
         parameters: {
             query?: {
                 limit?: number;
                 offset?: number;
-                /** @description Año de inicio de temporada (p.ej. 2025) */
-                season?: number | null;
-                /** @description Competición: acb | euroleague | supercopa */
-                league?: string | null;
+                /** @description Etiqueta de temporada (p.ej. '2025-2026') */
+                season_label?: string | null;
             };
             header?: never;
             path: {
-                /** @description Slug del equipo (p.ej. 'vitoria') */
-                slug: string;
+                /** @description Id TEXT del equipo (p.ej. 'bas') */
+                team_id: string;
             };
             cookie?: never;
         };
@@ -1153,52 +1191,16 @@ export interface operations {
             };
         };
     };
-    get_boxscore_api_v1_games__game_id__boxscore_get: {
-        parameters: {
-            query: {
-                /** @description Slug del equipo cuyo box score se pide */
-                team_slug: string;
-            };
-            header?: never;
-            path: {
-                game_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BoxScoreResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_roster_api_v1_teams__slug__roster_get: {
+    get_roster_api_v1_teams__team_id__roster_get: {
         parameters: {
             query?: {
-                /** @description Año de inicio de temporada (p.ej. 2025) */
-                season?: number | null;
-                /** @description Competición: acb | euroleague | supercopa */
-                league?: string | null;
+                /** @description Etiqueta de temporada (p.ej. '2025-2026') */
+                season_label?: string | null;
             };
             header?: never;
             path: {
-                /** @description Slug del equipo (p.ej. 'vitoria') */
-                slug: string;
+                /** @description Id TEXT del equipo (p.ej. 'bas') */
+                team_id: string;
             };
             cookie?: never;
         };
@@ -1224,19 +1226,15 @@ export interface operations {
             };
         };
     };
-    get_player_form_api_v1_teams__slug__players_form_get: {
+    get_rating_trend_api_v1_teams__team_id__rating_trend_get: {
         parameters: {
             query?: {
                 last_n?: number;
-                /** @description Año de inicio de temporada (p.ej. 2025) */
-                season?: number | null;
-                /** @description Competición: acb | euroleague | supercopa */
-                league?: string | null;
             };
             header?: never;
             path: {
-                /** @description Slug del equipo (p.ej. 'vitoria') */
-                slug: string;
+                /** @description Id TEXT del equipo (p.ej. 'bas') */
+                team_id: string;
             };
             cookie?: never;
         };
@@ -1248,7 +1246,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["PlayerFormResponse"];
+                    "application/json": components["schemas"]["RatingTrendResponse"];
                 };
             };
             /** @description Validation Error */
@@ -1262,92 +1260,15 @@ export interface operations {
             };
         };
     };
-    get_streaks_api_v1_teams__slug__players_streaks_get: {
-        parameters: {
-            query?: {
-                recent_n?: number;
-                min_season_games?: number;
-                /** @description Año de inicio de temporada (p.ej. 2025) */
-                season?: number | null;
-                /** @description Competición: acb | euroleague | supercopa */
-                league?: string | null;
-            };
-            header?: never;
-            path: {
-                /** @description Slug del equipo (p.ej. 'vitoria') */
-                slug: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["StreaksResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_load_api_v1_teams__slug__players_load_get: {
-        parameters: {
-            query?: {
-                window_days?: number;
-            };
-            header?: never;
-            path: {
-                /** @description Slug del equipo (p.ej. 'vitoria') */
-                slug: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["LoadResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_schedule_difficulty_api_v1_teams__slug__schedule_difficulty_get: {
+    get_schedule_difficulty_api_v1_teams__team_id__schedule_difficulty_get: {
         parameters: {
             query?: {
                 next_n?: number;
-                /** @description Año de inicio de temporada (p.ej. 2025) */
-                season?: number | null;
-                /** @description Competición: acb | euroleague | supercopa */
-                league?: string | null;
             };
             header?: never;
             path: {
-                /** @description Slug del equipo (p.ej. 'vitoria') */
-                slug: string;
+                /** @description Id TEXT del equipo (p.ej. 'bas') */
+                team_id: string;
             };
             cookie?: never;
         };
@@ -1373,19 +1294,13 @@ export interface operations {
             };
         };
     };
-    get_narrative_api_v1_teams__slug__narrative_get: {
+    get_narrative_api_v1_teams__team_id__narrative_get: {
         parameters: {
-            query?: {
-                recent_n?: number;
-                /** @description Año de inicio de temporada (p.ej. 2025) */
-                season?: number | null;
-                /** @description Competición: acb | euroleague | supercopa */
-                league?: string | null;
-            };
+            query?: never;
             header?: never;
             path: {
-                /** @description Slug del equipo (p.ej. 'vitoria') */
-                slug: string;
+                /** @description Id TEXT del equipo (p.ej. 'bas') */
+                team_id: string;
             };
             cookie?: never;
         };
@@ -1411,20 +1326,174 @@ export interface operations {
             };
         };
     };
-    get_projection_api_v1_teams__slug__matchups__opponent_slug__projection_get: {
+    get_game_detail_api_v1_games__game_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Id TEXT del partido (p.ej. 'g1') */
+                game_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GameDetailResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_boxscore_api_v1_games__game_id__boxscore_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Id TEXT del partido (p.ej. 'g1') */
+                game_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoxScoreResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_player_form_api_v1_teams__team_id__players_form_get: {
         parameters: {
             query?: {
-                /** @description Año de inicio de temporada (p.ej. 2025) */
-                season?: number | null;
-                /** @description Competición: acb | euroleague | supercopa */
-                league?: string | null;
+                /** @description Id del jugador (opcional) */
+                player_id?: string | null;
+                last_n?: number;
             };
             header?: never;
             path: {
-                /** @description Slug del equipo (p.ej. 'vitoria') */
-                slug: string;
-                /** @description Slug del rival (p.ej. 'bilbao') */
-                opponent_slug: string;
+                /** @description Id TEXT del equipo (p.ej. 'bas') */
+                team_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlayerFormResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_load_api_v1_teams__team_id__players_load_get: {
+        parameters: {
+            query?: {
+                window_days?: number;
+                /** @description Fecha de referencia (ISO-8601) */
+                as_of?: string | null;
+            };
+            header?: never;
+            path: {
+                /** @description Id TEXT del equipo (p.ej. 'bas') */
+                team_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoadResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_upcoming_matchups_api_v1_upcoming_matchups_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpcomingMatchup"][];
+                };
+            };
+        };
+    };
+    get_projection_api_v1_teams__team_id__matchups__opponent_id__projection_get: {
+        parameters: {
+            query?: {
+                /** @description Etiqueta de temporada (p.ej. '2025-2026') */
+                season_label?: string | null;
+            };
+            header?: never;
+            path: {
+                /** @description Id TEXT del rival (p.ej. 'rm') */
+                opponent_id: string;
+                /** @description Id TEXT del equipo (p.ej. 'bas') */
+                team_id: string;
             };
             cookie?: never;
         };
@@ -1450,20 +1519,18 @@ export interface operations {
             };
         };
     };
-    get_head_to_head_api_v1_teams__slug__matchups__opponent_slug__head_to_head_get: {
+    get_head_to_head_api_v1_teams__team_id__matchups__opponent_id__head_to_head_get: {
         parameters: {
             query?: {
-                /** @description Año de inicio de temporada (p.ej. 2025) */
-                season?: number | null;
-                /** @description Competición: acb | euroleague | supercopa */
-                league?: string | null;
+                /** @description Etiqueta de temporada (p.ej. '2025-2026') */
+                season_label?: string | null;
             };
             header?: never;
             path: {
-                /** @description Slug del equipo (p.ej. 'vitoria') */
-                slug: string;
-                /** @description Slug del rival (p.ej. 'bilbao') */
-                opponent_slug: string;
+                /** @description Id TEXT del rival (p.ej. 'rm') */
+                opponent_id: string;
+                /** @description Id TEXT del equipo (p.ej. 'bas') */
+                team_id: string;
             };
             cookie?: never;
         };
@@ -1476,205 +1543,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HeadToHeadResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    team_report_api_v1_teams__slug__reports_scouting_pdf_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Slug del equipo (p.ej. 'vitoria') */
-                slug: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ReportNotImplemented"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-            /** @description Not Implemented */
-            501: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ReportNotImplemented"];
-                };
-            };
-        };
-    };
-    matchup_report_api_v1_teams__slug__reports_roster_pptx_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Slug del equipo (p.ej. 'vitoria') */
-                slug: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ReportNotImplemented"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-            /** @description Not Implemented */
-            501: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ReportNotImplemented"];
-                };
-            };
-        };
-    };
-    data_quality_api_v1_admin_data_quality_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DataQualityResponse"];
-                };
-            };
-        };
-    };
-    get_latest_scout_api_v1_teams__slug__scout_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Slug del equipo (p.ej. 'vitoria') */
-                slug: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["JobResponse"] | null;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    enqueue_scout_api_v1_teams__slug__scout_post: {
-        parameters: {
-            query?: {
-                last_n?: number;
-            };
-            header?: never;
-            path: {
-                /** @description Slug del equipo (p.ej. 'vitoria') */
-                slug: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["JobResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_job_api_v1_jobs__job_id__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                job_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["JobResponse"];
                 };
             };
             /** @description Validation Error */

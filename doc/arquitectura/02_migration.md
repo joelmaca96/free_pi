@@ -258,6 +258,19 @@ vez de duplicarlo.
 
 ## Fase F3 — Backend: `apps/api` (FastAPI)
 
+> ⚠️ **Nota (feature 012, `api-nuevo-modelo-datos`, 2026-08-21):** la API descrita en esta fase
+> (19 endpoints, identidad por `slug`, filtros `season`/`league`, tablas `team_game_stats`/
+> `boxscores` con `off_rating`/`def_rating`, endpoints `jobs`/`reports`/`admin`, excepción
+> `JobNotFound`) se construyó contra el esquema **antiguo** de BBR (`packages/baskonia_core/db/
+> models.py`), que ya no describe las tablas reales de `data/baskonia.db`. La feature 012
+> **reescribió por completo** `apps/api/` contra el esquema de scouting
+> (`packages/baskonia_core/db/scouting/schema.sql` + `ScoutingRepository`): **18 endpoints**,
+> identidad `team_id`/`game_id` **TEXT** (`'bas'`, `'g1'`, `'acb-105370'`…), sin slug, filtros
+> `season_label` (str `'2025-2026'`), boxscore por partido (ambos equipos, sin `team_slug`), y
+> endpoints eliminados `streaks`/`jobs`/`reports`/`admin`. El contrato nuevo vive en
+> `local/features/012-api-nuevo-modelo-datos/01_design.md` y en el `openapi.json` versionado.
+> El texto de esta fase queda como registro histórico del diseño original.
+
 **Objetivo:** que exista una API completa y testeada. **Streamlit sigue siendo la UI y no se toca
 en esta fase.** Ambas conviven leyendo la misma BD a través del mismo dominio.
 
@@ -522,6 +535,12 @@ completada; después, F6 (ver tabla de fases más abajo).
 ---
 
 ### ➕ Adición fuera de alcance: cola de scouting bajo demanda (2026-08-20)
+
+> ⚠️ **Nota (feature 012, `api-nuevo-modelo-datos`, 2026-08-21):** los endpoints de jobs
+> descritos en esta adición (`POST /teams/{slug}/scout`, `GET /teams/{slug}/scout`,
+> `GET /jobs/{id}`) y la excepción `JobNotFound` **se eliminaron** en la feature 012: el esquema
+> de scouting no tiene tabla `ingest_jobs` y el router de jobs se retiró. El texto queda como
+> registro histórico.
 
 **Estado:** ✅ **COMPLETADA** y verificada end-to-end contra `data/baskonia.db` real.
 

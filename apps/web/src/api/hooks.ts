@@ -1,6 +1,5 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { apiClient, ApiError, type ProblemDetails } from "./client";
-import type { components } from "./schema";
 
 /** staleTime generoso: la API ya cachea con ETag + Cache-Control (apps/api/middleware.py). */
 const STALE_TIME_MS = 60_000;
@@ -21,59 +20,58 @@ export function useTeams() {
   });
 }
 
-export function useTeam(slug: string) {
+export function useTeam(teamId: string) {
   return useQuery({
-    queryKey: ["team", slug],
-    queryFn: () => unwrap(apiClient.GET("/api/v1/teams/{slug}", { params: { path: { slug } } })),
-    staleTime: STALE_TIME_MS,
-    enabled: !!slug,
-  });
-}
-
-export function useFilters(slug: string) {
-  return useQuery({
-    queryKey: ["filters", slug],
+    queryKey: ["team", teamId],
     queryFn: () =>
-      unwrap(apiClient.GET("/api/v1/teams/{slug}/filters", { params: { path: { slug } } })),
+      unwrap(apiClient.GET("/api/v1/teams/{team_id}", { params: { path: { team_id: teamId } } })),
     staleTime: STALE_TIME_MS,
-    enabled: !!slug,
+    enabled: !!teamId,
   });
 }
 
-export interface SeasonLeagueFilter {
-  season: number | null;
-  league: string | null;
+export function useFilters(teamId: string) {
+  return useQuery({
+    queryKey: ["filters", teamId],
+    queryFn: () =>
+      unwrap(apiClient.GET("/api/v1/teams/{team_id}/filters", { params: { path: { team_id: teamId } } })),
+    staleTime: STALE_TIME_MS,
+    enabled: !!teamId,
+  });
 }
 
-export function useTeamSummary(slug: string, filter: SeasonLeagueFilter) {
+export interface SeasonFilter {
+  seasonLabel: string | null;
+}
+
+export function useTeamSummary(teamId: string, filter: SeasonFilter) {
   return useQuery({
-    queryKey: ["summary", slug, filter],
+    queryKey: ["summary", teamId, filter],
     queryFn: () =>
       unwrap(
-        apiClient.GET("/api/v1/teams/{slug}/summary", {
-          params: { path: { slug }, query: { season: filter.season, league: filter.league } },
+        apiClient.GET("/api/v1/teams/{team_id}/summary", {
+          params: { path: { team_id: teamId }, query: { season_label: filter.seasonLabel } },
         })
       ),
     staleTime: STALE_TIME_MS,
-    enabled: !!slug,
+    enabled: !!teamId,
   });
 }
 
 export function useTeamGames(
-  slug: string,
-  filter: SeasonLeagueFilter,
+  teamId: string,
+  filter: SeasonFilter,
   opts: { limit?: number; offset?: number } = {}
 ) {
   return useQuery({
-    queryKey: ["games", slug, filter, opts],
+    queryKey: ["games", teamId, filter, opts],
     queryFn: () =>
       unwrap(
-        apiClient.GET("/api/v1/teams/{slug}/games", {
+        apiClient.GET("/api/v1/teams/{team_id}/games", {
           params: {
-            path: { slug },
+            path: { team_id: teamId },
             query: {
-              season: filter.season,
-              league: filter.league,
+              season_label: filter.seasonLabel,
               limit: opts.limit ?? 200,
               offset: opts.offset ?? 0,
             },
@@ -81,219 +79,127 @@ export function useTeamGames(
         })
       ),
     staleTime: STALE_TIME_MS,
-    enabled: !!slug,
+    enabled: !!teamId,
   });
 }
 
-export function useRoster(slug: string, filter: SeasonLeagueFilter) {
+export function useRoster(teamId: string, filter: SeasonFilter) {
   return useQuery({
-    queryKey: ["roster", slug, filter],
+    queryKey: ["roster", teamId, filter],
     queryFn: () =>
       unwrap(
-        apiClient.GET("/api/v1/teams/{slug}/roster", {
-          params: { path: { slug }, query: { season: filter.season, league: filter.league } },
+        apiClient.GET("/api/v1/teams/{team_id}/roster", {
+          params: { path: { team_id: teamId }, query: { season_label: filter.seasonLabel } },
         })
       ),
     staleTime: STALE_TIME_MS,
-    enabled: !!slug,
+    enabled: !!teamId,
   });
 }
 
-export function usePlayerForm(
-  slug: string,
-  filter: SeasonLeagueFilter,
-  lastN: number
-) {
+export function usePlayerForm(teamId: string, filter: SeasonFilter, lastN: number) {
   return useQuery({
-    queryKey: ["playerForm", slug, filter, lastN],
+    queryKey: ["playerForm", teamId, filter, lastN],
     queryFn: () =>
       unwrap(
-        apiClient.GET("/api/v1/teams/{slug}/players/form", {
+        apiClient.GET("/api/v1/teams/{team_id}/players/form", {
           params: {
-            path: { slug },
-            query: { season: filter.season, league: filter.league, last_n: lastN },
+            path: { team_id: teamId },
+            query: { last_n: lastN },
           },
         })
       ),
     staleTime: STALE_TIME_MS,
-    enabled: !!slug,
+    enabled: !!teamId,
   });
 }
 
-export function useStreaks(
-  slug: string,
-  season: number,
-  league: string | null,
-  recentN: number
-) {
+export function usePlayerLoad(teamId: string, windowDays: number) {
   return useQuery({
-    queryKey: ["streaks", slug, season, league, recentN],
+    queryKey: ["playerLoad", teamId, windowDays],
     queryFn: () =>
       unwrap(
-        apiClient.GET("/api/v1/teams/{slug}/players/streaks", {
-          params: { path: { slug }, query: { season, league, recent_n: recentN } },
+        apiClient.GET("/api/v1/teams/{team_id}/players/load", {
+          params: { path: { team_id: teamId }, query: { window_days: windowDays } },
         })
       ),
     staleTime: STALE_TIME_MS,
-    enabled: !!slug && season != null,
+    enabled: !!teamId,
   });
 }
 
-export function usePlayerLoad(slug: string, windowDays: number) {
+export function useNarrative(teamId: string) {
   return useQuery({
-    queryKey: ["playerLoad", slug, windowDays],
+    queryKey: ["narrative", teamId],
     queryFn: () =>
-      unwrap(
-        apiClient.GET("/api/v1/teams/{slug}/players/load", {
-          params: { path: { slug }, query: { window_days: windowDays } },
-        })
-      ),
+      unwrap(apiClient.GET("/api/v1/teams/{team_id}/narrative", { params: { path: { team_id: teamId } } })),
     staleTime: STALE_TIME_MS,
-    enabled: !!slug,
+    enabled: !!teamId,
   });
 }
 
-export function useNarrative(
-  slug: string,
-  season: number,
-  league: string | null,
-  recentN: number
-) {
+export function useScheduleDifficulty(teamId: string, nextN: number) {
   return useQuery({
-    queryKey: ["narrative", slug, season, league, recentN],
+    queryKey: ["scheduleDifficulty", teamId, nextN],
     queryFn: () =>
       unwrap(
-        apiClient.GET("/api/v1/teams/{slug}/narrative", {
-          params: { path: { slug }, query: { season, league, recent_n: recentN } },
+        apiClient.GET("/api/v1/teams/{team_id}/schedule-difficulty", {
+          params: { path: { team_id: teamId }, query: { next_n: nextN } },
         })
       ),
     staleTime: STALE_TIME_MS,
-    enabled: !!slug && season != null,
-  });
-}
-
-export function useScheduleDifficulty(
-  slug: string,
-  filter: SeasonLeagueFilter,
-  nextN: number
-) {
-  return useQuery({
-    queryKey: ["scheduleDifficulty", slug, filter, nextN],
-    queryFn: () =>
-      unwrap(
-        apiClient.GET("/api/v1/teams/{slug}/schedule-difficulty", {
-          params: {
-            path: { slug },
-            query: { season: filter.season, league: filter.league, next_n: nextN },
-          },
-        })
-      ),
-    staleTime: STALE_TIME_MS,
-    enabled: !!slug,
+    enabled: !!teamId,
   });
 }
 
 export function useProjection(
-  slug: string,
-  opponentSlug: string | undefined,
-  season: number,
-  league: string | null
+  teamId: string,
+  opponentId: string | undefined,
+  filter: SeasonFilter
 ) {
   return useQuery({
-    queryKey: ["projection", slug, opponentSlug, season, league],
+    queryKey: ["projection", teamId, opponentId, filter],
     queryFn: () =>
       unwrap(
-        apiClient.GET("/api/v1/teams/{slug}/matchups/{opponent_slug}/projection", {
+        apiClient.GET("/api/v1/teams/{team_id}/matchups/{opponent_id}/projection", {
           params: {
-            path: { slug, opponent_slug: opponentSlug as string },
-            query: { season, league },
+            path: { team_id: teamId, opponent_id: opponentId as string },
+            query: { season_label: filter.seasonLabel },
           },
         })
       ),
     staleTime: STALE_TIME_MS,
-    enabled: !!slug && !!opponentSlug && season != null,
+    enabled: !!teamId && !!opponentId,
   });
 }
 
-export function useHeadToHead(
-  slug: string,
-  opponentSlug: string | undefined,
-  filter: SeasonLeagueFilter
-) {
+export function useHeadToHead(teamId: string, opponentId: string | undefined, filter: SeasonFilter) {
   return useQuery({
-    queryKey: ["headToHead", slug, opponentSlug, filter],
+    queryKey: ["headToHead", teamId, opponentId, filter],
     queryFn: () =>
       unwrap(
-        apiClient.GET("/api/v1/teams/{slug}/matchups/{opponent_slug}/head-to-head", {
+        apiClient.GET("/api/v1/teams/{team_id}/matchups/{opponent_id}/head-to-head", {
           params: {
-            path: { slug, opponent_slug: opponentSlug as string },
-            query: { season: filter.season, league: filter.league },
+            path: { team_id: teamId, opponent_id: opponentId as string },
+            query: { season_label: filter.seasonLabel },
           },
         })
       ),
     staleTime: STALE_TIME_MS,
-    enabled: !!slug && !!opponentSlug,
+    enabled: !!teamId && !!opponentId,
   });
 }
 
-export function useBoxscore(gameId: number | undefined, teamSlug: string | undefined) {
+export function useBoxscore(gameId: string | undefined) {
   return useQuery({
-    queryKey: ["boxscore", gameId, teamSlug],
+    queryKey: ["boxscore", gameId],
     queryFn: () =>
       unwrap(
         apiClient.GET("/api/v1/games/{game_id}/boxscore", {
-          params: {
-            path: { game_id: gameId as number },
-            query: { team_slug: teamSlug as string },
-          },
+          params: { path: { game_id: gameId as string } },
         })
       ),
     staleTime: STALE_TIME_MS,
-    enabled: gameId != null && !!teamSlug,
+    enabled: gameId != null,
   });
-}
-
-export type JobResponse = components["schemas"]["JobResponse"];
-
-const ACTIVE_JOB_STATUSES = new Set(["queued", "running"]);
-
-/** Último job de scouting de `teamSlug`; hace polling mientras esté activo. */
-export function useScoutStatus(teamSlug: string) {
-  return useQuery({
-    queryKey: ["scoutStatus", teamSlug],
-    queryFn: () =>
-      unwrap(apiClient.GET("/api/v1/teams/{slug}/scout", { params: { path: { slug: teamSlug } } })),
-    enabled: !!teamSlug,
-    staleTime: 0,
-    refetchInterval: (query) => {
-      const job = query.state.data as JobResponse | null | undefined;
-      return job && ACTIVE_JOB_STATUSES.has(job.status) ? 2000 : false;
-    },
-  });
-}
-
-/** Encola el scouting de `teamSlug` (idempotente: reutiliza un job activo si ya existe). */
-export function useEnqueueScout(teamSlug: string, lastN: number) {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: () =>
-      unwrap(
-        apiClient.POST("/api/v1/teams/{slug}/scout", {
-          params: { path: { slug: teamSlug }, query: { last_n: lastN } },
-        })
-      ),
-    onSuccess: (job) => {
-      queryClient.setQueryData(["scoutStatus", teamSlug], job);
-    },
-  });
-}
-
-/**
- * Al completarse un job de scouting, invalida las queries de ese equipo para
- * que el panel "Scouting: {rival}" se repinte con los datos recién llegados.
- */
-export function invalidateTeamData(queryClient: ReturnType<typeof useQueryClient>, teamSlug: string) {
-  for (const key of ["roster", "filters", "summary", "games", "playerForm"]) {
-    queryClient.invalidateQueries({ queryKey: [key, teamSlug], exact: false });
-  }
 }

@@ -1,4 +1,4 @@
-"""Schemas de los endpoints de enfrentamientos (difficulty, projection, h2h, narrative)."""
+"""Schemas de los endpoints de enfrentamientos (difficulty, projection, h2h, narrative, upcoming)."""
 from pydantic import BaseModel
 
 from .teams import TeamRef
@@ -7,9 +7,18 @@ from .teams import TeamRef
 class DifficultyOpponent(BaseModel):
     """Rival considerado en la dificultad de calendario."""
 
+    opponent_id: str
     opponent_name: str
-    date: str  # ISO-8601
-    net_rating: float | None = None
+    match_date: str  # ISO-8601
+    is_home: bool
+    predicted_net_rating: float | None = None
+    predicted_pace: float | None = None
+    predicted_ortg: float | None = None
+    has_scouting_data: bool = False
+    key_player_note: str | None = None
+    h2h_wins: int | None = None
+    h2h_losses: int | None = None
+    h2h_last_result: str | None = None
 
 
 class ScheduleDifficultyResponse(BaseModel):
@@ -18,19 +27,16 @@ class ScheduleDifficultyResponse(BaseModel):
     games_considered: int
     opponents_scouted: int
     avg_opponent_net_rating: float | None = None
-    league: str | None = None
     opponents: list[DifficultyOpponent]
 
 
 class Projection(BaseModel):
     """Proyección de marcador esperado entre dos equipos."""
 
-    projected_possessions: float
-    team_projected_rating: float
-    opp_projected_rating: float
-    team_projected_score: float
-    opp_projected_score: float
-    expected_margin: float
+    predicted_net_rating: float | None = None
+    predicted_pace: float | None = None
+    predicted_ortg: float | None = None
+    expected_margin: float | None = None
 
 
 class ProjectionResponse(BaseModel):
@@ -38,16 +44,15 @@ class ProjectionResponse(BaseModel):
 
     team: TeamRef
     opponent: TeamRef
-    season: int
     projection: Projection | None = None
 
 
 class HeadToHeadGame(BaseModel):
     """Un enfrentamiento directo entre dos equipos."""
 
-    id: int
+    id: str
     date: str  # ISO-8601
-    league: str
+    competition_name: str
     team_score: int | None = None
     opponent_score: int | None = None
     result: str | None = None  # "W" | "L" | null
@@ -61,10 +66,26 @@ class HeadToHeadResponse(BaseModel):
     items: list[HeadToHeadGame]
 
 
+class UpcomingMatchup(BaseModel):
+    """Próximo partido de un equipo (de upcoming_matchups)."""
+
+    id: int
+    opponent: TeamRef
+    competition_name: str
+    match_date: str  # ISO-8601
+    is_home: bool
+    predicted_net_rating: float | None = None
+    predicted_pace: float | None = None
+    predicted_ortg: float | None = None
+    has_scouting_data: bool = False
+    key_player_note: str | None = None
+    h2h_wins: int | None = None
+    h2h_losses: int | None = None
+    h2h_last_result: str | None = None
+
+
 class NarrativeResponse(BaseModel):
     """Narrativa de scouting (único campo en español de la API)."""
 
-    season: int
-    league: str | None = None
-    recent_n: int
+    team_id: str
     narrative: str | None = None

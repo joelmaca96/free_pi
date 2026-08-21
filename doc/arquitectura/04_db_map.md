@@ -3,6 +3,14 @@
 > **Fecha:** 2026-08-20
 > **Fuente:** `data/baskonia.db` (SQLite) + `packages/baskonia_core/db/models.py` + migraciones Alembic
 > **Estado:** Análisis de salud y propuesta de mejora
+>
+> ⚠️ **Nota (feature 012, `api-nuevo-modelo-datos`, 2026-08-21):** este análisis describe el
+> esquema **antiguo** de BBR (`packages/baskonia_core/db/models.py`: `teams.slug`, `boxscores`,
+> `team_game_stats` con `off_rating`/`def_rating`, `ingest_jobs`). El esquema real de
+> `data/baskonia.db` es ahora el de **scouting** (`packages/baskonia_core/db/scouting/schema.sql`:
+> PKs TEXT `'bas'`/`'g1'`/`'acb-105370'`, tablas `seasons`/`competitions`/`game_advanced_stats`/
+> `player_game_stats`/`lineups`/`shots`/`upcoming_matchups`…). Este documento queda como registro
+> histórico del análisis sobre el modelo anterior.
 
 ---
 

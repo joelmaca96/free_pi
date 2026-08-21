@@ -1,117 +1,82 @@
-"""Routers de partidos: /teams/{slug}/games y /games/{id}/boxscore."""
-from fastapi import APIRouter, Depends, Query
-from sqlalchemy.orm import Session
+"""Routers de partidos: /games/{game_id} y /games/{game_id}/boxscore.
 
-from packages.baskonia_core.db import models
-from packages.baskonia_core.errors import GameNotFound, TeamNotFound
-from packages.baskonia_core.services.boxscore import _team_stats_for_game, boxscore_rows
-from packages.baskonia_core.services.calendar import past_games, upcoming_games
-from packages.baskonia_core.services.roster import team_by_slug
+Consume exclusivamente `ScoutingRepository` (`get_game_detail`,
+`get_game_boxscore`). No depende del modelo viejo (`models.*`/`services.*`).
+"""
+from fastapi import APIRouter, Depends
+from sqlalchemy import text
+
+from packages.baskonia_core.db.scouting.repository import ScoutingRepository
+from packages.baskonia_core.errors import GameNotFound
 
 from .. import mappers
-from ..deps import get_session, get_team, league_param, season_param
+from ..deps import get_game_id, get_repository
 from ..schemas.games import (
     BoxScoreResponse,
-    BoxScoreRow,
-    GameAdvanced,
-    GamesResponse,
+    GameDetailResponse,
 )
 
 router = APIRouter(tags=["games"])
 
 
-@router.get("/teams/{slug}/games", response_model=GamesResponse)
-def list_games(
-    team: models.Team = Depends(get_team),
-    session: Session = Depends(get_session),
-    season: int | None = Depends(season_param),
-    league: str | None = Depends(league_param),
-    limit: int = Query(50, ge=1, le=200),
-    offset: int = Query(0, ge=0),
-) -> GamesResponse:
-    """Partidos de un equipo (jugados y pendientes), paginados (endpoint 7)."""
-    played = past_games(session, team, season=season, league=league)
-    pending = upcoming_games(session, team)
-    if league is not None:
-        pending = [g for g in pending if g.league == league]
-    if season is not None:
-        pending = [g for g in pending if mappers._iso_date(g.date) is not None]
+@router.get("/games/{game_id}", response_model=GameDetailResponse)
+def get_game_detail(
+    game_id: str = Depends(get_game_id),
+    repo: ScoutingRepository = Depends(get_repository),
+) -> GameDetailResponse:
+    """Detalle completo de un partido (resultado, advanced, lineups, zonas, eventos)."""
+    detail = repo.get_game_detail(game_id)
+    if detail is None:
+        raise GameNotFound(game_id)
 
-    items = []
-    for game in played + pending:
-        item = mappers.game_item(game, team)
-        stats = _team_stats_for_game(session, game.id, team.id)
-        if stats is not None:
-            item.advanced = GameAdvanced(
-                pace=stats.pace,
-                off_rating=stats.off_rating,
-                def_rating=stats.def_rating,
-                net_rating=stats.net_rating,
-            )
-        items.append(item)
+    baskonia = None
+    if detail.get("baskonia") is not None:
+        b = detail["baskonia"]
+        baskonia = {
+            "is_home": b["is_home"],
+            "opponent_id": b["opponent_id"],
+            "opponent_name": b["opponent_name"],
+            "score_for": b["score_for"],
+            "score_against": b["score_against"],
+        }
 
-    total = len(items)
-    return GamesResponse(
-        items=items[offset : offset + limit],
-        total=total,
-        limit=limit,
-        offset=offset,
+    season_label = detail.get("season_label")
+    if season_label is None and detail.get("season_id") is not None:
+        with repo._engine.connect() as conn:
+            season_label = conn.execute(
+                text("SELECT label FROM seasons WHERE id = :sid"),
+                {"sid": detail["season_id"]},
+            ).scalar_one_or_none()
+
+    return GameDetailResponse(
+        id=detail["id"],
+        season_label=season_label or "",
+        competition_name=detail["competition_name"],
+        home_team=mappers.team_ref(detail["home_team_id"], detail["home_team_name"]),
+        away_team=mappers.team_ref(detail["away_team_id"], detail["away_team_name"]),
+        game_date=detail["game_date"],
+        home_score=detail["home_score"],
+        away_score=detail["away_score"],
+        pace=detail.get("pace"),
+        narrative=detail.get("narrative"),
+        baskonia=baskonia,
+        advanced=[mappers.game_advanced(a) for a in detail["advanced"]],
+        lineups=[mappers.lineup(l) for l in detail["lineups"]],
+        zone_stats=[mappers.zone_stat(z) for z in detail["zone_stats"]],
+        key_events=[mappers.key_event(e) for e in detail["key_events"]],
     )
 
 
 @router.get("/games/{game_id}/boxscore", response_model=BoxScoreResponse)
 def get_boxscore(
-    game_id: int,
-    session: Session = Depends(get_session),
-    team_slug: str = Query(..., description="Slug del equipo cuyo box score se pide"),
+    game_id: str = Depends(get_game_id),
+    repo: ScoutingRepository = Depends(get_repository),
 ) -> BoxScoreResponse:
-    """Box score de un equipo en un partido (endpoint 16).
-
-    `team_slug` es un query param obligatorio (no va en la ruta).
-    """
-    team = team_by_slug(session, team_slug)
-    if team is None:
-        raise TeamNotFound(team_slug)
-    game = session.query(models.Game).filter_by(id=game_id).first()
-    if game is None:
+    """Box score de un partido (filas de ambos equipos, sin filtrar por equipo)."""
+    if repo.get_game_detail(game_id) is None:
         raise GameNotFound(game_id)
-
-    is_home = game.home_team_id == team.id
-    opponent = game.away_team if is_home else game.home_team
-    team_score = game.home_score if is_home else game.away_score
-    opp_score = game.away_score if is_home else game.home_score
-
-    rows = []
-    for row in boxscore_rows(session, game_id, team.id):
-        rows.append(
-            BoxScoreRow(
-                player_name=row.player_name,
-                minutes=row.minutes,
-                points=row.points,
-                rebounds=row.rebounds,
-                assists=row.assists,
-                steals=row.steals,
-                blocks=row.blocks,
-                turnovers=row.turnovers,
-                fg_made=row.fg_made,
-                fg_attempted=row.fg_attempted,
-                fg3_made=row.fg3_made,
-                fg3_attempted=row.fg3_attempted,
-                ft_made=row.ft_made,
-                ft_attempted=row.ft_attempted,
-                efg_pct=row.efg_pct,
-                ts_pct=row.ts_pct,
-            )
-        )
-
+    rows = repo.get_game_boxscore(game_id)
     return BoxScoreResponse(
-        game_id=game.id,
-        team=mappers.team_ref(team),
-        opponent=mappers.team_ref(opponent),
-        date=mappers._iso_date(game.date) or game.date,
-        league=game.league,
-        team_score=team_score,
-        opponent_score=opp_score,
-        result=mappers._result_label(game, team),
-        rows=rows,
+        game_id=game_id,
+        rows=[mappers.boxscore_row(r) for r in rows],
     )

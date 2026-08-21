@@ -3,29 +3,28 @@ import { useEffect } from "react";
 import { useFilters } from "@/api/hooks";
 
 /**
- * Filtros globales (`season`, `league`, `lastN`) en la query string — única
- * fuente de verdad, persisten al navegar entre pestañas y al recargar en frío.
+ * Filtros globales (`season_label`, `competition`, `lastN`) en la query string —
+ * única fuente de verdad, persisten al navegar entre pestañas y al recargar en frío.
  */
-export function useGlobalFilters(teamSlug: string) {
+export function useGlobalFilters(teamId: string) {
   const [searchParams, setSearchParams] = useSearchParams();
-  const filtersQuery = useFilters(teamSlug);
+  const filtersQuery = useFilters(teamId);
 
-  const seasonParam = searchParams.get("season");
-  const season = seasonParam != null ? Number(seasonParam) : null;
-  const league = searchParams.get("league");
+  const seasonLabel = searchParams.get("season_label");
+  const competition = searchParams.get("competition");
   const lastNParam = searchParams.get("lastN");
   const lastN = lastNParam != null ? Number(lastNParam) : 5;
 
-  // Si no hay `season` en la URL, se preselecciona `default_season` en cuanto
-  // se conoce.
+  // Si no hay `season_label` en la URL, se preselecciona `default_season` en
+  // cuanto se conoce.
   useEffect(() => {
-    if (seasonParam == null && filtersQuery.data?.default_season != null) {
+    if (seasonLabel == null && filtersQuery.data?.default_season != null) {
       const next = new URLSearchParams(searchParams);
-      next.set("season", String(filtersQuery.data.default_season));
+      next.set("season_label", filtersQuery.data.default_season);
       setSearchParams(next, { replace: true });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [seasonParam, filtersQuery.data?.default_season]);
+  }, [seasonLabel, filtersQuery.data?.default_season]);
 
   function update(patch: Record<string, string | number | null>) {
     const next = new URLSearchParams(searchParams);
@@ -37,11 +36,11 @@ export function useGlobalFilters(teamSlug: string) {
   }
 
   return {
-    season,
-    league,
+    seasonLabel,
+    competition,
     lastN,
-    setSeason: (s: number) => update({ season: s }),
-    setLeague: (l: string | null) => update({ league: l }),
+    setSeason: (s: string) => update({ season_label: s }),
+    setCompetition: (c: string | null) => update({ competition: c }),
     setLastN: (n: number) => update({ lastN: n }),
     filtersQuery,
   };

@@ -1,5 +1,3 @@
-import { seasonLabel } from "@/lib/format";
-
 /** Los 3 controles del header global (app.py:1049-1069), controlados por query string. */
 
 export function SeasonPicker({
@@ -7,9 +5,9 @@ export function SeasonPicker({
   value,
   onChange,
 }: {
-  seasons: number[];
-  value: number | null;
-  onChange: (season: number) => void;
+  seasons: string[];
+  value: string | null;
+  onChange: (season: string) => void;
 }) {
   return (
     <label className="flex flex-col text-xs font-medium text-slate-500">
@@ -17,11 +15,11 @@ export function SeasonPicker({
       <select
         className="mt-0.5 rounded-md border border-slate-300 px-2 py-1 text-sm text-slate-900"
         value={value ?? ""}
-        onChange={(e) => onChange(Number(e.target.value))}
+        onChange={(e) => onChange(e.target.value)}
       >
         {seasons.map((s) => (
           <option key={s} value={s}>
-            {seasonLabel(s)}
+            {s}
           </option>
         ))}
       </select>
@@ -30,13 +28,13 @@ export function SeasonPicker({
 }
 
 export function LeagueSelect({
-  leagues,
+  competitions,
   value,
   onChange,
 }: {
-  leagues: { code: string; label: string }[];
+  competitions: { id: string; name: string }[];
   value: string | null;
-  onChange: (league: string | null) => void;
+  onChange: (competition: string | null) => void;
 }) {
   return (
     <label className="flex flex-col text-xs font-medium text-slate-500">
@@ -47,9 +45,9 @@ export function LeagueSelect({
         onChange={(e) => onChange(e.target.value === "" ? null : e.target.value)}
       >
         <option value="">Todas</option>
-        {leagues.map((l) => (
-          <option key={l.code} value={l.code}>
-            {l.label}
+        {competitions.map((c) => (
+          <option key={c.id} value={c.id}>
+            {c.name}
           </option>
         ))}
       </select>

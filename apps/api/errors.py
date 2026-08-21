@@ -19,7 +19,6 @@ from packages.baskonia_core.errors import (
     DomainError,
     GameNotFound,
     InvalidFilter,
-    JobNotFound,
     TeamNotFound,
 )
 
@@ -30,7 +29,6 @@ _DOMAIN_STATUS = {
     TeamNotFound: (404, "team-not-found", "Equipo no encontrado"),
     GameNotFound: (404, "game-not-found", "Partido no encontrado"),
     InvalidFilter: (400, "invalid-filter", "Filtro no aplicable"),
-    JobNotFound: (404, "job-not-found", "Job no encontrado"),
 }
 
 

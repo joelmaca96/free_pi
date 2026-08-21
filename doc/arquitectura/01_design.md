@@ -262,6 +262,17 @@ pantallas fijas. Es el caso canónico de REST + caché HTTP.
 
 ### 5. Contrato de la API
 
+> ⚠️ **SUPERSEDIDO (feature 012, `api-nuevo-modelo-datos`, 2026-08-21).** El contrato de esta
+> sección (19 endpoints, identidad por `slug`, filtros `season`/`league`, boxscore por equipo con
+> `team_slug`, endpoints `streaks`/`jobs`/`reports`/`admin`) se diseñó contra el esquema antiguo
+> de BBR y **ya no describe la API real**. La feature 012 reescribió `apps/api/` contra el
+> esquema de scouting con **18 endpoints**, identidad `team_id`/`game_id` **TEXT** (`'bas'`,
+> `'g1'`, `'acb-105370'`…), sin slug, filtros `season_label` (str `'2025-2026'`), boxscore por
+> partido (ambos equipos, sin `team_slug`), y endpoints eliminados `streaks`/`jobs`/`reports`/
+> `admin`. El contrato vigente está en
+> `local/features/012-api-nuevo-modelo-datos/01_design.md` y en el `openapi.json` versionado.
+> El texto siguiente queda como registro histórico del diseño original.
+
 Todos los endpoints son `GET` (la API es de solo lectura). Base: `/api/v1`.
 
 #### 5.1 Índice de endpoints

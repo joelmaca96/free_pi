@@ -14,5 +14,6 @@ class DataFreshnessResponse(BaseModel):
 
     last_game_date: str | None
     games_total: int
-    boxscores_total: int
+    players_total: int
     teams_total: int
+    upcoming_matchups_total: int

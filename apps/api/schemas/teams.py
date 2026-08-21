@@ -1,44 +1,50 @@
-"""Schemas de los endpoints de equipos (teams, filters, summary)."""
+"""Schemas de los endpoints de equipos (teams, filters, summary, rating-trend)."""
 from pydantic import BaseModel
 
 
 class TeamRef(BaseModel):
-    """Referencia a un equipo (slug + nombre para mostrar)."""
+    """Referencia a un equipo (id TEXT + nombre para mostrar)."""
 
-    slug: str
+    id: str
     name: str
 
 
 class TeamResponse(TeamRef):
-    """Equipo con su liga de origen."""
+    """Equipo con su condición de equipo propio."""
 
-    league: str
+    is_own_team: bool
 
 
-class LeagueOption(BaseModel):
+class CompetitionOption(BaseModel):
     """Opción de competición para el selector de filtros."""
 
-    code: str
-    label: str
+    id: int
+    name: str
 
 
 class FiltersResponse(BaseModel):
     """Filtros disponibles para un equipo (cabecera de la app)."""
 
-    seasons: list[int]
-    default_season: int | None
-    leagues: list[LeagueOption]
+    seasons: list[str]
+    default_season: str | None
+    competitions: list[CompetitionOption]
 
 
 class AdvancedSummary(BaseModel):
     """Medias de estadísticas avanzadas de un equipo (cada clave puede ser null)."""
 
-    avg_pace: float | None = None
-    avg_off_rating: float | None = None
-    avg_def_rating: float | None = None
+    avg_ortg: float | None = None
+    avg_drtg: float | None = None
     avg_net_rating: float | None = None
     avg_efg_pct: float | None = None
     avg_ts_pct: float | None = None
+    avg_tov_pct: float | None = None
+    avg_orb_pct: float | None = None
+    avg_ast_pct: float | None = None
+    avg_stl_pct: float | None = None
+    avg_blk_pct: float | None = None
+    avg_ft_rate: float | None = None
+    avg_ast_to_ratio: float | None = None
 
 
 class SummaryResponse(BaseModel):
@@ -49,3 +55,20 @@ class SummaryResponse(BaseModel):
     advanced: AdvancedSummary
     games_played: int
     games_upcoming: int
+
+
+class RatingTrendItem(BaseModel):
+    """Punto de la tendencia ORtg/DRtg de un equipo."""
+
+    game_id: str
+    game_date: str
+    ortg: float | None = None
+    drtg: float | None = None
+
+
+class RatingTrendResponse(BaseModel):
+    """Tendencia ORtg/DRtg de un equipo en sus últimos N partidos."""
+
+    team_id: str
+    last_n: int
+    items: list[RatingTrendItem]

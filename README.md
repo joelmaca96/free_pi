@@ -350,8 +350,12 @@ baskonia-pipeline/
         │   └── boxscore.py   # boxscore_rows, _team_stats_for_game
         └── db/
             ├── __init__.py
-            ├── models.py     # SQLAlchemy: teams, players, games, boxscores, team_game_stats
-            └── storage.py    # upserts idempotentes
+            ├── models.py     # SQLAlchemy (esquema BBR antiguo, retirado de la API en la feature 012)
+            ├── storage.py    # upserts idempotentes
+            └── scouting/     # esquema real de data/baskonia.db (feature 012)
+                ├── schema.sql        # PKs TEXT ('bas', 'g1', 'acb-105370'…)
+                ├── engine.py         # create_scouting_engine()
+                └── repository.py     # ScoutingRepository (capa de lectura de la API)
 ```
 
 ### Flujo del pipeline (`apps/ingest/pipeline.py`)
@@ -542,21 +546,44 @@ contrato plano de `scraper/`.
 
 ---
 
-## 5. Modelo de datos (SQLAlchemy)
+## 5. Modelo de datos (esquema de scouting)
+
+> ⚠️ **Cambio de modelo (feature 012, `api-nuevo-modelo-datos`).** El esquema real de
+> `data/baskonia.db` es el de **scouting** (`packages/baskonia_core/db/scouting/schema.sql`),
+> poblado por `ingest/{acb,euroleague,baskonia_web}/` vía `ingest/run_all.py`. El modelo
+> SQLAlchemy antiguo de BBR (`packages/baskonia_core/db/models.py` con `teams.slug`,
+> `boxscores`, `team_game_stats` y `off_rating`/`def_rating`) **ya no describe las tablas
+> reales** y quedó retirado de la API. La capa de lectura canónica es `ScoutingRepository`
+> (`packages/baskonia_core/db/scouting/repository.py`) sobre `create_scouting_engine()`.
 
 | Tabla | Descripción | Campos clave |
 |---|---|---|
-| `teams` | Equipos | `slug` (único), `name`, `league` (liga fija "de referencia" del equipo, `"acb"` para todos hoy; solo se usa como valor de reserva de `games.league` cuando no se puede determinar la competición real de un partido — no representa la competición real de cada partido) |
-| `players` | Jugadores | `name`, `team_id`, `position`, `number`, `photo_url` (solo lo rellena la plantilla oficial de baskonia.com) |
-| `games` | Partidos | `date`, `league` (competición **real** de ese partido concreto — `acb`/`euroleague`/`supercopa`—, capturada del `id` de la tabla de calendario de BBR o del calendario oficial de baskonia.com, no la liga fija del equipo; ver sección 4), `home/away_team_id`, `home/away_score`, `boxscore_url`, `notes` — `home_score`/`away_score`/`boxscore_url` a `NULL` mientras el partido no se haya jugado (calendario pendiente); `notes` guarda anotaciones de BBR como `"Postponed"` (partido aplazado que nunca tendrá resultado en esa fila) |
-| `boxscores` | Stats por jugador y partido | `game_id`, `team_id`, `player_name`, `minutes`, `points`, `rebounds`, `offensive_rebounds`, `defensive_rebounds`, `assists`, `steals`, `blocks`, `turnovers`, `fg/fg3/ft` (made/attempted), `plus_minus`, `efg_pct`, `ts_pct` |
-| `team_game_stats` | Estadísticas avanzadas por equipo y partido | `game_id`, `team_id`, `possessions`, `pace`, `off_rating`, `def_rating`, `net_rating` |
+| `seasons` | Temporadas | `id`, `label` (p.ej. `'2025-2026'`) |
+| `competitions` | Competiciones | `id`, `name` |
+| `teams` | Equipos | `id` **TEXT** (clave canónica: `'bas'`, `'rm'`, `'fcb'`…), `name`, `is_own_team` — **sin `slug`** |
+| `team_external_ids` | Ids externos de equipo | `team_id`, `source`, `external_id` |
+| `court_zones` | Zonas de cancha | `id`, `label` |
+| `players` | Jugadores | `id` TEXT, `name`, `team_id`, `position`, `number`, `photo_url`, `height_cm`, `birth_date`, `nationality` |
+| `player_external_ids` | Ids externos de jugador | `player_id`, `source`, `external_id` |
+| `games` | Partidos | `id` **TEXT** (`'g1'`, `'acb-105370'`…), `season_id`, `competition_id`, `home_team_id`, `away_team_id`, `home_score`, `away_score`, `game_date` |
+| `game_advanced_stats` | Estadísticas avanzadas por equipo y partido | `game_id`, `team_id`, `ortg`, `drtg`, `net_rating`, `efg_pct`, `ts_pct`, `tov_pct`, `orb_pct`, `ast_pct`, `stl_pct`, `blk_pct`, `ft_rate`, `ast_to_ratio` |
+| `game_team_quarter_stats` | Stats por cuarto | `game_id`, `team_id`, `quarter`, `points` |
+| `player_game_stats` | Stats por jugador y partido | `game_id`, `player_id`, `minutes`, `pts`, `reb`, `ast`, `efg_pct`… |
+| `lineups` + `lineup_players` | Quintetos | `id`, `minutes`, `plus_minus`, `players` |
+| `game_zone_stats` | Stats por zona | `game_id`, `team_id`, `zone_id`, `fg_pct`, `volume` |
+| `shots` | Tiros | `game_id`, `player_id`, `zone_id`, `made`, `x`, `y` |
+| `key_events` | Eventos clave | `game_id`, `team_id`, `quarter`, `game_clock`, `label` |
+| `score_progression` | Progresión de marcador | `game_id`, `quarter`, `clock`, `score` |
+| `upcoming_matchups` | Próximos rivales | `id`, `opponent_id`, `competition_id`, `match_date`, `is_home`, `predicted_*` |
 
-- `init_db()` crea el esquema, aplica una migración ligera (`ALTER TABLE ADD COLUMN`
-  para columnas nuevas en tablas SQLite ya existentes) y devuelve una `sessionmaker`.
-- `storage.py` implementa **upserts idempotentes** para todas las entidades.
-- `stats.py` calcula eFG%/TS% (por jugador) y posesiones/pace/ORtg/DRtg/Net Rating
-  (por equipo y partido) — ver fórmulas y simplificaciones asumidas en el propio módulo.
+Vistas de agregación: `player_stats_by_competition`, `player_stats_combined`,
+`team_stats_by_competition`, `team_stats_combined`.
+
+- `create_scouting_engine()` crea el engine; `ScoutingRepository` expone la capa de lectura
+  (`get_roster`, `get_game_detail`, `get_game_boxscore`, `get_player_recent_form`,
+  `get_player_minutes_load`, `get_rating_trend`, `get_games_for_team`, `get_upcoming_matchups`).
+- La API (`apps/api/`) consume **exclusivamente** `ScoutingRepository` — nunca SQL directo ni el
+  ORM antiguo `models.py`.
 
 ---
 
@@ -634,8 +661,22 @@ uvicorn apps.api.main:app --reload
 cd apps/web && npm run dev
 ```
 
+> ⚠️ **Contrato de API nuevo (feature 012, `api-nuevo-modelo-datos`).** La API se reescribió
+> contra el esquema de scouting y su contrato cambió de identidad: `team_id`/`game_id` son
+> **TEXT** (`'bas'`, `'g1'`, `'acb-105370'`…) y se **eliminó el concepto de slug**. Los filtros
+> usan `season_label` (str `'2025-2026'`) en lugar de `season` (int año). El boxscore es **por
+> partido** (filas de ambos equipos con su `team_id`), sin `team_slug`. Se eliminaron los
+> endpoints `streaks`, `jobs`/`scout`, `reports` y `admin/data-quality`. Ver el índice de los 18
+> endpoints en `local/features/012-api-nuevo-modelo-datos/01_design.md` y el `openapi.json`
+> versionado en la raíz.
+>
+> **Desviación aceptada (feature 013):** la SPA **aún no compila** contra el contrato nuevo
+> (`npm run build` falla en las pantallas que usan `slug`/`season`/`league`/endpoints
+> eliminados). La adaptación de pantallas de la SPA al contrato nuevo es trabajo aparte
+> (feature 013); esta feature solo regeneró `apps/web/src/api/schema.d.ts`.
+
 Abre `http://localhost:5173` **centrada en
-el Baskonia** (primer slug de `config.TEAMS`). La cabecera es **global a las
+el Baskonia** (primer `team_id` de `config.TEAMS`). La cabecera es **global a las
 cuatro pestañas**: escudo, selector numérico de N partidos (forma reciente) y,
 desde la feature de análisis diferencial de la sección 7.3, dos selectores
 adicionales — **Temporada** (`season_selector`: temporadas con al menos un
@@ -708,10 +749,10 @@ ventana de días, no de temporada. Cuatro pestañas:
    ambos son el componente `ExportButton` de la SPA
    (`apps/web/src/components/ExportButton.tsx`), que hoy se muestra
    **deshabilitado** con un tooltip — los endpoints de informes de la API
-   (`apps/api/routers/reports.py`, `/reports/scouting.pdf` y
-   `/reports/roster.pptx`) devuelven `501` hasta la fase F6 de la migración
-   (la exportación PDF/PPTX quedó sin implementar al retirar Streamlit y sus
-   dependencias `fpdf2`/`python-pptx`; ver sección 7.2).
+   (`/reports/scouting.pdf` y `/reports/roster.pptx`) **se eliminaron** en la
+   feature 012 (el esquema de scouting no los soporta; la exportación
+   PDF/PPTX quedó sin implementar al retirar Streamlit y sus dependencias
+   `fpdf2`/`python-pptx`; ver sección 7.2).
 
 Todas las fechas se muestran en **castellano** (`format_date_es()` en
 `apps/web/src/lib/format.ts`): BBR guarda las fechas en inglés ("Sun, Nov

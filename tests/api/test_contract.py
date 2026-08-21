@@ -27,13 +27,32 @@ def test_openapi_matches_versioned_contract():
     )
 
 
-def test_contract_has_21_endpoints():
-    """El contrato expone los 19 endpoints del §5.1 (17/18 como 501) más los 2
-    de la cola de scouting bajo demanda (`/teams/{slug}/scout`, `/jobs/{id}`),
-    añadidos fuera del alcance original de F3-F5 (ver doc/arquitectura/02_migration.md).
+def test_contract_has_18_endpoints():
+    """El contrato expone los 18 endpoints de negocio de la feature 012.
+
+    Se eliminaron jobs/reports/admin/streaks/scout (el esquema de scouting no
+    los soporta). Los paths de docs/openapi/redoc no cuentan como negocio.
     """
     spec = create_app().openapi()
     paths = spec["paths"]
-    # paths de negocio + docs/openapi/redoc no cuentan como paths de negocio
-    business_paths = [p for p in paths if not p.endswith(("/docs", "/redoc", "/openapi.json"))]
-    assert len(business_paths) == 21, f"Se esperaban 21 endpoints, hay {len(business_paths)}"
+    business_paths = [
+        p for p in paths if not p.endswith(("/docs", "/redoc", "/openapi.json"))
+    ]
+    assert len(business_paths) == 18, f"Se esperaban 18 endpoints, hay {len(business_paths)}"
+
+
+def test_contract_uses_team_id_and_game_id_text():
+    """El contrato usa `team_id`/`game_id` TEXT (no slug ni game_id numérico)."""
+    spec = create_app().openapi()
+    paths = spec["paths"]
+    # No debe quedar ningún path con {slug} ni {opponent_slug}.
+    assert not any("{slug}" in p or "{opponent_slug}" in p for p in paths)
+    # Debe haber paths con {team_id} y {game_id}.
+    assert any("{team_id}" in p for p in paths)
+    assert any("{game_id}" in p for p in paths)
+    # Endpoints eliminados no deben existir.
+    assert not any("streaks" in p for p in paths)
+    assert not any("reports" in p for p in paths)
+    assert not any("admin" in p for p in paths)
+    assert not any("jobs" in p for p in paths)
+    assert not any("scout" in p for p in paths)

@@ -12,5 +12,5 @@ export function RootRedirect() {
   const first = teamsQuery.data?.[0];
   if (!first) return <ErrorState error={new Error("No hay equipos en la base de datos.")} />;
 
-  return <Navigate to={`/${first.slug}/resumen`} replace />;
+  return <Navigate to={`/${first.id}/resumen`} replace />;
 }

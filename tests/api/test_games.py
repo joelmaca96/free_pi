@@ -1,57 +1,59 @@
-"""Tests de los endpoints de partidos (/games, /boxscore)."""
-from tests.api.conftest import api_played_game, api_teams  # noqa: F401
+"""Tests de los endpoints de partidos: /games/{game_id} y /games/{game_id}/boxscore."""
 
 
-def test_list_games(client, api_played_game, api_teams):
-    """Lista partidos de un equipo con resultado W/L y fecha ISO."""
-    r = client.get("/api/v1/teams/vitoria/games")
+def test_get_game_detail(client):
+    """Detalle completo de un partido (resultado, advanced, lineups, zonas, eventos)."""
+    r = client.get("/api/v1/games/g1")
     assert r.status_code == 200
     body = r.json()
-    assert body["total"] == 1
-    item = body["items"][0]
-    assert item["date"] == "2025-11-23"  # ISO, no BBR
-    assert item["result"] == "W"
-    assert item["team_score"] == 22
-    assert item["opponent"]["slug"] == "bilbao"
-    assert item["advanced"]["net_rating"] == 11.4
-    assert item["has_boxscore"] is True
+    assert body["id"] == "g1"
+    assert body["season_label"] == "2025-2026"
+    assert body["competition_name"] == "Euroliga"
+    assert body["home_team"]["id"] == "bas"
+    assert body["away_team"]["id"] == "rm"
+    assert body["home_score"] == 88
+    assert body["away_score"] == 82
+    assert body["pace"] == 71.2
+
+    # Bloque de conveniencia del Baskonia.
+    assert body["baskonia"]["is_home"] is True
+    assert body["baskonia"]["opponent_id"] == "rm"
+    assert body["baskonia"]["score_for"] == 88
+    assert body["baskonia"]["score_against"] == 82
+
+    # Advanced: una fila por equipo (seed solo tiene 'bas').
+    assert len(body["advanced"]) == 1
+    assert body["advanced"][0]["net_rating"] == 7.8
+
+    # Lineups, zonas y eventos del seed.
+    assert len(body["lineups"]) == 3
+    assert len(body["zone_stats"]) == 6
+    assert len(body["key_events"]) == 4
 
 
-def test_list_games_pagination(client, api_played_game, api_teams):
-    """Paginación con limit/offset."""
-    r = client.get("/api/v1/teams/vitoria/games?limit=1&offset=0")
-    assert r.status_code == 200
-    body = r.json()
-    assert body["total"] == 1
-    assert len(body["items"]) == 1
-
-
-def test_boxscore(client, api_played_game, api_teams):
-    """Box score de un equipo en un partido."""
-    gid = api_played_game.id
-    r = client.get(f"/api/v1/games/{gid}/boxscore?team_slug=vitoria")
-    assert r.status_code == 200
-    body = r.json()
-    assert body["game_id"] == gid
-    assert body["team"]["slug"] == "vitoria"
-    assert body["result"] == "W"
-    assert len(body["rows"]) == 1
-    row = body["rows"][0]
-    assert row["player_name"] == "Markus Howard"
-    assert row["points"] == 22
-    assert row["efg_pct"] == 0.667
-
-
-def test_boxscore_game_not_found(client, api_played_game, api_teams):
+def test_get_game_detail_not_found(client):
     """Partido inexistente → 404 problem+json."""
-    r = client.get("/api/v1/games/99999/boxscore?team_slug=vitoria")
+    r = client.get("/api/v1/games/does-not-exist")
     assert r.status_code == 404
-    assert r.json()["type"].endswith("game-not-found")
+    body = r.json()
+    assert body["type"].endswith("game-not-found")
+    assert body["status"] == 404
 
 
-def test_boxscore_team_not_found(client, api_played_game, api_teams):
-    """Equipo inexistente en boxscore → 404 problem+json."""
-    gid = api_played_game.id
-    r = client.get(f"/api/v1/games/{gid}/boxscore?team_slug=nonexistent")
+def test_get_boxscore(client):
+    """Box score de un partido (filas de ambos equipos, sin filtrar por equipo)."""
+    r = client.get("/api/v1/games/g1/boxscore")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["game_id"] == "g1"
+    assert len(body["rows"]) == 8
+    # Orden por puntos desc: howard (20) primero.
+    assert body["rows"][0]["player_id"] == "howard"
+    assert body["rows"][0]["name"] == "Marcus Howard"
+    assert body["rows"][0]["pts"] == 20
+
+
+def test_get_boxscore_not_found(client):
+    """Box score de un partido inexistente → 404."""
+    r = client.get("/api/v1/games/does-not-exist/boxscore")
     assert r.status_code == 404
-    assert r.json()["type"].endswith("team-not-found")

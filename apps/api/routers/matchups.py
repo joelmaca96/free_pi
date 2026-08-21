@@ -1,115 +1,130 @@
-"""Routers de enfrentamientos: /schedule-difficulty, /narrative, /projection, /head-to-head."""
-from fastapi import APIRouter, Depends, Query
-from sqlalchemy.orm import Session
+"""Routers de enfrentamientos: /projection, /head-to-head, /upcoming-matchups.
 
-from packages.baskonia_core import insights
-from packages.baskonia_core.db import models
-from packages.baskonia_core.services.calendar import upcoming_games
-from packages.baskonia_core.services.matchup import head_to_head_games
+Consume exclusivamente `ScoutingRepository` (`get_upcoming_matchups`,
+`get_games_for_team`, `get_rating_trend`). No depende del modelo viejo
+(`models.*`/`services.*`).
+"""
+from fastapi import APIRouter, Depends, Path
+
+from packages.baskonia_core.db.scouting.repository import ScoutingRepository
+from packages.baskonia_core.errors import TeamNotFound
 
 from .. import mappers
-from ..deps import get_opponent, get_session, get_team, league_param, season_param
+from ..deps import get_repository, get_team_id, season_label_param
 from ..schemas.matchups import (
     HeadToHeadResponse,
-    NarrativeResponse,
     Projection,
     ProjectionResponse,
-    ScheduleDifficultyResponse,
+    UpcomingMatchup,
 )
+from ..schemas.teams import TeamRef
 
 router = APIRouter(tags=["matchups"])
 
 
-@router.get("/teams/{slug}/schedule-difficulty", response_model=ScheduleDifficultyResponse)
-def get_schedule_difficulty(
-    team: models.Team = Depends(get_team),
-    session: Session = Depends(get_session),
-    season: int | None = Depends(season_param),
-    league: str | None = Depends(league_param),
-    next_n: int = Query(5, ge=1, le=20),
-) -> ScheduleDifficultyResponse:
-    """Dificultad del próximo tramo de calendario (endpoint 12)."""
-    if season is None:
-        season = insights.current_season(session, team) or 0
-    result = insights.schedule_difficulty(
-        session, team, upcoming_games(session, team),
-        season=season, next_n=next_n, league=league,
-    )
-    return ScheduleDifficultyResponse(
-        games_considered=result["games_considered"],
-        opponents_scouted=result["opponents_scouted"],
-        avg_opponent_net_rating=result["avg_opponent_net_rating"],
-        league=result["league"],
-        opponents=[mappers.difficulty_opponent(o) for o in result["opponents"]],
-    )
+def _team_exists(repo: ScoutingRepository, team_id: str) -> bool:
+    """Comprueba si existe un equipo con el id dado."""
+    from sqlalchemy import text
+
+    with repo._engine.connect() as conn:
+        row = conn.execute(
+            text("SELECT 1 FROM teams WHERE id = :tid"), {"tid": team_id}
+        ).first()
+    return row is not None
 
 
-@router.get("/teams/{slug}/narrative", response_model=NarrativeResponse)
-def get_narrative(
-    team: models.Team = Depends(get_team),
-    session: Session = Depends(get_session),
-    season: int = Depends(season_param),
-    league: str | None = Depends(league_param),
-    recent_n: int = Query(5, ge=1, le=20),
-) -> NarrativeResponse:
-    """Narrativa de scouting en español (endpoint 13)."""
-    if season is None:
-        season = insights.current_season(session, team) or 0
-    narrative = insights.scouting_narrative(
-        session, team, season=season, recent_n=recent_n, league=league,
-    )
-    return NarrativeResponse(
-        season=season,
-        league=league,
-        recent_n=recent_n,
-        narrative=narrative,
-    )
+def _team_name(repo: ScoutingRepository, team_id: str) -> str | None:
+    """Devuelve el nombre de un equipo (o None si no existe)."""
+    from sqlalchemy import text
+
+    with repo._engine.connect() as conn:
+        return conn.execute(
+            text("SELECT name FROM teams WHERE id = :tid"), {"tid": team_id}
+        ).scalar_one_or_none()
 
 
-@router.get("/teams/{slug}/matchups/{opponent_slug}/projection", response_model=ProjectionResponse)
+@router.get("/upcoming-matchups", response_model=list[UpcomingMatchup])
+def list_upcoming_matchups(
+    repo: ScoutingRepository = Depends(get_repository),
+) -> list[UpcomingMatchup]:
+    """Próximos rivales, ordenados por fecha de partido."""
+    rows = repo.get_upcoming_matchups()
+    return [mappers.upcoming_matchup(r) for r in rows]
+
+
+@router.get(
+    "/teams/{team_id}/matchups/{opponent_id}/projection",
+    response_model=ProjectionResponse,
+)
 def get_projection(
-    team: models.Team = Depends(get_team),
-    opponent: models.Team = Depends(get_opponent),
-    session: Session = Depends(get_session),
-    season: int = Depends(season_param),
-    league: str | None = Depends(league_param),
+    team_id: str = Depends(get_team_id),
+    opponent_id: str = Path(..., description="Id TEXT del rival (p.ej. 'rm')"),
+    repo: ScoutingRepository = Depends(get_repository),
+    season_label: str | None = Depends(season_label_param),
 ) -> ProjectionResponse:
-    """Proyección de marcador entre dos equipos (endpoint 14)."""
-    if season is None:
-        season = insights.current_season(session, team) or 0
-    proj = insights.project_next_matchup(
-        session, team, opponent, season=season, league=league,
-    )
+    """Proyección de marcador esperado entre dos equipos.
+
+    Derivada de las tendencias ORtg/DRtg de ambos equipos y del próximo
+    enfrentamiento registrado en `upcoming_matchups`. Si no hay datos
+    suficientes, `projection` es null (degradado, no inventa).
+    """
+    if not _team_exists(repo, team_id):
+        raise TeamNotFound(team_id)
+    if not _team_exists(repo, opponent_id):
+        raise TeamNotFound(opponent_id)
+
+    team_trend = repo.get_rating_trend(team_id=team_id, last_n=8)
+    opp_trend = repo.get_rating_trend(team_id=opponent_id, last_n=8)
+
+    def _avg(rows, key):
+        vals = [r[key] for r in rows if r.get(key) is not None]
+        return sum(vals) / len(vals) if vals else None
+
+    team_ortg = _avg(team_trend, "ortg")
+    team_drtg = _avg(team_trend, "drtg")
+    opp_ortg = _avg(opp_trend, "ortg")
+    opp_drtg = _avg(opp_trend, "drtg")
+
     projection = None
-    if proj is not None:
+    if team_ortg is not None and opp_drtg is not None and team_drtg is not None and opp_ortg is not None:
+        predicted_net = round((team_ortg - opp_drtg + opp_ortg - team_drtg) / 2, 2)
         projection = Projection(
-            projected_possessions=proj["projected_possessions"],
-            team_projected_rating=proj["team_projected_rating"],
-            opp_projected_rating=proj["opp_projected_rating"],
-            team_projected_score=proj["team_projected_score"],
-            opp_projected_score=proj["opp_projected_score"],
-            expected_margin=proj["team_projected_score"] - proj["opp_projected_score"],
+            predicted_net_rating=predicted_net,
+            predicted_pace=None,
+            predicted_ortg=round((team_ortg + opp_drtg) / 2, 2),
+            expected_margin=predicted_net,
         )
+
     return ProjectionResponse(
-        team=mappers.team_ref(team),
-        opponent=mappers.team_ref(opponent),
-        season=season,
+        team=TeamRef(id=team_id, name=_team_name(repo, team_id) or team_id),
+        opponent=TeamRef(id=opponent_id, name=_team_name(repo, opponent_id) or opponent_id),
         projection=projection,
     )
 
 
-@router.get("/teams/{slug}/matchups/{opponent_slug}/head-to-head", response_model=HeadToHeadResponse)
+@router.get(
+    "/teams/{team_id}/matchups/{opponent_id}/head-to-head",
+    response_model=HeadToHeadResponse,
+)
 def get_head_to_head(
-    team: models.Team = Depends(get_team),
-    opponent: models.Team = Depends(get_opponent),
-    session: Session = Depends(get_session),
-    season: int | None = Depends(season_param),
-    league: str | None = Depends(league_param),
+    team_id: str = Depends(get_team_id),
+    opponent_id: str = Path(..., description="Id TEXT del rival (p.ej. 'rm')"),
+    repo: ScoutingRepository = Depends(get_repository),
+    season_label: str | None = Depends(season_label_param),
 ) -> HeadToHeadResponse:
-    """Enfrentamientos directos entre dos equipos (endpoint 15)."""
-    games = head_to_head_games(session, team, opponent, season=season, league=league)
+    """Enfrentamientos directos entre dos equipos."""
+    if not _team_exists(repo, team_id):
+        raise TeamNotFound(team_id)
+    if not _team_exists(repo, opponent_id):
+        raise TeamNotFound(opponent_id)
+
+    team_games = repo.get_games_for_team(team_id, season_label=season_label)
+    h2h = [
+        g for g in team_games
+        if g["home_team_id"] == opponent_id or g["away_team_id"] == opponent_id
+    ]
     return HeadToHeadResponse(
-        team=mappers.team_ref(team),
-        opponent=mappers.team_ref(opponent),
-        items=[mappers.h2h_game(g, team) for g in games],
+        team=TeamRef(id=team_id, name=_team_name(repo, team_id) or team_id),
+        opponent=TeamRef(id=opponent_id, name=_team_name(repo, opponent_id) or opponent_id),
+        items=[mappers.h2h_game(g, team_id) for g in h2h],
     )

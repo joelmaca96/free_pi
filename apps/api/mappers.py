@@ -1,162 +1,236 @@
-"""Mappers dominio → contrato API.
+"""Mappers repositorio de scouting → contrato API.
 
-Centraliza la conversión de objetos de dominio (`models.*`, dicts de
-`insights.py`/`services`) a los schemas Pydantic del contrato. Aquí viven las
-reglas de representación del §4 de `01_design.md`:
+Centraliza la conversión de los dicts que devuelve `ScoutingRepository`
+(`packages/baskonia_core/db/scouting/repository.py`) a los schemas Pydantic
+del contrato. Aquí viven las reglas de representación del §"Contratos de
+datos" de `local/features/012-api-nuevo-modelo-datos/01_design.md`:
 
-- Fecha BBR (`"Thu, Jan 15, 2026"`) → ISO (`"2026-01-15"`).
-- Resultado `"88-79"` / `"pendiente"` → `"W"` / `"L"` / `null`.
-- Nulos `"-"` / `"n/d"` → `null`.
-- Números como números (sin formatear).
+- Identidad `team_id`/`game_id` TEXT (esquema de scouting).
+- Resultado `"W"` / `"L"` / `null` desde el punto de vista de un equipo.
+- Números como números (sin formatear); `null` para ausencia de dato.
 
 La API no formatea: estos mappers solo normalizan la representación, nunca
 redondean ni convierten a cadenas de presentación.
 """
-from packages.baskonia_core import config
-from packages.baskonia_core.dates import parse_bbr_date
-from packages.baskonia_core.db import models
-from packages.baskonia_core.insights import ZSCORE_COLD_THRESHOLD, ZSCORE_HOT_THRESHOLD
-
 from .schemas import games as games_schemas
-from .schemas import jobs as jobs_schemas
 from .schemas import matchups as matchups_schemas
 from .schemas import players as players_schemas
 from .schemas import teams as teams_schemas
 
 
-def team_ref(team: models.Team) -> teams_schemas.TeamRef:
-    """Convierte un `models.Team` a `TeamRef` (slug + nombre para mostrar)."""
-    return teams_schemas.TeamRef(
-        slug=team.slug,
-        name=config.TEAM_DISPLAY_NAMES.get(team.slug, team.name),
-    )
+def team_ref(team_id: str, name: str) -> teams_schemas.TeamRef:
+    """Convierte un id TEXT + nombre a `TeamRef`."""
+    return teams_schemas.TeamRef(id=team_id, name=name)
 
 
-def _iso_date(date_str: str | None) -> str | None:
-    """Convierte una fecha BBR a ISO-8601, o None si no se puede parsear."""
-    dt = parse_bbr_date(date_str) if date_str else None
-    return dt.date().isoformat() if dt else None
-
-
-def _result_label(game: models.Game, team: models.Team) -> str | None:
-    """Resultado del partido desde el punto de vista de `team`: W/L/null."""
-    is_home = game.home_team_id == team.id
-    team_score = game.home_score if is_home else game.away_score
-    opp_score = game.away_score if is_home else game.home_score
+def _result_label(
+    team_id: str,
+    home_team_id: str,
+    away_team_id: str,
+    home_score: int | None,
+    away_score: int | None,
+) -> str | None:
+    """Resultado del partido desde el punto de vista de `team_id`: W/L/null."""
+    is_home = home_team_id == team_id
+    team_score = home_score if is_home else away_score
+    opp_score = away_score if is_home else home_score
     if team_score is None or opp_score is None:
         return None
     return "W" if team_score > opp_score else "L"
 
 
-def game_item(game: models.Game, team: models.Team) -> games_schemas.GameItem:
-    """Convierte un `models.Game` a `GameItem` desde el punto de vista de `team`."""
-    is_home = game.home_team_id == team.id
-    opponent = game.away_team if is_home else game.home_team
-    team_score = game.home_score if is_home else game.away_score
-    opp_score = game.away_score if is_home else game.home_score
+def game_item(row: dict, team_id: str) -> games_schemas.GameItem:
+    """Convierte una fila de `get_games_for_team` a `GameItem` (vista de `team_id`)."""
+    is_home = row["home_team_id"] == team_id
+    opponent_id = row["away_team_id"] if is_home else row["home_team_id"]
+    opponent_name = row["away_team_name"] if is_home else row["home_team_name"]
+    team_score = row["home_score"] if is_home else row["away_score"]
+    opp_score = row["away_score"] if is_home else row["home_score"]
     return games_schemas.GameItem(
-        id=game.id,
-        date=_iso_date(game.date) or game.date,
-        league=game.league,
+        id=row["game_id"],
+        date=row["game_date"],
+        competition_name=row["competition_name"],
         is_home=is_home,
-        opponent=team_ref(opponent),
+        opponent=team_ref(opponent_id, opponent_name),
         team_score=team_score,
         opponent_score=opp_score,
-        result=_result_label(game, team),
-        notes=game.notes,
-        advanced=None,  # se rellena en el router con _team_stats_for_game
-        has_boxscore=game.boxscore_url is not None,
+        result=_result_label(
+            team_id, row["home_team_id"], row["away_team_id"],
+            row["home_score"], row["away_score"],
+        ),
+        pace=row.get("pace"),
+        advanced=None,
     )
 
 
-def streak_label(z_score_pts: float | None) -> str:
-    """Etiqueta de racha a partir del z-score de PTS (regla de negocio)."""
-    if z_score_pts is None:
-        return "neutral"
-    if z_score_pts >= ZSCORE_HOT_THRESHOLD:
-        return "hot"
-    if z_score_pts <= ZSCORE_COLD_THRESHOLD:
-        return "cold"
-    return "neutral"
+def boxscore_row(row: dict) -> games_schemas.BoxScoreRow:
+    """Convierte una fila de `get_game_boxscore` a `BoxScoreRow`."""
+    return games_schemas.BoxScoreRow(
+        game_id=row["game_id"],
+        player_id=row["player_id"],
+        name=row["name"],
+        minutes=row["minutes"],
+        pts=row["pts"],
+        reb=row["reb"],
+        ast=row["ast"],
+        efg_pct=row["efg_pct"],
+    )
 
 
-def streak_item(row: dict) -> players_schemas.StreakItem:
-    """Convierte una fila de `player_form_zscore` a `StreakItem`."""
-    return players_schemas.StreakItem(
-        player_name=row["player_name"],
-        games_season=row["games_season"],
-        recent_avg_pts=row["recent_avg_pts"],
-        season_avg_pts=row["season_avg_pts"],
-        season_std_pts=row["season_std_pts"],
-        z_score_pts=row["z_score_pts"],
-        recent_avg_ts_pct=row["recent_avg_ts_pct"],
-        season_avg_ts_pct=row["season_avg_ts_pct"],
-        season_std_ts_pct=row["season_std_ts_pct"],
-        z_score_ts=row["z_score_ts"],
-        label=streak_label(row["z_score_pts"]),
+def game_advanced(row: dict) -> games_schemas.GameAdvanced:
+    """Convierte una fila de `game_advanced_stats` a `GameAdvanced`."""
+    return games_schemas.GameAdvanced(
+        ortg=row.get("ortg"),
+        drtg=row.get("drtg"),
+        net_rating=row.get("net_rating"),
+        efg_pct=row.get("efg_pct"),
+        ts_pct=row.get("ts_pct"),
+        tov_pct=row.get("tov_pct"),
+        orb_pct=row.get("orb_pct"),
+        ast_pct=row.get("ast_pct"),
+        stl_pct=row.get("stl_pct"),
+        blk_pct=row.get("blk_pct"),
+        ft_rate=row.get("ft_rate"),
+        ast_to_ratio=row.get("ast_to_ratio"),
+    )
+
+
+def lineup(row: dict) -> games_schemas.Lineup:
+    """Convierte una fila de lineups (con `players`) a `Lineup`."""
+    return games_schemas.Lineup(
+        id=row["id"],
+        minutes=row.get("minutes"),
+        plus_minus=row.get("plus_minus"),
+        players=[team_ref(p["id"], p["name"]) for p in row.get("players", [])],
+    )
+
+
+def zone_stat(row: dict) -> games_schemas.ZoneStat:
+    """Convierte una fila de `game_zone_stats` a `ZoneStat`."""
+    return games_schemas.ZoneStat(
+        team_id=row["team_id"],
+        team_name=row["team_name"],
+        zone_id=row["zone_id"],
+        label=row["label"],
+        fg_pct=row.get("fg_pct"),
+        volume=row.get("volume"),
+    )
+
+
+def key_event(row: dict) -> games_schemas.KeyEvent:
+    """Convierte una fila de `key_events` a `KeyEvent`."""
+    return games_schemas.KeyEvent(
+        team_id=row["team_id"],
+        team_name=row["team_name"],
+        quarter=row.get("quarter"),
+        game_clock=row.get("game_clock"),
+        label=row.get("label"),
+    )
+
+
+def roster_player(row: dict) -> players_schemas.RosterPlayer:
+    """Convierte una fila de `get_roster` a `RosterPlayer`."""
+    return players_schemas.RosterPlayer(
+        id=row["id"],
+        name=row["name"],
+        number=row.get("number"),
+        position=row.get("position"),
+        team_id=row["team_id"],
+        active=bool(row.get("active", 1)),
+        photo_url=row.get("photo_url"),
+        height_cm=row.get("height_cm"),
+        birth_date=row.get("birth_date"),
+        nationality=row.get("nationality"),
+        gp=row.get("gp"),
+        min_avg=row.get("min_avg"),
+        pts_avg=row.get("pts_avg"),
+        reb_avg=row.get("reb_avg"),
+        ast_avg=row.get("ast_avg"),
+        efg_pct=row.get("efg_pct"),
     )
 
 
 def form_item(row: dict) -> players_schemas.PlayerFormItem:
-    """Convierte una fila de `player_recent_form` a `PlayerFormItem`."""
+    """Convierte una fila de `get_player_recent_form` a `PlayerFormItem`."""
     return players_schemas.PlayerFormItem(
-        player_name=row["player_name"],
-        games=row["games"],
-        avg_minutes=row["avg_minutes"],
-        avg_pts=row["avg_pts"],
-        avg_pts_per36=row["avg_pts_per36"],
-        avg_efg_pct=row["avg_efg_pct"],
-        avg_ts_pct=row["avg_ts_pct"],
-        avg_plus_minus=row["avg_plus_minus"],
-        avg_turnovers=row["avg_turnovers"],
-        fg3a_rate=row["fg3a_rate"],
-        ft_rate=row["ft_rate"],
+        game_id=row["game_id"],
+        game_date=row["game_date"],
+        pts=row.get("pts"),
+        reb=row.get("reb"),
+        ast=row.get("ast"),
+        efg_pct=row.get("efg_pct"),
     )
 
 
-def load_item(row: dict) -> players_schemas.LoadItem:
-    """Convierte una fila de `player_load` a `LoadItem`."""
+def load_item(player_id: str, name: str, total_minutes: float) -> players_schemas.LoadItem:
+    """Construye un `LoadItem` a partir de un jugador y su carga de minutos."""
     return players_schemas.LoadItem(
-        player_name=row["player_name"],
-        games=row["games"],
-        total_minutes=row["total_minutes"],
-        avg_minutes=row["avg_minutes"],
+        player_id=player_id,
+        name=name,
+        total_minutes=total_minutes,
+    )
+
+
+def rating_trend_item(row: dict) -> teams_schemas.RatingTrendItem:
+    """Convierte una fila de `get_rating_trend` a `RatingTrendItem`."""
+    return teams_schemas.RatingTrendItem(
+        game_id=row["game_id"],
+        game_date=row["game_date"],
+        ortg=row.get("ortg"),
+        drtg=row.get("drtg"),
     )
 
 
 def difficulty_opponent(row: dict) -> matchups_schemas.DifficultyOpponent:
-    """Convierte una fila de `schedule_difficulty` a `DifficultyOpponent`."""
+    """Convierte una fila de `get_upcoming_matchups` a `DifficultyOpponent`."""
     return matchups_schemas.DifficultyOpponent(
+        opponent_id=row["opponent_team_id"],
         opponent_name=row["opponent_name"],
-        date=_iso_date(row["date"]) or row["date"],
-        net_rating=row["net_rating"],
+        match_date=row["match_date"],
+        is_home=bool(row.get("is_home", 0)),
+        predicted_net_rating=row.get("predicted_net_rating"),
+        predicted_pace=row.get("predicted_pace"),
+        predicted_ortg=row.get("predicted_ortg"),
+        has_scouting_data=bool(row.get("has_scouting_data", 0)),
+        key_player_note=row.get("key_player_note"),
+        h2h_wins=row.get("h2h_wins"),
+        h2h_losses=row.get("h2h_losses"),
+        h2h_last_result=row.get("h2h_last_result"),
     )
 
 
-def h2h_game(game: models.Game, team: models.Team) -> matchups_schemas.HeadToHeadGame:
-    """Convierte un `models.Game` a `HeadToHeadGame` desde el punto de vista de `team`."""
-    is_home = game.home_team_id == team.id
-    team_score = game.home_score if is_home else game.away_score
-    opp_score = game.away_score if is_home else game.home_score
+def upcoming_matchup(row: dict) -> matchups_schemas.UpcomingMatchup:
+    """Convierte una fila de `get_upcoming_matchups` a `UpcomingMatchup`."""
+    return matchups_schemas.UpcomingMatchup(
+        id=row["id"],
+        opponent=team_ref(row["opponent_team_id"], row["opponent_name"]),
+        competition_name=row["competition_name"],
+        match_date=row["match_date"],
+        is_home=bool(row.get("is_home", 0)),
+        predicted_net_rating=row.get("predicted_net_rating"),
+        predicted_pace=row.get("predicted_pace"),
+        predicted_ortg=row.get("predicted_ortg"),
+        has_scouting_data=bool(row.get("has_scouting_data", 0)),
+        key_player_note=row.get("key_player_note"),
+        h2h_wins=row.get("h2h_wins"),
+        h2h_losses=row.get("h2h_losses"),
+        h2h_last_result=row.get("h2h_last_result"),
+    )
+
+
+def h2h_game(row: dict, team_id: str) -> matchups_schemas.HeadToHeadGame:
+    """Convierte una fila de `get_games_for_team` a `HeadToHeadGame` (vista de `team_id`)."""
+    is_home = row["home_team_id"] == team_id
+    team_score = row["home_score"] if is_home else row["away_score"]
+    opp_score = row["away_score"] if is_home else row["home_score"]
     return matchups_schemas.HeadToHeadGame(
-        id=game.id,
-        date=_iso_date(game.date) or game.date,
-        league=game.league,
+        id=row["game_id"],
+        date=row["game_date"],
+        competition_name=row["competition_name"],
         team_score=team_score,
         opponent_score=opp_score,
-        result=_result_label(game, team),
-    )
-
-
-def job_ref(job: models.IngestJob) -> jobs_schemas.JobResponse:
-    """Convierte un `models.IngestJob` a `JobResponse`."""
-    return jobs_schemas.JobResponse(
-        id=job.id,
-        team=team_ref(job.team),
-        last_n=job.last_n,
-        status=job.status,
-        error=job.error,
-        created_at=job.created_at.isoformat(),
-        started_at=job.started_at.isoformat() if job.started_at else None,
-        finished_at=job.finished_at.isoformat() if job.finished_at else None,
+        result=_result_label(
+            team_id, row["home_team_id"], row["away_team_id"],
+            row["home_score"], row["away_score"],
+        ),
     )

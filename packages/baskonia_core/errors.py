@@ -14,17 +14,17 @@ class DomainError(Exception):
 
 
 class TeamNotFound(DomainError):
-    """No existe ningún equipo con el slug solicitado."""
+    """No existe ningún equipo con el id solicitado."""
 
-    def __init__(self, slug: str):
-        self.slug = slug
-        super().__init__(f"No existe ningún equipo con slug '{slug}'.")
+    def __init__(self, team_id: int | str):
+        self.team_id = team_id
+        super().__init__(f"No existe ningún equipo con id '{team_id}'.")
 
 
 class GameNotFound(DomainError):
     """No existe ningún partido con el id solicitado."""
 
-    def __init__(self, game_id: int):
+    def __init__(self, game_id: int | str):
         self.game_id = game_id
         super().__init__(f"No existe ningún partido con id '{game_id}'.")
 
