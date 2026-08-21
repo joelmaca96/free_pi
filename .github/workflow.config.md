@@ -87,9 +87,7 @@ scraper/  →  db/  →  stats.py / insights.py  →  apps/api/ (API REST) + app
 .venv/Scripts/python.exe -c "import app, main, stats, insights, report, config"   # smoke import de todos los módulos de borde
 ```
 
-Condición de salida: los imports y `py_compile` no lanzan excepción/`SyntaxError`. Para cambios en
-`app.py`, verificación adicional manual recomendada (no automatizable sin navegador):
-`.venv/Scripts/python.exe -m streamlit run app.py` y comprobar visualmente la pestaña afectada.
+Condición de salida: los imports y `py_compile` no lanzan excepción/`SyntaxError`.
 
 ## Tests
 

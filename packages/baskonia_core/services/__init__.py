@@ -1,12 +1,12 @@
 """Servicios de dominio de baskonia_core.
 
-Agrupa la lógica de negocio extraída de la capa de UI (`app.py`) en la fase F2 de
-la migración: calendario, plantilla, enfrentamientos directos y box scores. API y
-Streamlit comparten estos servicios en vez de duplicar el comportamiento.
+Agrupa la lógica de negocio extraída de la capa de UI en la fase F2 de
+la migración: calendario, plantilla, enfrentamientos directos y box scores. La API
+consume estos servicios.
 
 Reexporta también los nombres privados (`_team_games`, `_team_stats_for_game`,
-`_rival_of`, `_result_label`, `_player_stats_row`) que `app.py` sigue usando, para
-que la migración no cambie el contrato de importación.
+`_rival_of`, `_result_label`, `_player_stats_row`) para mantener el contrato de
+importación.
 """
 from .boxscore import _team_stats_for_game, boxscore_rows
 from .calendar import (

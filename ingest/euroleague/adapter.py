@@ -26,9 +26,16 @@ temporada 2025 / gamecode 7 - Virtus Bologna vs Real Madrid):
   (`"MM:SS"` restantes en el periodo).
 
 `game_advanced_stats` se deriva agregando el boxscore por equipo (eFG%/TS%/
-TOV%/ORB% con las fórmulas estándar; `ortg`/`drtg` con posesiones estimadas
-vía la fórmula Dean Oliver - fiel a `oer`/`der` de `04_team_stats.R`, ver
-`_estimate_possessions`). `lineups` se reconstruye a partir del
+TOV%/ORB% con las fórmulas estándar; `ortg`/`drtg`/`ast_pct`/`ft_rate`/
+`ast_to_ratio` con posesiones estimadas vía la fórmula Dean Oliver - fiel a
+`oer`/`der`/`S_assist`/`FT_rate`/`ast_to_ratio` de `04_team_stats.R`, ver
+`_estimate_possessions`). `stl_pct`/`blk_pct` (`S_steal`/`S_blocks`) usan
+columnas `Steals`/`BlocksFavour` ASUMIDAS - a diferencia del resto de este
+módulo, no se han verificado en vivo; si no existen, degradan a 0
+silenciosamente en `_team_totals` en vez de romper la carga. `quarter_stats`
+(fiel a la parte "quarters" de `09_team_pace.R`) solo se rellena si se pasa
+`play_by_play_records` (igual que `lineups`) - sin PBP no se sabe en qué
+cuarto se anotó cada punto. `lineups` se reconstruye a partir del
 play-by-play (`ingest.common.lineups.reconstruct_lineups`, invocado desde
 `ingest.common.raw_game.parse_and_resolve`) usando `IsStarter` como quinteto
 titular; si no se pasa play-by-play, o ningún jugador viene marcado
@@ -194,6 +201,34 @@ def _convert_play_by_play(records: List[dict], team_ids_by_code: Dict[str, str])
     return events
 
 
+def _quarter_stats_from_events(events: List[dict], home_id: str, away_id: str) -> List[dict]:
+    """Puntos por cuarto (fiel a la parte "quarters" de 09_team_pace.R), a partir del PBP ya convertido.
+
+    Solo disponible si se ha pasado `play_by_play_records` (igual que
+    `lineups`) - sin PBP no hay forma de saber en qu\u00e9 cuarto se anot\u00f3 cada
+    punto, as\u00ed que se deja vac\u00edo en vez de inventarlo.
+    """
+    scored: Dict[tuple, int] = {}
+    for event in events:
+        if event["type"] != "score" or not event["quarter"].startswith("Q"):
+            continue  # solo cuartos regulares (Q1-Q4), no pr\u00f3rroga (OTn)
+        quarter = int(event["quarter"][1:])
+        if quarter > 4:
+            continue
+        key = (event["team_id"], quarter)
+        scored[key] = scored.get(key, 0) + event["points"]
+
+    rows = []
+    for quarter in range(1, 5):
+        home_pts = scored.get((home_id, quarter), 0)
+        away_pts = scored.get((away_id, quarter), 0)
+        if (home_id, quarter) not in scored and (away_id, quarter) not in scored:
+            continue
+        rows.append({"team_id": home_id, "quarter": quarter, "points_for": home_pts, "points_against": away_pts})
+        rows.append({"team_id": away_id, "quarter": quarter, "points_for": away_pts, "points_against": home_pts})
+    return rows
+
+
 def build_raw_game(
     metadata: Dict[str, Any], boxscore_records: list, shot_records: list, play_by_play_records: Optional[list] = None,
 ) -> Dict[str, Any]:
@@ -243,6 +278,8 @@ def build_raw_game(
         _advanced_stats_for_team(away_team["id"], away_totals, home_totals),
     ]
     pace = round((_estimate_possessions(home_totals) + _estimate_possessions(away_totals)) / 2, 1)
+    converted_pbp = _convert_play_by_play(play_by_play_records or [], team_ids_by_code)
+    quarter_stats = _quarter_stats_from_events(converted_pbp, home_team["id"], away_team["id"])
 
     shots = []
     for row in shot_records:
@@ -254,3 +291,31 @@ def build_raw_game(
         x, y = _rescale_shot_coords(float(coord_x), float(coord_y))
         shots.append(
             {
+                "player_id": _clean_id(row["ID_PLAYER"]),
+                "team_id": team_ids_by_code.get(_clean_id(row.get("TEAM", "")), row.get("TEAM")),
+                "x": x,
+                "y": y,
+                "made": made,
+            }
+        )
+
+    return {
+        "game_id": str(metadata["Gamecode"]),
+        "date": _parse_date(metadata["Date"]),
+        "season": int(metadata["Season"]),
+        "competition": COMPETITION_NAME,
+        "home_team": home_team,
+        "away_team": away_team,
+        "home_score": int(metadata["ScoreA"]),
+        "away_score": int(metadata["ScoreB"]),
+        "pace": pace,
+        "narrative": None,
+        "team_stats": team_stats,
+        "players": players,
+        "lineups": [],  # se reconstruyen desde play_by_play si se ha pasado (ver parse_and_resolve)
+        "shots": shots,
+        "events": [],
+        "score_progression": [],
+        "quarter_stats": quarter_stats,
+        "play_by_play": converted_pbp,
+    }

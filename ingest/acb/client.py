@@ -33,14 +33,49 @@ la web hoy en día - **distinta** de la que documenta/usa OpenACB:
                   Devuelve boxscore completo por equipo/jugador (puntos,
                   tiros de 1/2/3, rebotes off/def, asistencias, robos,
                   pérdidas, tapones, faltas, +/-, minutos "MM:SS", titular).
-                  NO se ha encontrado (ni adivinando rutas con el mismo
-                  prefijo `Result/...` ni con acceso al repo de OpenACB) un
-                  endpoint equivalente de play-by-play/tiro con coordenadas
-                  para este backend nuevo - por eso `shots`/`lineups`/
-                  `score_progression` quedan vacíos para ACB (huecos
-                  conocidos y declarados, igual que `lineups` en Euroliga
-                  cuando no hay play-by-play). Si se localiza ese endpoint en
-                  el futuro, solo hay que ampliar `fetch_game`/`adapter.py`.
+    shots       = https://api2.acb.com/api/matchdata/MatchShots/match-shots?matchId={match_id}
+                  Devuelve `shotPoints`: un tiro por fila con `posX`/`posY`
+                  (mm, ver `adapter.py` para la conversión), `playType`
+                  (código numérico - ver mapeo verificado en `adapter.py`),
+                  `quarter`/`minute`/`second`, `local` (bool: true=home),
+                  `scoreHome`/`scoreAway`, `playerLicenseId` (mismo espacio
+                  de ids que `boxscores`). Solo los tiros de campo (2/3,
+                  hechos o fallados) traen coordenadas reales; los tiros
+                  libres vienen con `posX=posY=0` (se descartan para `shots`,
+                  que exige coordenadas).
+    play-by-play = https://api2.acb.com/api/matchdata/PlayByPlay/play-by-play?matchId={match_id}
+                  Devuelve `plays`: TODAS las jugadas (no solo tiros),
+                  ordenadas cronológicamente por el campo `order` (no por
+                  quarter/minute/second sueltos). `playType` clave para
+                  reconstruir quintetos: `599`=quinteto inicial (10 eventos,
+                  5 por equipo, al principio del partido), `112`=entra a
+                  pista, `115`=sale de pista (verificado en vivo cruzando
+                  eventos de sustitución reales con el quinteto inicial -
+                  ver el turno en que se decodificó). También trae
+                  `scoreHome`/`scoreAway` en cada jugada, más granular que
+                  `shotPoints` (678 eventos vs 201 tiros) - se usa para
+                  `score_progression`.
+    Encontrados verificando en vivo con capturas de DevTools reales del
+    usuario en la página "resumen" (carta de tiro) y la pestaña "jugadas"
+    (play-by-play) de un partido - no adivinados por prueba y error como los
+    intentos anteriores de `Result/{name}`.
+    advanced-stats = https://api2.acb.com/api/matchdata/AdvancedStats/match-advanced-stats?matchId={match_id}
+                  Devuelve `homeAdvancedStats`/`awayAdvancedStats`: el
+                  cálculo OFICIAL de acb.com (no una aproximación nuestra)
+                  de posesiones/pace/`fourFactors` (efgPct/orbPct/tovPct/
+                  fTr)/`ratings` (oer/der/netRating)/`ballHandling`
+                  (astPct/stlPct/blkPct)/`shooting.tsPct`, cada uno con
+                  contexto de temporada (`partido`/`temporada`/`win`/`loss`).
+                  Se usa con preferencia sobre `_estimate_possessions` de
+                  `adapter.py` cuando está disponible (ver `build_raw_game`).
+                  Encontrado junto con el resto de esta lista, capturado por
+                  el usuario en `doc/acb_endpoints.md` (incluye más
+                  endpoints de la pestaña "resumen" no integrados aún -
+                  `Overview/lead-tracker`, `Overview/lineup`,
+                  `Overview/match-team-comparison`, `Overview/match-leaders`,
+                  `MatchHeader/match-header` - redundantes con datos que ya
+                  cargamos por otra vía o de menor prioridad; revisar ese
+                  fichero si se necesita alguno en el futuro).
 
 `edition_id`: el mapeo `edition_id = (season + 1) - 1936` viene de
 `openacb_api/config/seasons.R` y sigue siendo válido contra la API nueva
@@ -148,6 +183,24 @@ class AcbClient:
         """Boxscore completo (por equipo y jugador) de un partido."""
         return self._get(f"{MATCHDATA_BASE}/Result/boxscores?matchId={match_id}")
 
+    def fetch_game_shots(self, match_id: Any) -> Dict[str, Any]:
+        """Tiros con coordenadas de un partido (`shotPoints`, ver `adapter.py`)."""
+        return self._get(f"{MATCHDATA_BASE}/MatchShots/match-shots?matchId={match_id}")
+
+    def fetch_game_play_by_play(self, match_id: Any) -> Dict[str, Any]:
+        """Play-by-play completo de un partido (`plays`, ver `adapter.py`)."""
+        return self._get(f"{MATCHDATA_BASE}/PlayByPlay/play-by-play?matchId={match_id}")
+
+    def fetch_game_advanced_stats(self, match_id: Any) -> Dict[str, Any]:
+        """Estadísticas avanzadas OFICIALES del partido (`homeAdvancedStats`/`awayAdvancedStats`).
+
+        A diferencia de `_estimate_possessions` (aproximación Dean Oliver en
+        `adapter.py`), esto es el cálculo real que hace acb.com (posesiones,
+        pace, ortg/drtg/net_rating, four factors...) - se usa con
+        preferencia sobre la estimación propia cuando está disponible.
+        """
+        return self._get(f"{MATCHDATA_BASE}/AdvancedStats/match-advanced-stats?matchId={match_id}")
+
     # ---- Compatibilidad con pipeline.py/tests existentes ----
 
     def fetch_season_game_ids(self, season: int) -> List[str]:
@@ -160,7 +213,7 @@ class AcbClient:
         Necesita que `game_id` venga de una llamada previa a
         `fetch_season_finished_matches`/`fetch_season_game_ids` (de ahí saca
         el resumen del partido - equipo local/visitante, marcador, fecha -
-        cacheado en memoria); el boxscore por jugador/equipo se pide aquí.
+        cacheado en memoria); boxscore, tiros y play-by-play se piden aquí.
         """
         from .adapter import build_raw_game  # import diferido: evita ciclo con parser.py
 
@@ -172,5 +225,14 @@ class AcbClient:
                 "fetch_season_finished_matches/fetch_season_game_ids."
             )
         boxscore = self.fetch_game_boxscore(game_id)
-        return build_raw_game(match, boxscore, self._season_by_match[key])
+        shots = self.fetch_game_shots(game_id)
+        play_by_play = self.fetch_game_play_by_play(game_id)
+        try:
+            advanced_stats = self.fetch_game_advanced_stats(game_id)
+        except Exception:  # noqa: BLE001 - opcional: si falla, build_raw_game cae a la estimación propia
+            advanced_stats = None
+        return build_raw_game(
+            match, boxscore, self._season_by_match[key],
+            shots=shots, play_by_play=play_by_play, advanced_stats=advanced_stats,
+        )
 

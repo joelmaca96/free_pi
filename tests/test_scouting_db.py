@@ -54,8 +54,8 @@ def test_schema_loads_without_errors(engine):
     expected_tables = {
         "seasons", "competitions", "teams", "team_external_ids", "court_zones",
         "players", "player_external_ids", "games", "game_advanced_stats",
-        "player_game_stats", "lineups", "lineup_players", "game_zone_stats",
-        "shots", "key_events", "score_progression", "upcoming_matchups",
+        "game_team_quarter_stats", "player_game_stats", "lineups", "lineup_players",
+        "game_zone_stats", "shots", "key_events", "score_progression", "upcoming_matchups",
     }
     expected_views = {
         "player_stats_by_competition", "player_stats_combined",

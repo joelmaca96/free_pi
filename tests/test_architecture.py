@@ -163,3 +163,139 @@ def test_root_bridges_do_not_duplicate_domain(pyfile):
         f"{pyfile.name} redefine las constantes {assignments}; deben vivir solo "
         "en packages/baskonia_core/."
     )
+
+
+# --- Retirada de Streamlit (F7) ---------------------------------------------
+#
+# La feature "Eliminar Streamlit y quedarse solo con la interfaz web" retiró
+# la app Streamlit (`app.py`), el arnés de paridad (`tools/parity_api.py`) y
+# las dependencias `streamlit`/`fpdf2`/`python-pptx`/`Pillow`, dejando la SPA
+# React + API FastAPI como única GUI. Estos tests son el guardián de regresión:
+# si alguien reintroduce Streamlit (o sus deps) en el futuro, la suite lo
+# detecta de forma hermética (sin red ni BD real).
+
+# Dependencias de la raíz que la app Streamlit usaba y que deben permanecer
+# ausentes de `requirements.txt`.
+STREAMLIT_DEPENDENCIES = {"streamlit", "fpdf2", "python-pptx", "Pillow"}
+
+# Directorios que se excluyen del escaneo de imports (venv, dependencias de
+# node y el directorio local del pipeline agéntico).
+EXCLUDED_DIRS = {".venv", "node_modules", "local"}
+
+
+def _repo_py_files():
+    """Itera los ficheros .py del repo excluyendo venv/node_modules/local."""
+    return sorted(
+        py_file
+        for py_file in ROOT_DIR.rglob("*.py")
+        if not any(part in EXCLUDED_DIRS for part in py_file.parts)
+    )
+
+
+def test_app_py_does_not_exist():
+    """`app.py` (app Streamlit) no existe en la raíz del repo.
+
+    Criterio de aceptación 1 de `01_design.md`: la app Streamlit se borró
+    definitivamente (`git rm`). Si reaparece, es una regresión de la retirada.
+    """
+    assert not (ROOT_DIR / "app.py").exists(), (
+        "app.py (app Streamlit) no debería existir; la UI es la SPA + API."
+    )
+
+
+def test_parity_api_does_not_exist():
+    """`tools/parity_api.py` (arnés de paridad API↔Streamlit) no existe.
+
+    Criterio de aceptación 1: el arnés de paridad quedó obsoleto al retirar
+    Streamlit y se borró. La línea base `tests/parity/baseline/` se conserva
+    (la usan los tests de contrato de la API), pero el arnés no.
+    """
+    assert not (ROOT_DIR / "tools" / "parity_api.py").exists(), (
+        "tools/parity_api.py no debería existir; su propósito (paridad "
+        "API↔Streamlit) desapareció con la retirada de Streamlit."
+    )
+
+
+@pytest.mark.parametrize("dependency", sorted(STREAMLIT_DEPENDENCIES))
+def test_requirements_txt_has_no_streamlit_dependency(dependency):
+    """`requirements.txt` de la raíz no contiene la dependencia `{dependency}`.
+
+    Criterio de aceptación 2: `streamlit`, `fpdf2`, `python-pptx` y `Pillow`
+    se eliminaron de `requirements.txt` (solo las usaba `app.py`).
+    """
+    requirements = (ROOT_DIR / "requirements.txt").read_text(encoding="utf-8")
+    assert dependency.lower() not in requirements.lower(), (
+        f"requirements.txt no debería contener '{dependency}'; se eliminó "
+        "con la retirada de Streamlit."
+    )
+
+
+def test_no_streamlit_imports_in_python_files():
+    """Ningún fichero .py del repo importa `streamlit`.
+
+    Criterio de aceptación 1: el grep de ausencia no debe devolver nada salvo
+    los docs históricos. Se escanea el AST de cada fichero .py (excluyendo
+    `.venv/`, `node_modules/`, `local/`) buscando imports de `streamlit`.
+    """
+    offenders = []
+    for py_file in _repo_py_files():
+        tree = ast.parse(py_file.read_text(encoding="utf-8"), filename=str(py_file))
+        imported = _imported_absolute_names(tree)
+        if "streamlit" in imported:
+            offenders.append(str(py_file.relative_to(ROOT_DIR)))
+    assert not offenders, (
+        "Se encontraron imports de streamlit en: "
+        f"{sorted(offenders)}. Streamlit se retiró; la UI es la SPA + API."
+    )
+
+
+def test_vscode_tasks_have_no_launch_app():
+    """.vscode/tasks.json no contiene la tarea "Launch app".
+
+    Criterio de aceptación 3: la tarea de arranque de la app Streamlit se
+    eliminó; solo queda "Run tests".
+    """
+    tasks = (ROOT_DIR / ".vscode" / "tasks.json").read_text(encoding="utf-8")
+    assert "Launch app" not in tasks, (
+        ".vscode/tasks.json no debería contener la tarea 'Launch app' de "
+        "Streamlit."
+    )
+
+
+def test_vscode_settings_have_no_launch_app():
+    """.vscode/settings.json no contiene el botón "Launch app".
+
+    Criterio de aceptación 3: el botón de arranque de la app Streamlit se
+    eliminó; solo queda "Run tests".
+    """
+    settings = (ROOT_DIR / ".vscode" / "settings.json").read_text(encoding="utf-8")
+    assert "Launch app" not in settings, (
+        ".vscode/settings.json no debería contener el botón 'Launch app' de "
+        "Streamlit."
+    )
+
+
+def test_gitignore_has_no_streamlit_logs_section():
+    """.gitignore no contiene la sección "Logs de Streamlit".
+
+    Criterio de aceptación 4: la sección `.streamlit/logs/` se eliminó del
+    `.gitignore` junto con la retirada de Streamlit.
+    """
+    gitignore = (ROOT_DIR / ".gitignore").read_text(encoding="utf-8")
+    assert "streamlit" not in gitignore.lower(), (
+        ".gitignore no debería contener referencias a Streamlit "
+        "(`.streamlit/logs/` se eliminó)."
+    )
+
+
+def test_api_cors_default_has_no_streamlit_origin():
+    """`apps/api/settings.py` no incluye el origen CORS de Streamlit (8501).
+
+    Criterio de aceptación 5: el origen por defecto `http://localhost:8501`
+    (puerto de Streamlit) se eliminó del CORS; queda solo `:5173` (dev SPA).
+    """
+    settings = (ROOT_DIR / "apps" / "api" / "settings.py").read_text(encoding="utf-8")
+    assert "8501" not in settings, (
+        "apps/api/settings.py no debería incluir el origen CORS "
+        "http://localhost:8501 (puerto de Streamlit)."
+    )

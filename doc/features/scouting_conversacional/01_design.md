@@ -302,7 +302,7 @@ train/validation (90/10), **balanceados ES/EN**.
 
 ## 10. Integración en la arquitectura destino
 
-La feature se integra en la arquitectura migrada (pipeline + API + SPA). No toca Streamlit.
+La feature se integra en la arquitectura migrada (pipeline + API + SPA).
 
 | Capa | Integración |
 |---|---|

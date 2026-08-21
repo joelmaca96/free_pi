@@ -59,8 +59,8 @@ assets/logos/real-madrid.png # Real Madrid
 ## Formato
 
 Formatos admitidos: `.png`, `.jpg`, `.jpeg`, `.svg`. Si no existe una imagen
-para un equipo, la GUI (`app.py`) muestra un icono de baloncesto genérico
-como respaldo.
+para un equipo, la GUI (SPA React en `apps/web/`) muestra un icono de
+baloncesto genérico como respaldo.
 
 ## Regenerar
 

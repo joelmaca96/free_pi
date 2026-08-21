@@ -32,8 +32,8 @@ RAW_GAME = {
         {"team_id": "acb-bas", "player_ids": ["acb-p-howard"], "minutes": 5.0, "plus_minus": 3},
     ],
     "shots": [
-        {"player_id": "acb-p-howard", "team_id": "acb-bas", "x_m": 0.0, "y_m": 1.0, "made": True},
-        {"player_id": "acb-p-howard", "team_id": "acb-bas", "x_m": 0.5, "y_m": 1.2, "made": False},
+        {"player_id": "acb-p-howard", "team_id": "acb-bas", "x": 250.0, "y": 480.0, "made": True},
+        {"player_id": "acb-p-howard", "team_id": "acb-bas", "x": 260.0, "y": 460.0, "made": False},
     ],
     "events": [
         {"team_id": "acb-bas", "quarter": "Q4", "clock": "00:40", "label": "Triple de Howard"},

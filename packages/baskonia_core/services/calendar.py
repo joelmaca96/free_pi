@@ -1,8 +1,8 @@
 """Servicios de calendario de un equipo.
 
 Acceso al calendario de partidos (jugados y pendientes) de un equipo, con los
-filtros globales de temporada y competición. Extraído de `app.py` en la fase F2
-de la migración: es lógica de negocio que API y Streamlit comparten.
+filtros globales de temporada y competición. Extraído en la fase F2
+de la migración: es lógica de negocio que la API consume.
 """
 from datetime import datetime, timedelta
 

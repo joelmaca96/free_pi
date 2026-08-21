@@ -17,7 +17,7 @@ export function useGlobalFilters(teamSlug: string) {
   const lastN = lastNParam != null ? Number(lastNParam) : 5;
 
   // Si no hay `season` en la URL, se preselecciona `default_season` en cuanto
-  // se conoce (igual que `current_season()` en el header de Streamlit).
+  // se conoce.
   useEffect(() => {
     if (seasonParam == null && filtersQuery.data?.default_season != null) {
       const next = new URLSearchParams(searchParams);

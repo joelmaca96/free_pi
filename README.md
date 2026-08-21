@@ -289,7 +289,7 @@ ordenadas, flotantes a 4 decimales, `NaN`→`null`) para una combinación
 conocidos). Ver `doc/arquitectura/02_migration.md`.
 
 **✅ Fase F2 de la migración a la nueva arquitectura** (2026-08-19): se extrae
-la lógica de negocio de `app.py` (capa UI Streamlit) a
+la lógica de negocio de `app.py` (capa de UI) a
 `packages/baskonia_core/services/` **sin cambiar el cuerpo de las funciones**:
 calendario (`calendar.py`), plantilla (`roster.py`), enfrentamientos
 (`matchup.py`) y box scores (`boxscore.py`), más `dates.py` con `parse_bbr_date`
@@ -312,9 +312,9 @@ desarrollo. Sin cambios de lógica en el pipeline; suite verde (178 tests). Ver
 
 ## 2. Arquitectura
 
-> ⚠️ El árbol siguiente corresponde **únicamente al pipeline de scraping**,
-> que es lo único implementado. La arquitectura de la app final (backend,
-> frontend, infraestructura) **no existe todavía** y está por definir.
+> ⚠️ El árbol siguiente corresponde **únicamente al pipeline de scraping**.
+> La interfaz (SPA React en `apps/web/` + API FastAPI en `apps/api/`) se
+> describe en la sección 6; aquí solo se detalla la captura de datos.
 
 ```
 baskonia-pipeline/
@@ -689,8 +689,9 @@ ventana de días, no de temporada. Cuatro pestañas:
    medios de ambos equipos en la temporada seleccionada,
    `insights.project_next_matchup()` — no aparece si a alguno de los dos le
    falta algún valor) y los **últimos 2 enfrentamientos directos** contra el
-   Baskonia (constante `H2H_LAST_N` en `app.py`, independiente del N de
-   "forma reciente"). Si es la primera vez que aparece, un botón
+   Baskonia (constante `H2H_LAST_N` en
+   `apps/web/src/features/proximos/ProximosScreen.tsx`, independiente del N
+   de "forma reciente"). Si es la primera vez que aparece, un botón
    **"Descargar datos de `<rival>`"** lanza la descarga bajo demanda (roster
    + calendario + box score de sus últimos N partidos,
    `fetch_opponent_scouting()` en `apps/ingest/pipeline.py`) respetando el rate-limit de
@@ -702,22 +703,20 @@ ventana de días, no de temporada. Cuatro pestañas:
    subida todavía. Al elegir un jugador, su ficha muestra posición, dorsal,
    forma reciente y estadísticas de la temporada (mismo cálculo que
    `insights.player_recent_form`, con `last_n` grande para "toda la
-   temporada"). Botón **"Generar ppt para Paolo"**: descarga un `.pptx`
-   (`python-pptx`) con una diapositiva por jugador — foto, nombre y sus 4
-   estadísticas más relevantes (PTS, eFG%, TS%, pérdidas) coloreadas en
-   verde/rojo según estén por encima o por debajo de la media del equipo.
-
-Cada pestaña con datos de un enfrentamiento incluye un botón **"Informe en
-PDF"** (`build_pdf_report()`, vía `fpdf2`) descargable, pensado para que el
-cuerpo técnico lo lleve impreso o lo comparta sin abrir la app. Los nombres
-con caracteres fuera de Latin-1 (p.ej. "Žalgiris") se aproximan a ASCII antes
-de escribirlos al PDF (`_pdf_safe()`): la fuente base de fpdf2 no los soporta
-y antes hacía saltar toda la pestaña, no solo el PDF.
+   temporada"). Botón **"Generar ppt para Paolo"** (pestaña "Plantilla") y
+   botones **"Informe en PDF"** (pestañas con datos de un enfrentamiento):
+   ambos son el componente `ExportButton` de la SPA
+   (`apps/web/src/components/ExportButton.tsx`), que hoy se muestra
+   **deshabilitado** con un tooltip — los endpoints de informes de la API
+   (`apps/api/routers/reports.py`, `/reports/scouting.pdf` y
+   `/reports/roster.pptx`) devuelven `501` hasta la fase F6 de la migración
+   (la exportación PDF/PPTX quedó sin implementar al retirar Streamlit y sus
+   dependencias `fpdf2`/`python-pptx`; ver sección 7.2).
 
 Todas las fechas se muestran en **castellano** (`format_date_es()` en
-`app.py`): BBR guarda las fechas en inglés ("Sun, Nov 23, 2025") y la GUI las
-convierte a "domingo, 23 de noviembre de 2025" en tablas, gráficos, títulos
-de partido y el propio PDF.
+`apps/web/src/lib/format.ts`): BBR guarda las fechas en inglés ("Sun, Nov
+23, 2025") y la GUI las convierte a "domingo, 23 de noviembre de 2025" en
+tablas, gráficos y títulos de partido.
 
 Solo el botón de descarga bajo demanda de un rival hace peticiones a BBR; el
 resto de la GUI solo lee `data/baskonia.db`.
@@ -873,7 +872,7 @@ servicio `systemd` que lo mantenga levantado.
 - **Seguridad**: el túnel `trycloudflare.com` es temporal (la URL cambia al
   reiniciar). Para una URL estable y más control, usar un dominio propio con
   Cloudflare y un túnel con nombre. Si se quiere proteger la app, añadir
-  autenticación (p.ej. `st.secrets` o un proxy con auth).
+  autenticación (p.ej. un proxy con auth o un middleware en la API).
 - **Actualización del pipeline**: para que la GUI muestre datos al día, hay
   que ejecutar `python -m apps.ingest.cli` periódicamente en la RPi (tarea
   `cron` o `systemd timer`) — ver "Automatizar la ejecución periódica" en la
@@ -1014,7 +1013,7 @@ python -m pytest tests/test_parser.py -k "schedule"   # filtrar por test
 **Estadísticas avanzadas**
 - [x] Cálculo de estadísticas avanzadas (eFG%, TS%, pace, ORtg/DRtg, Net Rating).
 - [ ] PER (requiere medias de liga completas; no implementado).
-- [x] Presentación de enfrentamientos anteriores (head-to-head) — pestaña "Partidos anteriores"/"Próximos enfrentamientos" en `app.py`.
+- [x] Presentación de enfrentamientos anteriores (head-to-head) — pestañas "Partidos anteriores"/"Próximos enfrentamientos" de la SPA (`apps/web/`).
 
 **Interfaz de usuario**
 - [x] GUI básica (SPA React + API FastAPI) con tablas y gráficos interactivos.
@@ -1036,7 +1035,8 @@ python -m pytest tests/test_parser.py -k "schedule"   # filtrar por test
 Brainstorm de mejoras orientadas a análisis/estadísticas, no solo tablas de
 datos. Ninguna requirió scraping nuevo — las 6 se calculan sobre datos que el
 pipeline ya guardaba (`boxscores`, `team_game_stats`, calendario oficial).
-Implementadas las 6 en `stats.py`/`insights.py`/`app.py`, acotables a una
+Implementadas las 6 en `stats.py`/`insights.py` (cálculo) y expuestas en la
+SPA (`apps/web/`) vía la API (`apps/api/`), acotables a una
 **temporada** y una **competición** concretas mediante los dos selectores
 globales nuevos de la cabecera de la GUI (ver "Estado actual" y sección 6).
 

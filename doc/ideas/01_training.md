@@ -87,7 +87,7 @@ más natural y flexible.
 3. **Entrenar con LoRA + SFT** (ver ejemplo arriba).
 
 4. **Usar el adaptador en la app** — cargar el adaptador LoRA sobre el modelo base y usarlo en
-   `app.py` (o en la futura API de F3) para generar narrativas.
+   la API (`apps/api/`) para generar narrativas.
 
 ---
 

@@ -29,14 +29,16 @@ class _FakeResponse:
 
 
 class _FakeSession:
-    """Simula `Competition/matches` (paginado por `weekId`) y `Result/boxscores`."""
+    """Simula `Competition/matches` (paginado por `weekId`), `Result/boxscores`, `MatchShots` y `PlayByPlay`."""
 
-    def __init__(self, edition_id, matches_by_week, last_week, boxscores):
+    def __init__(self, edition_id, matches_by_week, last_week, boxscores, shots=None, plays=None):
         self.headers = {}
         self.edition_id = edition_id
         self.matches_by_week = matches_by_week
         self.last_week = last_week
         self.boxscores = boxscores
+        self.shots = shots or {}
+        self.plays = plays or {}
 
     def get(self, url, timeout=30):
         parsed = urlparse(url)
@@ -56,6 +58,12 @@ class _FakeSession:
         if parsed.path.endswith("/Result/boxscores"):
             match_id = int(qs["matchId"][0])
             return _FakeResponse(200, payload=self.boxscores[match_id])
+        if parsed.path.endswith("/MatchShots/match-shots"):
+            match_id = int(qs["matchId"][0])
+            return _FakeResponse(200, payload=self.shots.get(match_id, {"shotPoints": []}))
+        if parsed.path.endswith("/PlayByPlay/play-by-play"):
+            match_id = int(qs["matchId"][0])
+            return _FakeResponse(200, payload=self.plays.get(match_id, {"plays": []}))
         raise AssertionError(f"URL inesperada en el test: {url}")
 
 
@@ -89,12 +97,12 @@ def _team_period0(team_id, name, players, totals):
     }
 
 
-def _totals(points, twopm, twopa, threepm, threepa, ftm, fta, tov, orb, drb):
+def _totals(points, twopm, twopa, threepm, threepa, ftm, fta, tov, orb, drb, ast=0, stl=0, blk=0):
     return {
         "points": points, "twoPointersMade": twopm, "twoPointersAttempted": twopa,
         "threePointersMade": threepm, "threePointersAttempted": threepa,
         "freeThrowsMade": ftm, "freeThrowsAttempted": fta, "turnovers": tov,
-        "offRebounds": orb, "defRebounds": drb,
+        "offRebounds": orb, "defRebounds": drb, "assists": ast, "steals": stl, "blocks": blk,
     }
 
 
@@ -140,7 +148,8 @@ def test_fetch_game_uses_cached_match_and_builds_common_contract():
     assert raw["away_team"] == {"id": "20", "name": "Away Team"}
     assert raw["home_score"] == 80 and raw["away_score"] == 75
     assert len(raw["players"]) == 2
-    assert raw["shots"] == [] and raw["lineups"] == []  # huecos declarados (sin endpoint de tiro/PBP)
+    # sin shotPoints/plays en la fixture (ver _FakeSession), quedan vacíos - no por un hueco de la fuente
+    assert raw["shots"] == [] and raw["lineups"] == [] and raw["score_progression"] == []
 
 
 def test_fetch_game_unknown_id_raises():
@@ -169,6 +178,94 @@ def test_build_raw_game_computes_advanced_stats_and_pace():
     assert raw["pace"] > 0
     # jugador: twoPointersMade=8, twoPointersAttempted=15, threePointersMade=0, threePointersAttempted=2
     assert raw["players"][0]["efg_pct"] == round(100 * (8 + 0.5 * 0) / 17, 1)
+
+
+def test_build_raw_game_converts_shots_starters_subs_and_score_progression():
+    match = _match(3001, 10, 20)
+    boxscore = {
+        "matchFinished": True,
+        "teamBoxscores": [
+            _team_period0(10, "Home Team", [_player_row(501, "A Home", "7", "30:00", 2, 1, 1, 0, 0, 0, 0)],
+                          _totals(2, 1, 1, 0, 0, 0, 0, 0, 0, 0)),
+            _team_period0(20, "Away Team", [_player_row(601, "B Away", "9", "28:00", 0, 0, 1, 0, 0, 0, 0)],
+                          _totals(0, 0, 1, 0, 0, 0, 0, 0, 0, 0)),
+        ],
+    }
+    shots = {
+        "shotPoints": [
+            # tiro libre: sin coordenadas reales, se descarta
+            {"playType": 92, "posX": 0, "posY": 0, "playerLicenseId": 501, "local": True},
+            {"playType": 93, "posX": 1000, "posY": 500, "playerLicenseId": 501, "local": True},
+            {"playType": 97, "posX": 2000, "posY": -1500, "playerLicenseId": 601, "local": False},
+        ]
+    }
+    plays = {
+        "plays": [
+            {"order": 10, "playType": 599, "local": True, "quarter": 1, "minute": 10, "second": 0, "playerLicenseId": 501,
+             "scoreHome": 0, "scoreAway": 0},
+            {"order": 11, "playType": 599, "local": False, "quarter": 1, "minute": 10, "second": 0, "playerLicenseId": 601,
+             "scoreHome": 0, "scoreAway": 0},
+            {"order": 20, "playType": 93, "local": True, "quarter": 1, "minute": 9, "second": 30, "playerLicenseId": 501,
+             "scoreHome": 2, "scoreAway": 0},
+            {"order": 30, "playType": 115, "local": True, "quarter": 1, "minute": 5, "second": 0, "playerLicenseId": 501,
+             "scoreHome": 2, "scoreAway": 0},
+            {"order": 31, "playType": 112, "local": True, "quarter": 1, "minute": 5, "second": 0, "playerLicenseId": 502,
+             "scoreHome": 2, "scoreAway": 0},
+        ]
+    }
+
+    raw = build_raw_game(match, boxscore, season=2025, shots=shots, play_by_play=plays)
+
+    assert len(raw["shots"]) == 2  # el tiro libre (92) queda fuera
+    made = next(s for s in raw["shots"] if s["made"])
+    assert made["player_id"] == "501" and made["team_id"] == "10"
+    assert 0 <= made["x"] <= 500 and 0 <= made["y"] <= 500
+
+    assert raw["starters"] == {"home": ["501"], "away": ["601"]}
+    sub_types = {(e["type"], e["player_id"]) for e in raw["play_by_play"] if e["type"] in ("sub_in", "sub_out")}
+    assert ("sub_out", "501") in sub_types and ("sub_in", "502") in sub_types
+
+    assert raw["score_progression"] == [
+        {"step": 0, "home": 0, "away": 0},
+        {"step": 1, "home": 2, "away": 0},
+    ]
+
+
+def _official_side(efg, orb, tov, ft_rate, oer, der, net_rating, ast_pct, stl_pct, blk_pct, ts_pct, pace):
+    return {
+        "fourFactors": {"efgPct": {"partido": efg}, "orbPct": {"partido": orb}, "tovPct": {"partido": tov},
+                        "fTr": {"partido": ft_rate}},
+        "gameRhythm": {"possessions": {"partido": 80.0}, "pace": {"partido": pace}, "pointsPerPossession": {"partido": 1.1}},
+        "ratings": {"netRating": {"partido": net_rating}, "oer": {"partido": oer}, "der": {"partido": der}},
+        "ballHandling": {"astPct": {"partido": ast_pct}, "stlPct": {"partido": stl_pct}, "blkPct": {"partido": blk_pct}},
+        "shooting": {"tsPct": {"partido": ts_pct}},
+    }
+
+
+def test_build_raw_game_prefers_official_advanced_stats_when_given():
+    match = _match(4001, 10, 20)
+    boxscore = {
+        "matchFinished": True,
+        "teamBoxscores": [
+            _team_period0(10, "Home Team", [_player_row(501, "A Home", "7", "30:00", 20, 8, 15, 0, 2, 4, 5)],
+                          _totals(90, 35, 60, 6, 20, 14, 18, 10, 12, 33, ast=20, stl=5, blk=2)),
+            _team_period0(20, "Away Team", [_player_row(601, "B Away", "9", "28:00", 18, 7, 12, 2, 6, 2, 3)],
+                          _totals(85, 32, 58, 5, 22, 16, 20, 13, 9, 30, ast=15, stl=6, blk=3)),
+        ],
+    }
+    advanced_stats = {
+        "homeAdvancedStats": _official_side(57.5, 36.6, 13.5, 27.5, 125.7, 103.4, 22.3, 57.1, 9.6, 2.4, 59.7, 84.2),
+        "awayAdvancedStats": _official_side(45.7, 33.3, 17.9, 41.4, 103.4, 125.7, -22.3, 44.0, 7.2, 5.0, 51.0, 84.2),
+    }
+
+    raw = build_raw_game(match, boxscore, season=2025, advanced_stats=advanced_stats)
+
+    home_stats = next(t for t in raw["team_stats"] if t["team_id"] == "10")
+    # los valores OFICIALES sustituyen a la estimación propia (que daría otros números para este mismo boxscore)
+    assert home_stats["ortg"] == 125.7 and home_stats["drtg"] == 103.4
+    assert home_stats["efg_pct"] == 57.5 and home_stats["ft_rate"] == 27.5
+    assert home_stats["ast_to_ratio"] == round(20 / 10, 2)  # sigue calculándose desde el boxscore, no viene en el endpoint
+    assert raw["pace"] == 84.2
 
 
 def test_build_raw_game_rejects_unfinished_match():
