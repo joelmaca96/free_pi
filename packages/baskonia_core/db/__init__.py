@@ -1,8 +1,5 @@
 """Subpaquete de modelo de datos y almacenamiento.
 
-Reexporta `models` (esquema SQLAlchemy) y `storage` (upserts idempotentes)
-para que `from packages.baskonia_core.db import models` funcione.
+El esquema real es el de scouting (`db.scouting`), poblado por `ingest/`.
+Ver `db/scouting/` (`schema.sql`, `engine.py`, `create_scouting_engine()`).
 """
-from . import models, storage
-
-__all__ = ["models", "storage"]

@@ -101,11 +101,6 @@ Implementado y poblando datos reales:
 
 ## 3. Qué falta en conjunto (independiente de la fuente)
 
-- **`apps/api` y la SPA ya consumen el esquema nuevo** que este ingestor rellena: la feature
-  012 (`api-nuevo-modelo-datos`) reescribió `apps/api/` contra el esquema de scouting y la
-  feature 013 (`spa-contrato-nuevo`) adaptó `apps/web/` a ese contrato (ver
-  `doc/features/spa-contrato-nuevo/01_estado.md`). Los datos que carga este ingestor llegan hoy
-  a `apps/web` vía la API.
 - **Equipos duplicados por cambio de patrocinador entre temporadas**: la normalización de
   nombres (`ingest/common/identity.py`, `_KNOWN_TEAM_ALIASES`) cubre los casos conocidos
   detectados hasta ahora (p.ej. "Kosner Baskonia"/"Bitci Baskonia"), pero es una lista
