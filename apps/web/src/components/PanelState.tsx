@@ -7,34 +7,24 @@ import { ApiError } from "@/api/client";
  */
 
 export function LoadingState({ label = "Cargando…" }: { label?: string }) {
-  return <p className="text-sm text-slate-400 py-4">{label}</p>;
+  return <p className="text-muted py-4 text-sm">{label}</p>;
 }
 
 export function ErrorState({ error }: { error: unknown }) {
   const problem = error instanceof ApiError ? error.problem : null;
   return (
-    <div className="rounded-md border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+    <div className="panel-error">
       <p className="font-medium">{problem?.title ?? "Error al cargar los datos"}</p>
-      <p>{problem?.detail ?? String(error)}</p>
+      <p className="text-muted mt-0.5">{problem?.detail ?? String(error)}</p>
       {problem?.request_id && (
-        <p className="mt-1 text-xs text-rose-500">request_id: {problem.request_id}</p>
+        <p className="text-muted mt-1 text-xs">request_id: {problem.request_id}</p>
       )}
     </div>
   );
 }
 
-/**
- * "Sin datos suficientes" (no es un error). `action` es opcional y aditivo: los
- * paneles que pueden intentar rellenar el hueco desde la fuente le pasan un
- * `RefreshButton`.
- */
-export function EmptyState({ message, action }: { message: string; action?: ReactNode }) {
-  return (
-    <div className="rounded-md border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-500">
-      <p>{message}</p>
-      {action && <div className="mt-2">{action}</div>}
-    </div>
-  );
+export function EmptyState({ message }: { message: string }) {
+  return <div className="panel-empty">{message}</div>;
 }
 
 interface QueryResultLike<T> {

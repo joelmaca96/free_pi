@@ -10,10 +10,10 @@ export function SeasonPicker({
   onChange: (season: string) => void;
 }) {
   return (
-    <label className="flex flex-col text-xs font-medium text-slate-500">
-      Temporada
+    <label className="field m-0 min-w-[120px]">
+      <span>Temporada</span>
       <select
-        className="mt-0.5 rounded-md border border-slate-300 px-2 py-1 text-sm text-slate-900"
+        className="input"
         value={value ?? ""}
         onChange={(e) => onChange(e.target.value)}
       >
@@ -37,10 +37,10 @@ export function LeagueSelect({
   onChange: (competition: string | null) => void;
 }) {
   return (
-    <label className="flex flex-col text-xs font-medium text-slate-500">
-      Competición
+    <label className="field m-0 min-w-[120px]">
+      <span>Competición</span>
       <select
-        className="mt-0.5 rounded-md border border-slate-300 px-2 py-1 text-sm text-slate-900"
+        className="input"
         value={value ?? ""}
         onChange={(e) => onChange(e.target.value === "" ? null : e.target.value)}
       >
@@ -69,8 +69,8 @@ export function LastNInput({
   max?: number;
 }) {
   return (
-    <label className="flex flex-col text-xs font-medium text-slate-500">
-      {label}
+    <label className="field m-0 w-20">
+      <span>{label}</span>
       <input
         type="number"
         min={min}
@@ -80,7 +80,7 @@ export function LastNInput({
           const n = Number(e.target.value);
           if (n >= min && n <= max) onChange(n);
         }}
-        className="mt-0.5 w-20 rounded-md border border-slate-300 px-2 py-1 text-sm text-slate-900"
+        className="input"
       />
     </label>
   );
