@@ -32,7 +32,7 @@ export function LeagueSelect({
   value,
   onChange,
 }: {
-  competitions: { id: string; name: string }[];
+  competitions: { id: number; name: string }[];
   value: string | null;
   onChange: (competition: string | null) => void;
 }) {

@@ -6,14 +6,14 @@ import { notFoundHandler } from "./mocks/handlers";
 
 describe("PlantillaScreen", () => {
   it("renderiza el mosaico y la ficha del jugador seleccionado (camino feliz)", async () => {
-    renderAt("/vitoria/plantilla");
+    renderAt("/bas/plantilla");
 
     expect(await waitForText(/Plantilla actual \(1 jugadores\)/i)).toBeInTheDocument();
     await waitForAllText(/Markus Howard/i);
     expect(await waitForText(/Posición:/i)).toBeInTheDocument();
-
-    const exportButton = screen.getByRole("button", { name: /Generar ppt para Paolo/i });
-    expect(exportButton).toBeDisabled();
+    // La tarjeta muestra las medias de temporada del roster (sin ExportButton).
+    expect(await waitForText(/Estadísticas de la temporada/i)).toBeInTheDocument();
+    await waitForAllText("19.6"); // pts_avg
   });
 
   it('muestra "sin plantilla" cuando el roster está vacío', async () => {
@@ -23,8 +23,8 @@ describe("PlantillaScreen", () => {
   });
 
   it("muestra el estado de error con request_id cuando /roster falla", async () => {
-    server.use(notFoundHandler("/teams/vitoria/roster"));
-    renderAt("/vitoria/plantilla");
+    server.use(notFoundHandler("/teams/bas/roster"));
+    renderAt("/bas/plantilla");
 
     expect(await waitForText(/Equipo no encontrado/i)).toBeInTheDocument();
     expect(await waitForText(/request_id/i)).toBeInTheDocument();

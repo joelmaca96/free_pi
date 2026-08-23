@@ -4,26 +4,27 @@ import {
   useTeamSummary,
   useTeamGames,
   usePlayerForm,
-  useStreaks,
   useNarrative,
   usePlayerLoad,
-  type SeasonLeagueFilter,
+  useDiscoverMissingGames,
+  type SeasonFilter,
 } from "@/api/hooks";
 import { StatCard, StatCardRow } from "@/components/StatCard";
 import { StatTable } from "@/components/StatTable";
-import { QueryPanel } from "@/components/PanelState";
+import { EmptyState, ErrorState, QueryPanel } from "@/components/PanelState";
+import { RefreshButton } from "@/components/RefreshButton";
 import { BarChart } from "@/components/charts/BarChart";
 import { LastNInput } from "@/components/Filters";
-import { fmt, fmtPct, formatDateEs, scoreLabel, streakBadge } from "@/lib/format";
+import { fmt, fmtPct, formatDateEs, scoreLabel } from "@/lib/format";
 
 interface GameRow {
-  id: number;
+  id: string;
   date: string;
   opponentName: string;
   score: string;
   pace: number | null;
-  offRating: number | null;
-  defRating: number | null;
+  ortg: number | null;
+  drtg: number | null;
   netRating: number | null;
 }
 
@@ -32,97 +33,76 @@ const gameColumns: ColumnDef<GameRow, any>[] = [
   { accessorKey: "opponentName", header: "Rival" },
   { accessorKey: "score", header: "Resultado" },
   { accessorKey: "pace", header: "Pace", cell: (c) => fmt(c.getValue() as number | null) },
-  { accessorKey: "offRating", header: "ORtg", cell: (c) => fmt(c.getValue() as number | null) },
-  { accessorKey: "defRating", header: "DRtg", cell: (c) => fmt(c.getValue() as number | null) },
+  { accessorKey: "ortg", header: "ORtg", cell: (c) => fmt(c.getValue() as number | null) },
+  { accessorKey: "drtg", header: "DRtg", cell: (c) => fmt(c.getValue() as number | null) },
   { accessorKey: "netRating", header: "Net", cell: (c) => fmt(c.getValue() as number | null) },
+  {
+    // Solo en las filas sin estadísticas avanzadas: el partido está en `games`
+    // pero sus hijos no se cargaron, así que se puede reintentar la descarga.
+    id: "refresh",
+    header: "",
+    cell: (c) =>
+      c.row.original.ortg == null && c.row.original.netRating == null ? (
+        <RefreshButton gameId={c.row.original.id} />
+      ) : null,
+  },
 ];
 
+/** Fuentes de ingesta que admiten discovery/refresco bajo demanda. */
+const DISCOVERY_SOURCES = [
+  { value: "acb", label: "ACB" },
+  { value: "euroleague", label: "Euroliga" },
+] as const;
+
 interface FormRow {
-  player: string;
-  games: number;
-  minutes: number | null;
+  gameDate: string;
   pts: number | null;
-  ptsPer36: number | null;
+  reb: number | null;
+  ast: number | null;
   efg: number | null;
-  ts: number | null;
-  fg3aRate: number | null;
-  ftRate: number | null;
 }
 
 const formColumns: ColumnDef<FormRow, any>[] = [
-  { accessorKey: "player", header: "Jugador" },
-  { accessorKey: "games", header: "PJ" },
-  { accessorKey: "minutes", header: "MIN", cell: (c) => fmt(c.getValue() as number | null) },
+  { accessorKey: "gameDate", header: "Fecha", cell: (c) => formatDateEs(c.getValue() as string) },
   { accessorKey: "pts", header: "PTS", cell: (c) => fmt(c.getValue() as number | null) },
-  { accessorKey: "ptsPer36", header: "PTS/36", cell: (c) => fmt(c.getValue() as number | null) },
+  { accessorKey: "reb", header: "REB", cell: (c) => fmt(c.getValue() as number | null) },
+  { accessorKey: "ast", header: "AST", cell: (c) => fmt(c.getValue() as number | null) },
   { accessorKey: "efg", header: "eFG%", cell: (c) => fmtPct(c.getValue() as number | null) },
-  { accessorKey: "ts", header: "TS%", cell: (c) => fmtPct(c.getValue() as number | null) },
-  { accessorKey: "fg3aRate", header: "3PA%", cell: (c) => fmtPct(c.getValue() as number | null) },
-  { accessorKey: "ftRate", header: "FTr", cell: (c) => fmt(c.getValue() as number | null) },
 ];
-
-interface StreakRow {
-  player: string;
-  gamesSeason: number;
-  recentPts: number | null;
-  seasonPts: number | null;
-  zPts: number | null;
-  labelPts: string;
-  recentTs: number | null;
-  seasonTs: number | null;
-  zTs: number | null;
-}
-
-function streakColumns(recentN: number): ColumnDef<StreakRow, any>[] {
-  return [
-    { accessorKey: "player", header: "Jugador" },
-    { accessorKey: "gamesSeason", header: "PJ temporada" },
-    { accessorKey: "recentPts", header: `PTS últimos ${recentN}`, cell: (c) => fmt(c.getValue() as number | null) },
-    { accessorKey: "seasonPts", header: "PTS temporada", cell: (c) => fmt(c.getValue() as number | null) },
-    { accessorKey: "zPts", header: "z-score PTS", cell: (c) => fmt(c.getValue() as number | null) },
-    { accessorKey: "labelPts", header: "Racha PTS" },
-    { accessorKey: "recentTs", header: `TS% últimos ${recentN}`, cell: (c) => fmtPct(c.getValue() as number | null) },
-    { accessorKey: "seasonTs", header: "TS% temporada", cell: (c) => fmtPct(c.getValue() as number | null) },
-    { accessorKey: "zTs", header: "z-score TS%", cell: (c) => fmt(c.getValue() as number | null) },
-  ];
-}
 
 interface LoadRow {
   player: string;
-  games: number;
   totalMinutes: number;
-  avgMinutes: number;
 }
 
 const loadColumns: ColumnDef<LoadRow, any>[] = [
   { accessorKey: "player", header: "Jugador" },
-  { accessorKey: "games", header: "PJ ventana" },
   { accessorKey: "totalMinutes", header: "MIN totales", cell: (c) => fmt(c.getValue() as number) },
-  { accessorKey: "avgMinutes", header: "MIN/partido", cell: (c) => fmt(c.getValue() as number) },
 ];
 
 /**
  * Contenido reutilizable de la pantalla Resumen (`render_team_tab`, app.py:404-471).
  * Se usa tanto en `/{team}/resumen` como en el bloque "Scouting: {rival}" de
- * la pantalla Próximos, parametrizado por `teamSlug`.
+ * la pantalla Próximos, parametrizado por `teamId`.
  */
 export function TeamOverviewPanel({
-  teamSlug,
+  teamId,
   filter,
   lastN,
 }: {
-  teamSlug: string;
-  filter: SeasonLeagueFilter;
+  teamId: string;
+  filter: SeasonFilter;
   lastN: number;
 }) {
   const [windowDays, setWindowDays] = useState(14);
+  const [discoverySource, setDiscoverySource] = useState<"acb" | "euroleague">("acb");
+  const discovery = useDiscoverMissingGames();
 
-  const summaryQuery = useTeamSummary(teamSlug, filter);
-  const gamesQuery = useTeamGames(teamSlug, filter);
-  const formQuery = usePlayerForm(teamSlug, filter, lastN);
-  const streaksQuery = useStreaks(teamSlug, filter.season ?? 0, filter.league, lastN);
-  const narrativeQuery = useNarrative(teamSlug, filter.season ?? 0, filter.league, lastN);
-  const loadQuery = usePlayerLoad(teamSlug, windowDays);
+  const summaryQuery = useTeamSummary(teamId, filter);
+  const gamesQuery = useTeamGames(teamId, filter);
+  const formQuery = usePlayerForm(teamId, filter, lastN);
+  const narrativeQuery = useNarrative(teamId);
+  const loadQuery = usePlayerLoad(teamId, windowDays);
 
   const recentPlayed = useMemo(() => {
     const items = gamesQuery.data?.items ?? [];
@@ -136,9 +116,9 @@ export function TeamOverviewPanel({
           date: g.date,
           opponentName: g.opponent.name,
           score: scoreLabel(g.team_score, g.opponent_score),
-          pace: g.advanced?.pace ?? null,
-          offRating: g.advanced?.off_rating ?? null,
-          defRating: g.advanced?.def_rating ?? null,
+          pace: g.pace ?? null,
+          ortg: g.advanced?.ortg ?? null,
+          drtg: g.advanced?.drtg ?? null,
           netRating: g.advanced?.net_rating ?? null,
         })
       );
@@ -149,9 +129,9 @@ export function TeamOverviewPanel({
   const recurringRivals = useMemo(() => {
     const played = (gamesQuery.data?.items ?? []).filter((g) => g.result != null);
     const counts = new Map<string, number>();
-    for (const g of played) counts.set(g.opponent.slug, (counts.get(g.opponent.slug) ?? 0) + 1);
+    for (const g of played) counts.set(g.opponent.id, (counts.get(g.opponent.id) ?? 0) + 1);
     return played
-      .filter((g) => (counts.get(g.opponent.slug) ?? 0) > 1)
+      .filter((g) => (counts.get(g.opponent.id) ?? 0) > 1)
       .sort((a, b) => a.date.localeCompare(b.date))
       .map(
         (g): GameRow => ({
@@ -159,9 +139,9 @@ export function TeamOverviewPanel({
           date: g.date,
           opponentName: g.opponent.name,
           score: scoreLabel(g.team_score, g.opponent_score),
-          pace: g.advanced?.pace ?? null,
-          offRating: g.advanced?.off_rating ?? null,
-          defRating: g.advanced?.def_rating ?? null,
+          pace: g.pace ?? null,
+          ortg: g.advanced?.ortg ?? null,
+          drtg: g.advanced?.drtg ?? null,
           netRating: g.advanced?.net_rating ?? null,
         })
       );
@@ -187,9 +167,8 @@ export function TeamOverviewPanel({
         <QueryPanel query={summaryQuery} emptyMessage="Sin datos suficientes.">
           {(data) => (
             <StatCardRow>
-              <StatCard label="Pace" value={fmt(data.advanced.avg_pace)} />
-              <StatCard label="ORtg" value={fmt(data.advanced.avg_off_rating)} />
-              <StatCard label="DRtg" value={fmt(data.advanced.avg_def_rating)} />
+              <StatCard label="ORtg" value={fmt(data.advanced.avg_ortg)} />
+              <StatCard label="DRtg" value={fmt(data.advanced.avg_drtg)} />
               <StatCard label="Net Rating" value={fmt(data.advanced.avg_net_rating)} />
               <StatCard label="eFG%" value={fmtPct(data.advanced.avg_efg_pct)} />
               <StatCard label="TS%" value={fmtPct(data.advanced.avg_ts_pct)} />
@@ -210,8 +189,8 @@ export function TeamOverviewPanel({
               <BarChart
                 categories={recentPlayed.map((g) => formatDateEs(g.date))}
                 series={[
-                  { name: "ORtg", values: recentPlayed.map((g) => g.offRating) },
-                  { name: "DRtg", values: recentPlayed.map((g) => g.defRating) },
+                  { name: "ORtg", values: recentPlayed.map((g) => g.ortg) },
+                  { name: "DRtg", values: recentPlayed.map((g) => g.drtg) },
                 ]}
               />
               <StatTable data={recentPlayed} columns={gameColumns} />
@@ -245,49 +224,21 @@ export function TeamOverviewPanel({
         >
           {(data) => {
             const rows: FormRow[] = data.items.map((r) => ({
-              player: r.player_name,
-              games: r.games,
-              minutes: r.avg_minutes ?? null,
-              pts: r.avg_pts ?? null,
-              ptsPer36: r.avg_pts_per36 ?? null,
-              efg: r.avg_efg_pct ?? null,
-              ts: r.avg_ts_pct ?? null,
-              fg3aRate: r.fg3a_rate ?? null,
-              ftRate: r.ft_rate ?? null,
+              gameDate: r.game_date,
+              pts: r.pts ?? null,
+              reb: r.reb ?? null,
+              ast: r.ast ?? null,
+              efg: r.efg_pct ?? null,
             }));
             return (
               <div className="space-y-4">
                 <BarChart
-                  categories={rows.map((r) => r.player)}
+                  categories={rows.map((r) => formatDateEs(r.gameDate))}
                   series={[{ name: "PTS", values: rows.map((r) => r.pts) }]}
                 />
                 <StatTable data={rows} columns={formColumns} />
               </div>
             );
-          }}
-        </QueryPanel>
-      </section>
-
-      <section>
-        <h2 className="mb-1 text-lg font-semibold text-slate-800">Rachas (hot/cold)</h2>
-        <QueryPanel
-          query={streaksQuery}
-          isEmpty={(d) => d.items.length === 0}
-          emptyMessage={`Sin jugadores con partidos suficientes para calcular racha todavía.`}
-        >
-          {(data) => {
-            const rows: StreakRow[] = data.items.map((r) => ({
-              player: r.player_name,
-              gamesSeason: r.games_season,
-              recentPts: r.recent_avg_pts ?? null,
-              seasonPts: r.season_avg_pts ?? null,
-              zPts: r.z_score_pts ?? null,
-              labelPts: streakBadge(r.label),
-              recentTs: r.recent_avg_ts_pct ?? null,
-              seasonTs: r.season_avg_ts_pct ?? null,
-              zTs: r.z_score_ts ?? null,
-            }));
-            return <StatTable data={rows} columns={streakColumns(lastN)} />;
           }}
         </QueryPanel>
       </section>
@@ -304,14 +255,79 @@ export function TeamOverviewPanel({
         >
           {(data) => {
             const rows: LoadRow[] = data.items.map((r) => ({
-              player: r.player_name,
-              games: r.games,
+              player: r.name,
               totalMinutes: r.total_minutes,
-              avgMinutes: r.avg_minutes,
             }));
             return <StatTable data={rows} columns={loadColumns} />;
           }}
         </QueryPanel>
+      </section>
+
+      <section>
+        <h2 className="mb-2 text-lg font-semibold text-slate-800">Partidos ausentes del calendario</h2>
+        <p className="mb-3 text-xs text-slate-400">
+          Pregunta a la fuente qué partidos jugados de la temporada seleccionada no están
+          cargados todavía. Solo informa: cada partido se carga después con un clic.
+        </p>
+        <div className="flex flex-wrap items-end gap-3">
+          <label className="flex flex-col text-xs font-medium text-slate-500">
+            Fuente
+            <select
+              className="mt-0.5 rounded-md border border-slate-300 px-2 py-1 text-sm text-slate-900"
+              value={discoverySource}
+              onChange={(e) => setDiscoverySource(e.target.value as "acb" | "euroleague")}
+            >
+              {DISCOVERY_SOURCES.map((s) => (
+                <option key={s.value} value={s.value}>
+                  {s.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            type="button"
+            onClick={() =>
+              filter.seasonLabel != null &&
+              discovery.mutate({ source: discoverySource, seasonLabel: filter.seasonLabel })
+            }
+            disabled={discovery.isPending || filter.seasonLabel == null}
+            className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {discovery.isPending ? "Consultando la fuente…" : "Descubrir partidos ausentes"}
+          </button>
+          {filter.seasonLabel == null && (
+            <span className="text-xs text-slate-400">Selecciona una temporada primero.</span>
+          )}
+        </div>
+
+        {discovery.isError && (
+          <div className="mt-3">
+            <ErrorState error={discovery.error} />
+          </div>
+        )}
+
+        {discovery.data && (
+          <div className="mt-3">
+            {discovery.data.missing_game_ids.length === 0 ? (
+              <EmptyState
+                message={`No falta ningún partido de ${discoverySource} en ${discovery.data.season_label}.`}
+              />
+            ) : (
+              <ul className="divide-y divide-slate-100 rounded-lg border border-slate-200">
+                {discovery.data.missing_game_ids.map((gameId) => (
+                  <li key={gameId} className="flex items-center justify-between px-3 py-2 text-sm">
+                    <span className="text-slate-700">{gameId}</span>
+                    <RefreshButton
+                      gameId={gameId}
+                      seasonLabel={discovery.data.season_label}
+                      label="Cargar"
+                    />
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
       </section>
     </div>
   );

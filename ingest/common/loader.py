@@ -14,14 +14,46 @@ propio `NormalizedGame.id` ya viene construido por el parser como
 `f"{source}-{external_game_id}"`, determinista y único.
 """
 import logging
-from typing import Dict, List
+from typing import Dict, List, Set
 
 from sqlalchemy import bindparam, text
-from sqlalchemy.engine import Connection
+from sqlalchemy.engine import Connection, Engine
 
 from .schema_types import NormalizedGame
 
 logger = logging.getLogger(__name__)
+
+
+def list_existing_external_ids(engine: Engine, source: str, season_start_year: int) -> Set[str]:
+    """Ids externos (sin prefijo) ya presentes en `games` para una fuente/temporada.
+
+    Lo usa `discover_missing_games` de cada pipeline para saber qué partidos del
+    calendario de la fuente ya están cargados. `games.id` siempre se construye
+    como `f"{source}-{external_id}"` (ver `raw_game.parse_and_resolve`), así que
+    basta un LIKE por prefijo + join a `seasons` por `label`
+    (`f"{season_start_year}-{season_start_year + 1}"`, mismo formato que
+    `identity.get_or_create_season`). No es parte del camino de escritura; vive
+    aquí porque este es el otro módulo que ya conoce el formato de `games.id`.
+
+    Args:
+        engine: engine SQLAlchemy sobre el esquema de scouting.
+        source: prefijo de fuente (`"acb"`, `"euroleague"`).
+        season_start_year: año de inicio de temporada (`2025` = "2025-2026").
+
+    Returns:
+        Conjunto de ids externos (sin el prefijo `"<source>-"`).
+    """
+    label = f"{season_start_year}-{season_start_year + 1}"
+    prefix = f"{source}-"
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT games.id FROM games JOIN seasons ON seasons.id = games.season_id "
+                "WHERE seasons.label = :label AND games.id LIKE :like_prefix"
+            ),
+            {"label": label, "like_prefix": f"{prefix}%"},
+        ).all()
+    return {row[0][len(prefix):] for row in rows}
 
 
 def load_game(conn: Connection, game: NormalizedGame) -> None:

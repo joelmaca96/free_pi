@@ -9,7 +9,7 @@ import { PlantillaScreen } from "@/features/plantilla/PlantillaScreen";
 export const router = createBrowserRouter([
   { path: "/", element: <RootRedirect /> },
   {
-    path: "/:teamSlug",
+    path: "/:teamId",
     element: <Layout />,
     children: [
       { index: true, element: <Navigate to="resumen" replace /> },

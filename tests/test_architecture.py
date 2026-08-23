@@ -29,6 +29,17 @@ FORBIDDEN_ROOT_MODULES = {
     "scraper",
 }
 
+# Módulos de ingest/ que apps/api puede importar explícitamente: los dos
+# entrypoints de orquestación que la feature 014 (revisión tras gate humano,
+# ver local/features/014-auto-fetch-datos-faltantes/01_design.md, Decisión 1)
+# autoriza para disparar refresco/discovery bajo demanda vía BackgroundTasks
+# en el mismo proceso. Lista cerrada, no un prefijo laxo `ingest.*`: cualquier
+# otro submódulo de ingest/ (ingest.common.loader, ingest.acb.client, ingest
+# a secas...) sigue prohibido, para que la API no reimplemente scraping por
+# su cuenta ni toque el resto de ingest/ sin pasar por estos dos entrypoints
+# (que no fabrican datos y capturan sus propios errores, # noqa: BLE001).
+ALLOWED_INGEST_MODULES = {"ingest.acb.pipeline", "ingest.euroleague.pipeline"}
+
 FORBIDDEN_API_MODULES = {
     "requests",
     "beautifulsoup4",
@@ -78,22 +89,62 @@ def test_domain_does_not_import_root_or_apps(pyfile):
     )
 
 
+def _imported_full_names(tree):
+    """Nombres de import completos (dotted), sin truncar al primer segmento.
+
+    A diferencia de `_imported_absolute_names` (usada por el resto de
+    reglas de este fichero), aquí hace falta distinguir
+    `ingest.acb.pipeline` de `ingest.acb.client`/`ingest.common.loader`.
+    """
+    names = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                names.add(alias.name)
+        elif isinstance(node, ast.ImportFrom):
+            if node.level == 0 and node.module:
+                names.add(node.module)
+    return names
+
+
 def test_api_does_not_import_requests_or_ingest() -> None:
-    """`apps/api` must stay in read-only boundary over shared domain."""
-    api_dir = Path("apps") / "api"
+    """`apps/api` solo puede importar `ingest/` a través de la excepción explícita.
+
+    Feature 014 (revisión tras gate humano): `apps/api` dispara refresco/
+    discovery bajo demanda con `fastapi.BackgroundTasks` en el mismo proceso,
+    así que necesita `ingest.acb.pipeline`/`ingest.euroleague.pipeline`
+    directamente (antes prohibido implícitamente, aislado vía subproceso).
+    Se permite EXACTAMENTE esos dos módulos (`ALLOWED_INGEST_MODULES`, lista
+    cerrada); se sigue prohibiendo `requests`/`beautifulsoup4` a pelo y
+    cualquier otro submódulo de `ingest`. Convención requerida en el código
+    nuevo: usar `import ingest.acb.pipeline` / `import ingest.euroleague.pipeline`
+    (no `from ingest.acb import pipeline`), para que esta comprobación por
+    nombre completo de módulo sea inequívoca.
+    """
+    api_dir = ROOT_DIR / "apps" / "api"
     for py_file in sorted(api_dir.rglob("*.py")):
         if py_file.name == "__init__.py":
             continue
         tree = ast.parse(py_file.read_text(encoding="utf-8"), filename=str(py_file))
-        imported = _imported_absolute_names(tree)
+
+        imported_top_level = _imported_absolute_names(tree)
         bad = sorted(
             name
-            for name in imported
+            for name in imported_top_level
             if any(name == prefix or name.startswith(f"{prefix}.") for prefix in FORBIDDEN_API_MODULES)
         )
         assert not bad, (
             f"Forbidden imports in {py_file}: {bad}. "
-            "API package must not depend on requests or apps.ingest."
+            "API package must not depend on requests/beautifulsoup4 or apps.ingest."
+        )
+
+        imported_full = _imported_full_names(tree)
+        ingest_imports = {n for n in imported_full if n == "ingest" or n.startswith("ingest.")}
+        disallowed = sorted(ingest_imports - ALLOWED_INGEST_MODULES)
+        assert not disallowed, (
+            f"{py_file}: import de ingest/ no autorizado: {disallowed}. "
+            f"Solo se permite {sorted(ALLOWED_INGEST_MODULES)} (ver 01_design.md, "
+            "Decisión 1, feature 014)."
         )
 
 

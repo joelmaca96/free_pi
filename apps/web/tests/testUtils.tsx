@@ -16,7 +16,7 @@ export function renderAt(initialPath: string) {
   const router = createMemoryRouter(
     [
       {
-        path: "/:teamSlug",
+        path: "/:teamId",
         element: <Layout />,
         children: [
           { index: true, element: <Navigate to="resumen" replace /> },

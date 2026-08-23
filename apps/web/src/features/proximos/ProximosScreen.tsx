@@ -8,15 +8,12 @@ import {
   useScheduleDifficulty,
   useProjection,
   useHeadToHead,
-  usePlayerForm,
 } from "@/api/hooks";
 import { QueryPanel } from "@/components/PanelState";
 import { StatCard, StatCardRow } from "@/components/StatCard";
 import { StatTable } from "@/components/StatTable";
 import { GameDetail } from "@/components/GameDetail";
 import { TeamLogo } from "@/components/TeamLogo";
-import { ExportButton } from "@/components/ExportButton";
-import { ScoutRivalPanel } from "@/components/ScoutRivalPanel";
 import { fmt, formatDateEs } from "@/lib/format";
 import { TeamOverviewPanel } from "@/features/resumen/TeamOverviewPanel";
 
@@ -34,16 +31,16 @@ const difficultyColumns: ColumnDef<DifficultyRow, any>[] = [
   { accessorKey: "netRating", header: "Net Rating", cell: (c) => fmt(c.getValue() as number | null) },
 ];
 
-/** `/{teamSlug}/proximos` — replica `render_upcoming_tab`, app.py:634-700 (sin scraping bajo demanda). */
+/** `/{teamId}/proximos` — replica `render_upcoming_tab`, app.py:634-700 (sin scraping bajo demanda). */
 export function ProximosScreen() {
-  const { teamSlug = "" } = useParams();
-  const filters = useGlobalFilters(teamSlug);
-  const filter = { season: filters.season, league: filters.league };
-  const teamQuery = useTeam(teamSlug);
-  const gamesQuery = useTeamGames(teamSlug, filter);
+  const { teamId = "" } = useParams();
+  const filters = useGlobalFilters(teamId);
+  const filter = { seasonLabel: filters.seasonLabel };
+  const teamQuery = useTeam(teamId);
+  const gamesQuery = useTeamGames(teamId, filter);
   const [nextN, setNextN] = useState(5);
-  const difficultyQuery = useScheduleDifficulty(teamSlug, filter, nextN);
-  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const difficultyQuery = useScheduleDifficulty(teamId, nextN);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const upcoming = useMemo(
     () => (gamesQuery.data?.items ?? []).filter((g) => g.team_score == null),
@@ -51,16 +48,10 @@ export function ProximosScreen() {
   );
 
   const game = upcoming.find((g) => g.id === selectedId) ?? upcoming[0];
-  const rivalSlug = game?.opponent.slug;
+  const rivalId = game?.opponent.id;
 
-  const projectionQuery = useProjection(teamSlug, rivalSlug, filter.season ?? 0, filter.league);
-  const h2hQuery = useHeadToHead(teamSlug, rivalSlug, filter);
-  // Señal de "¿tiene datos este rival?": no puede ser el roster (`/roster` solo
-  // incluye jugadores con `photo_url`, que solo rellena el scraper oficial de
-  // baskonia.com para el equipo propio — un rival scouteado vía BBR nunca
-  // tendría roster, aunque el scouting haya funcionado). `players/form` sí
-  // refleja directamente lo que escribe `fetch_opponent_scouting`.
-  const rivalDataQuery = usePlayerForm(rivalSlug ?? "", filter, filters.lastN);
+  const projectionQuery = useProjection(teamId, rivalId, filter);
+  const h2hQuery = useHeadToHead(teamId, rivalId, filter);
 
   return (
     <div className="space-y-8">
@@ -88,9 +79,9 @@ export function ProximosScreen() {
         >
           {(data) => {
             const rows: DifficultyRow[] = data.opponents.map((o) => ({
-              date: o.date,
+              date: o.match_date,
               opponentName: o.opponent_name,
-              netRating: o.net_rating ?? null,
+              netRating: o.predicted_net_rating ?? null,
             }));
             return (
               <div className="space-y-3">
@@ -123,7 +114,7 @@ export function ProximosScreen() {
                   <select
                     className="mt-0.5 max-w-md rounded-md border border-slate-300 px-2 py-1.5 text-sm text-slate-900"
                     value={game.id}
-                    onChange={(e) => setSelectedId(Number(e.target.value))}
+                    onChange={(e) => setSelectedId(e.target.value)}
                   >
                     {upcoming.map((g) => (
                       <option key={g.id} value={g.id}>
@@ -134,7 +125,7 @@ export function ProximosScreen() {
                 </label>
 
                 <div className="mt-3 flex items-center gap-3">
-                  <TeamLogo slug={game.opponent.slug} size={48} />
+                  <TeamLogo teamId={game.opponent.id} size={48} />
                   <h3 className="text-lg font-semibold text-slate-900">
                     {formatDateEs(game.date)} — {game.opponent.name} ({game.is_home ? "en casa" : "fuera"})
                   </h3>
@@ -152,16 +143,20 @@ export function ProximosScreen() {
                     data.projection && (
                       <StatCardRow>
                         <StatCard
-                          label="Posesiones proyectadas"
-                          value={fmt(data.projection.projected_possessions)}
+                          label="Pace proyectado"
+                          value={fmt(data.projection.predicted_pace)}
                         />
                         <StatCard
-                          label={`${teamQuery.data?.name ?? teamSlug} (proyección)`}
-                          value={fmt(data.projection.team_projected_score)}
+                          label="ORtg proyectado"
+                          value={fmt(data.projection.predicted_ortg)}
                         />
                         <StatCard
-                          label={`${game.opponent.name} (proyección)`}
-                          value={fmt(data.projection.opp_projected_score)}
+                          label="Net Rating proyectado"
+                          value={fmt(data.projection.predicted_net_rating)}
+                        />
+                        <StatCard
+                          label="Margen esperado"
+                          value={fmt(data.projection.expected_margin)}
                         />
                       </StatCardRow>
                     )
@@ -171,24 +166,12 @@ export function ProximosScreen() {
 
               <section>
                 <h2 className="mb-3 text-lg font-semibold text-slate-800">Scouting: {game.opponent.name}</h2>
-                <QueryPanel query={rivalDataQuery}>
-                  {(data) =>
-                    data.items.length === 0 ? (
-                      <ScoutRivalPanel
-                        teamSlug={game.opponent.slug}
-                        teamName={game.opponent.name}
-                        lastN={filters.lastN}
-                      />
-                    ) : (
-                      <TeamOverviewPanel teamSlug={game.opponent.slug} filter={filter} lastN={filters.lastN} />
-                    )
-                  }
-                </QueryPanel>
+                <TeamOverviewPanel teamId={game.opponent.id} filter={filter} lastN={filters.lastN} />
               </section>
 
               <section>
                 <h2 className="mb-3 text-lg font-semibold text-slate-800">
-                  Últimos {H2H_LAST_N} enfrentamientos directos: {teamQuery.data?.name ?? teamSlug} vs{" "}
+                  Últimos {H2H_LAST_N} enfrentamientos directos: {teamQuery.data?.name ?? teamId} vs{" "}
                   {game.opponent.name}
                 </h2>
                 <QueryPanel
@@ -207,15 +190,15 @@ export function ProximosScreen() {
                               id: h.id,
                               date: h.date,
                               isHome: true,
-                              opponentSlug: game.opponent.slug,
+                              opponentId: game.opponent.id,
                               opponentName: game.opponent.name,
                               teamScore: h.team_score ?? null,
                               opponentScore: h.opponent_score ?? null,
                               pace: null,
                               netRating: null,
                             }}
-                            selfSlug={teamSlug}
-                            selfName={teamQuery.data?.name ?? teamSlug}
+                            selfId={teamId}
+                            selfName={teamQuery.data?.name ?? teamId}
                           />
                         ))}
                       </div>
@@ -223,8 +206,6 @@ export function ProximosScreen() {
                   }}
                 </QueryPanel>
               </section>
-
-              <ExportButton label="📄 Informe de scouting en PDF" />
             </div>
           )
         }

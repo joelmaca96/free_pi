@@ -12,19 +12,19 @@ const TABS = [
 ];
 
 export function Layout() {
-  const { teamSlug = "" } = useParams();
+  const { teamId = "" } = useParams();
   const [searchParams] = useSearchParams();
-  const teamQuery = useTeam(teamSlug);
-  const filters = useGlobalFilters(teamSlug);
+  const teamQuery = useTeam(teamId);
+  const filters = useGlobalFilters(teamId);
   const query = searchParams.toString();
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-6">
       <header className="mb-6 flex flex-col gap-4 border-b border-slate-200 pb-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-3">
-          <TeamLogo slug={teamSlug} size={56} />
+          <TeamLogo teamId={teamId} size={56} />
           <h1 className="text-2xl font-semibold text-slate-900">
-            {teamQuery.data?.name ?? teamSlug}
+            {teamQuery.data?.name ?? teamId}
           </h1>
         </div>
         <div className="flex flex-wrap gap-3">
@@ -46,12 +46,11 @@ export function Layout() {
         {TABS.map((tab) => (
           <NavLink
             key={tab.to}
-            to={{ pathname: `/${teamSlug}/${tab.to}`, search: query ? `?${query}` : "" }}
+            to={{ pathname: `/${teamId}/${tab.to}`, search: query ? `?${query}` : "" }}
             className={({ isActive }) =>
-              `rounded-t-md px-4 py-2 text-sm font-medium ${
-                isActive
-                  ? "border-b-2 border-slate-900 text-slate-900"
-                  : "text-slate-500 hover:text-slate-700"
+              `rounded-t-md px-4 py-2 text-sm font-medium ${isActive
+                ? "border-b-2 border-slate-900 text-slate-900"
+                : "text-slate-500 hover:text-slate-700"
               }`
             }
           >

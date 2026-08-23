@@ -1,8 +1,8 @@
 /** Traducción de `parse_minutes`/`per_36`, packages/baskonia_core/insights.py:173-190. */
 
-export function parseMinutes(value: string | null | undefined): number | null {
-  if (!value) return null;
-  const parts = value.split(":");
+export function parseMinutes(value: number | string | null | undefined): number | null {
+  if (value == null || value === "") return null;
+  const parts = String(value).split(":");
   if (parts.length === 2) {
     const mins = Number(parts[0]);
     const secs = Number(parts[1]);

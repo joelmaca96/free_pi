@@ -6,3 +6,10 @@ sqlalchemy>=2.0
 pandas>=2.0
 python-dotenv>=1.0
 httpx>=0.27  # TestClient
+# La API dispara refresco/discovery bajo demanda importando
+# ingest.acb.pipeline/ingest.euroleague.pipeline en su propio proceso (feature
+# 014, Decisión 1): esos módulos necesitan `requests` (cliente HTTP de ACB y el
+# `HTTPError` del reintento de Euroliga) y `euroleague-api` (import perezoso al
+# instanciar EuroleagueClient). `pandas` ya estaba arriba.
+requests>=2.31.0
+euroleague-api>=0.1.1

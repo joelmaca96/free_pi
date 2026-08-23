@@ -22,9 +22,10 @@ export function fmt(value: number | null | undefined): string {
   return value != null ? value.toFixed(1) : "-";
 }
 
-/** Equivalente de `_fmt_pct`, app.py:146-147 (sin espacio antes de "%"). */
+/** Formatea un porcentaje. La API ya devuelve el valor en formato de
+ * porcentaje (p.ej. 55.5 para 55.5%), así que solo se añade el símbolo "%". */
 export function fmtPct(value: number | null | undefined): string {
-  return value != null ? `${(value * 100).toFixed(1)}%` : "-";
+  return value != null ? `${value.toFixed(1)}%` : "-";
 }
 
 /** Equivalente de `season_label`, packages/baskonia_core/insights.py:65-69. */

@@ -51,6 +51,9 @@ def test_get_boxscore(client):
     assert body["rows"][0]["player_id"] == "howard"
     assert body["rows"][0]["name"] == "Marcus Howard"
     assert body["rows"][0]["pts"] == 20
+    # Cada fila expone el team_id del jugador (para agrupar por equipo).
+    assert all("team_id" in row for row in body["rows"])
+    assert body["rows"][0]["team_id"] == "bas"
 
 
 def test_get_boxscore_not_found(client):

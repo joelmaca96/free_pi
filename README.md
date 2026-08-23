@@ -670,10 +670,13 @@ cd apps/web && npm run dev
 > endpoints en `local/features/012-api-nuevo-modelo-datos/01_design.md` y el `openapi.json`
 > versionado en la raíz.
 >
-> **Desviación aceptada (feature 013):** la SPA **aún no compila** contra el contrato nuevo
-> (`npm run build` falla en las pantallas que usan `slug`/`season`/`league`/endpoints
-> eliminados). La adaptación de pantallas de la SPA al contrato nuevo es trabajo aparte
-> (feature 013); esta feature solo regeneró `apps/web/src/api/schema.d.ts`.
+> **Feature 013 (`spa-contrato-nuevo`):** la SPA **ya está adaptada** al contrato nuevo y
+> `npm run build` compila sin errores de TypeScript. Además, la API amplió el endpoint
+> `/games/{game_id}/boxscore` para devolver `team_id` en cada fila (cambio aditivo), de modo que
+> la SPA agrupa el boxscore por equipo (dos tablas). Se eliminaron la sección "Rachas", el
+> scouting bajo demanda (botón "Descargar datos de `<rival>`") y los botones de export
+> PDF/PPTX. Ver `doc/features/spa-contrato-nuevo/01_estado.md` para el contrato que consume la
+> SPA.
 
 Abre `http://localhost:5173` **centrada en
 el Baskonia** (primer `team_id` de `config.TEAMS`). La cabecera es **global a las
@@ -704,18 +707,15 @@ ventana de días, no de temporada. Cuatro pestañas:
    para no dar la impresión equivocada de que no hay enfrentamientos
    directos recientes); forma reciente por jugador (gráfico de PTS, y tabla
    con columnas de perfil de tiro `3PA%`/`FTr` — proporción de intentos de 3
-   y tasa de tiros libres sobre el total de intentos); **rachas (hot/cold)**:
-   doble z-score por jugador (volumen de PTS y eficiencia TS%) de los
-   últimos N partidos frente a su media/desviación de la temporada
-   seleccionada, marcado 🔥/❄️/➖ con umbral ±1.0 (ver "Estado actual" sobre
-   por qué apenas se activa con los datos de hoy); y **carga de minutos**
+   y tasa de tiros libres sobre el total de intentos); y **carga de minutos**
    (gestión de fatiga): minutos acumulados por jugador en una ventana de
    días ajustable (1-30, default 14), independiente del filtro de
-   temporada/competición.
+   temporada/competición. *(La sección "Rachas (hot/cold)" se eliminó en la
+   feature 013: el endpoint `streaks` ya no existe en la API.)*
 2. **Partidos anteriores**: selector con **cualquier** partido ya jugado del
    Baskonia (no solo los últimos N o los enfrentamientos vs Bilbao); al
    elegir uno, muestra pace/Net Rating y el box score completo de ambos
-   equipos.
+   equipos, **agrupado por equipo** (dos tablas, una por `team_id`).
 3. **Próximos enfrentamientos**: lista el calendario pendiente — combina lo
    que ya tenga BBR con el calendario oficial de baskonia.com para la 26/27
    (ver sección 4.1); esta lista no se acota por temporada/competición (ver
@@ -724,43 +724,36 @@ ventana de días, no de temporada. Cuatro pestañas:
    próximos N rivales ya scouteados, calculado sobre la temporada/
    competición seleccionada de cada rival (`insights.schedule_difficulty()`).
    Si el rival elegido ya tiene datos en la base de datos, además de su
-   scouting (misma vista que "Resumen" pero del rival, con las mismas
-   subsecciones nuevas de rachas/carga) se muestra la **proyección del
-   partido** (posesiones y marcador esperado combinando pace/ORtg/DRtg
-   medios de ambos equipos en la temporada seleccionada,
-   `insights.project_next_matchup()` — no aparece si a alguno de los dos le
-   falta algún valor) y los **últimos 2 enfrentamientos directos** contra el
-   Baskonia (constante `H2H_LAST_N` en
+   scouting (misma vista que "Resumen" pero del rival) se muestra la
+   **proyección del partido** (pace/ORtg/Net Rating proyectados y margen
+   esperado combinando pace/ORtg/DRtg medios de ambos equipos en la
+   temporada seleccionada, `insights.project_next_matchup()` — no aparece si
+   a alguno de los dos le falta algún valor) y los **últimos 2
+   enfrentamientos directos** contra el Baskonia (constante `H2H_LAST_N` en
    `apps/web/src/features/proximos/ProximosScreen.tsx`, independiente del N
-   de "forma reciente"). Si es la primera vez que aparece, un botón
-   **"Descargar datos de `<rival>`"** lanza la descarga bajo demanda (roster
-   + calendario + box score de sus últimos N partidos,
-   `fetch_opponent_scouting()` en `apps/ingest/pipeline.py`) respetando el rate-limit de
-   20s — la GUI avisa del tiempo estimado antes de lanzarla. Si el rival no
-   se pudo emparejar con un equipo real de BBR (ver limitaciones de la
-   sección 1), el botón falla con un aviso legible en vez de reventar.
+   de "forma reciente"). *(El scouting bajo demanda — botón "Descargar datos
+   de `<rival>`" que lanzaba `fetch_opponent_scouting()` — se eliminó en la
+   feature 013: la sección "Scouting: {rival}" muestra directamente la vista
+   de resumen del rival.)*
 4. **Plantilla**: mosaico de fotos de la plantilla actual (baskonia.com,
    sección 4.1) — un icono genérico de silueta para fichajes sin foto
    subida todavía. Al elegir un jugador, su ficha muestra posición, dorsal,
-   forma reciente y estadísticas de la temporada (mismo cálculo que
-   `insights.player_recent_form`, con `last_n` grande para "toda la
-   temporada"). Botón **"Generar ppt para Paolo"** (pestaña "Plantilla") y
-   botones **"Informe en PDF"** (pestañas con datos de un enfrentamiento):
-   ambos son el componente `ExportButton` de la SPA
-   (`apps/web/src/components/ExportButton.tsx`), que hoy se muestra
-   **deshabilitado** con un tooltip — los endpoints de informes de la API
-   (`/reports/scouting.pdf` y `/reports/roster.pptx`) **se eliminaron** en la
-   feature 012 (el esquema de scouting no los soporta; la exportación
-   PDF/PPTX quedó sin implementar al retirar Streamlit y sus dependencias
-   `fpdf2`/`python-pptx`; ver sección 7.2).
+   y las **medias de temporada** del roster (`gp`, `min_avg`, `pts_avg`,
+   `reb_avg`, `ast_avg`, `efg_pct`). *(Los botones de export "Generar ppt
+   para Paolo" y "Informe en PDF" — componente `ExportButton` — se
+   eliminaron en la feature 013: los endpoints de informes de la API
+   (`/reports/scouting.pdf` y `/reports/roster.pptx`) se eliminaron en la
+   feature 012 y la exportación PDF/PPTX quedó sin implementar; ver sección
+   7.2.)*
 
 Todas las fechas se muestran en **castellano** (`format_date_es()` en
 `apps/web/src/lib/format.ts`): BBR guarda las fechas en inglés ("Sun, Nov
 23, 2025") y la GUI las convierte a "domingo, 23 de noviembre de 2025" en
 tablas, gráficos y títulos de partido.
 
-Solo el botón de descarga bajo demanda de un rival hace peticiones a BBR; el
-resto de la GUI solo lee `data/baskonia.db`.
+La GUI **solo lee** `data/baskonia.db` (la API es de solo lectura); no hace peticiones a BBR.
+*(El botón de descarga bajo demanda de un rival, que era la única petición a BBR desde la GUI,
+se eliminó en la feature 013.)*
 
 Muestra el escudo de cada equipo (cabecera, pestañas, box scores) si existe
 la imagen en `assets/logos/<slug>.{png,jpg,jpeg,svg}` (ver

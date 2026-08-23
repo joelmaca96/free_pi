@@ -1,5 +1,5 @@
 """Tests del volcado idempotente de un partido normalizado (`ingest.common.loader`)."""
-from ingest.common.loader import load_game
+from ingest.common.loader import list_existing_external_ids, load_game
 from ingest.common.schema_types import (
     GameAdvancedStat,
     KeyEvent,
@@ -74,3 +74,16 @@ def test_load_game_is_idempotent_on_rerun(engine):
         assert conn.execute(text("SELECT COUNT(*) FROM lineups WHERE game_id='acb-99001'")).scalar_one() == 1
         assert conn.execute(text("SELECT COUNT(*) FROM shots WHERE game_id='acb-99001'")).scalar_one() == 2
         assert conn.execute(text("SELECT COUNT(*) FROM key_events WHERE game_id='acb-99001'")).scalar_one() == 1
+
+
+def test_list_existing_external_ids_filtra_por_fuente_y_temporada(engine):
+    """Devuelve solo los ids de la fuente/temporada pedidas, sin el prefijo."""
+    with engine.begin() as conn:
+        load_game(conn, _sample_game())  # acb-99001, season_id=1 ('2025-2026')
+
+    assert list_existing_external_ids(engine, "acb", 2025) == {"99001"}
+    # El seed de `schema.sql` carga partidos 'g1'..'g5' (sin prefijo de fuente):
+    # no deben colarse en el resultado de ninguna fuente real.
+    assert list_existing_external_ids(engine, "euroleague", 2025) == set()
+    # Otra temporada: mismo partido, pero el label no coincide.
+    assert list_existing_external_ids(engine, "acb", 2024) == set()

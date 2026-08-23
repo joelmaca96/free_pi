@@ -30,6 +30,10 @@ class ApiSettings:
         cors_origins: orígenes permitidos para CORS (lista separada por comas).
         log_level: nivel de logging (INFO por defecto).
         cache_max_age: segundos del `Cache-Control` de las respuestas.
+        refresh_cooldown_seconds: TTL del guardia en memoria de refrescos en
+            curso (`apps/api/routers/refresh.py`): pasado ese tiempo se
+            considera huérfana una entrada que no se liberó.
+        refresh_max_concurrent: refrescos en background admitidos a la vez.
     """
 
     def __init__(self) -> None:
@@ -42,6 +46,10 @@ class ApiSettings:
         self.log_level: str = os.getenv("LOG_LEVEL", "INFO")
         self.cache_max_age: int = int(os.getenv("CACHE_MAX_AGE", "60"))
         self.debug: bool = _get_bool("API_DEBUG", False)
+        self.refresh_cooldown_seconds: float = float(
+            os.getenv("REFRESH_COOLDOWN_SECONDS", "60")
+        )
+        self.refresh_max_concurrent: int = int(os.getenv("REFRESH_MAX_CONCURRENT", "2"))
 
 
 settings = ApiSettings()

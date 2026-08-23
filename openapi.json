@@ -950,6 +950,131 @@
           }
         }
       }
+    },
+    "/api/v1/games/{game_id}/refresh": {
+      "post": {
+        "tags": [
+          "refresh"
+        ],
+        "summary": "Refresh Game",
+        "description": "Encola la recarga de un partido desde su fuente (202, fire-and-forget).\n\nArgs:\n    game_id: id del partido (`\"<fuente>-<id externo>\"`).\n    season_label: temporada, obligatoria solo si el partido aún no existe.\n\nReturns:\n    `RefreshResponse` con `triggered`, `already_in_progress` o\n    `rejected_busy`.\n\nRaises:\n    InvalidFilter: la fuente del `game_id` no admite refresco bajo demanda.\n    GameNotFound: el partido no existe y no se pasó `season_label`.",
+        "operationId": "refresh_game_api_v1_games__game_id__refresh_post",
+        "parameters": [
+          {
+            "name": "game_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "Id TEXT del partido (p.ej. 'g1')",
+              "title": "Game Id"
+            },
+            "description": "Id TEXT del partido (p.ej. 'g1')"
+          },
+          {
+            "name": "season_label",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^\\d{4}-\\d{4}$"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Temporada del partido (p.ej. '2025-2026'). Solo necesario para cargar un partido que todavía no existe en `games` (descubierto con POST /discovery/missing-games).",
+              "title": "Season Label"
+            },
+            "description": "Temporada del partido (p.ej. '2025-2026'). Solo necesario para cargar un partido que todavía no existe en `games` (descubierto con POST /discovery/missing-games)."
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefreshResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/discovery/missing-games": {
+      "post": {
+        "tags": [
+          "discovery"
+        ],
+        "summary": "Discover Missing Games",
+        "description": "Lista los partidos jugados de la fuente/temporada que faltan en `games`.\n\n`source`/`season_label` inválidos los rechaza la validación de FastAPI con\nun 422 `problem+json` (ver `apps/api/errors.py`), sin código propio aquí.\n\nArgs:\n    source: fuente de ingesta (`acb` o `euroleague`).\n    season_label: temporada en formato `'2025-2026'`.\n\nReturns:\n    `MissingGamesResponse` con los ids ya prefijados (`\"<source>-<id>\"`),\n    listos para `POST /games/{game_id}/refresh?season_label=...`.",
+        "operationId": "discover_missing_games_api_v1_discovery_missing_games_post",
+        "parameters": [
+          {
+            "name": "source",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "enum": [
+                "acb",
+                "euroleague"
+              ],
+              "type": "string",
+              "description": "Fuente de ingesta a consultar",
+              "title": "Source"
+            },
+            "description": "Fuente de ingesta a consultar"
+          },
+          {
+            "name": "season_label",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{4}$",
+              "description": "Temporada a consultar (p.ej. '2025-2026')",
+              "title": "Season Label"
+            },
+            "description": "Temporada a consultar (p.ej. '2025-2026')"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MissingGamesResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1163,6 +1288,10 @@
             "type": "string",
             "title": "Name"
           },
+          "team_id": {
+            "type": "string",
+            "title": "Team Id"
+          },
           "minutes": {
             "anyOf": [
               {
@@ -1223,7 +1352,8 @@
         "required": [
           "game_id",
           "player_id",
-          "name"
+          "name",
+          "team_id"
         ],
         "title": "BoxScoreRow",
         "description": "Fila de box score de un jugador en un partido."
@@ -2078,6 +2208,37 @@
         "title": "LoadResponse",
         "description": "Carga de minutos por jugador (transversal a temporada/competición)."
       },
+      "MissingGamesResponse": {
+        "properties": {
+          "source": {
+            "type": "string",
+            "enum": [
+              "acb",
+              "euroleague"
+            ],
+            "title": "Source"
+          },
+          "season_label": {
+            "type": "string",
+            "title": "Season Label"
+          },
+          "missing_game_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Missing Game Ids"
+          }
+        },
+        "type": "object",
+        "required": [
+          "source",
+          "season_label",
+          "missing_game_ids"
+        ],
+        "title": "MissingGamesResponse",
+        "description": "Partidos del calendario de la fuente que aún no están cargados.\n\nSolo reporta: este endpoint nunca dispara una carga. Los ids vienen ya\nprefijados (`\"acb-105370\"`, `\"euroleague-7\"`) para poder pasarlos tal cual a\n`POST /games/{game_id}/refresh?season_label=...`.\n\nAttributes:\n    source: fuente consultada.\n    season_label: temporada consultada (`'2025-2026'`).\n    missing_game_ids: ids de partidos jugados/finalizados ausentes de\n        `games`; lista vacía si no falta ninguno."
+      },
       "NarrativeResponse": {
         "properties": {
           "team_id": {
@@ -2338,6 +2499,30 @@
         ],
         "title": "RatingTrendResponse",
         "description": "Tendencia ORtg/DRtg de un equipo en sus últimos N partidos."
+      },
+      "RefreshResponse": {
+        "properties": {
+          "game_id": {
+            "type": "string",
+            "title": "Game Id"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "triggered",
+              "already_in_progress",
+              "rejected_busy"
+            ],
+            "title": "Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "game_id",
+          "status"
+        ],
+        "title": "RefreshResponse",
+        "description": "Resultado de *encolar* un refresco (no del refresco en sí).\n\nEl trabajo real corre después en background: `triggered` significa\n\"aceptado y encolado\", no \"datos ya disponibles\". El cliente comprueba el\nresultado reconsultando los endpoints de lectura; si el fetch a la fuente\nfalla, esos endpoints siguen devolviendo `null`/`[]` (nunca un valor\nfabricado).\n\nAttributes:\n    game_id: id del partido para el que se pidió el refresco.\n    status: `triggered` (encolado), `already_in_progress` (ya hay un\n        refresco en curso para ese partido) o `rejected_busy` (límite de\n        refrescos concurrentes alcanzado; reintentar más tarde)."
       },
       "RosterPlayer": {
         "properties": {

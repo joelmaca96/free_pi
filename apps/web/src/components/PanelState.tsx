@@ -23,10 +23,16 @@ export function ErrorState({ error }: { error: unknown }) {
   );
 }
 
-export function EmptyState({ message }: { message: string }) {
+/**
+ * "Sin datos suficientes" (no es un error). `action` es opcional y aditivo: los
+ * paneles que pueden intentar rellenar el hueco desde la fuente le pasan un
+ * `RefreshButton`.
+ */
+export function EmptyState({ message, action }: { message: string; action?: ReactNode }) {
   return (
     <div className="rounded-md border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-500">
-      {message}
+      <p>{message}</p>
+      {action && <div className="mt-2">{action}</div>}
     </div>
   );
 }
@@ -46,18 +52,23 @@ export function QueryPanel<T>({
   query,
   isEmpty,
   emptyMessage,
+  emptyAction,
   loadingLabel,
   children,
 }: {
   query: QueryResultLike<T>;
   isEmpty?: (data: T) => boolean;
   emptyMessage?: string;
+  /** Acción opcional que se ofrece solo en el estado vacío (p.ej. "Refrescar"). */
+  emptyAction?: ReactNode;
   loadingLabel?: string;
   children: (data: T) => ReactNode;
 }) {
   if (query.isLoading) return <LoadingState label={loadingLabel} />;
   if (query.isError) return <ErrorState error={query.error} />;
   const data = query.data as T;
-  if (isEmpty?.(data)) return <EmptyState message={emptyMessage ?? "Sin datos."} />;
+  if (isEmpty?.(data)) {
+    return <EmptyState message={emptyMessage ?? "Sin datos."} action={emptyAction} />;
+  }
   return <>{children(data)}</>;
 }

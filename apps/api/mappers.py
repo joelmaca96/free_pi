@@ -69,6 +69,7 @@ def boxscore_row(row: dict) -> games_schemas.BoxScoreRow:
         game_id=row["game_id"],
         player_id=row["player_id"],
         name=row["name"],
+        team_id=row["team_id"],
         minutes=row["minutes"],
         pts=row["pts"],
         reb=row["reb"],

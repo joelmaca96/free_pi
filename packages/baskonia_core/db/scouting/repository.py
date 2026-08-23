@@ -48,6 +48,22 @@ class ScoutingRepository:
             rows = conn.execute(sql, {"season_label": season_label}).mappings().all()
         return [dict(row) for row in rows]
 
+    def get_game_season_label(self, game_id: str) -> Optional[str]:
+        """`seasons.label` del partido (`'2025-2026'`), o `None` si no existe.
+
+        Consulta mínima (una fila) para quien solo necesita saber si el partido
+        está cargado y de qué temporada es, sin pagar el detalle completo de
+        `get_game_detail` (que dispara varias consultas de tablas hijas).
+        """
+        with self._engine.connect() as conn:
+            return conn.execute(
+                text(
+                    "SELECT s.label FROM games g JOIN seasons s ON s.id = g.season_id"
+                    " WHERE g.id = :game_id"
+                ),
+                {"game_id": game_id},
+            ).scalar_one_or_none()
+
     def get_game_detail(self, game_id: str) -> Optional[Dict[str, Any]]:
         """Detalle de un partido: resultado, stats avanzadas, lineups, zonas y eventos clave.
 
@@ -186,11 +202,15 @@ class ScoutingRepository:
         }
 
     def get_game_boxscore(self, game_id: str) -> List[Dict[str, Any]]:
-        """Boxscore de un partido (una fila por jugador), ordenado por puntos."""
+        """Boxscore de un partido (una fila por jugador), ordenado por puntos.
+
+        Cada fila incluye el `team_id` del jugador (vía `players.team_id`) para que
+        el consumidor pueda agrupar el boxscore por equipo.
+        """
         sql = text(
             """
-            SELECT pgs.game_id, pgs.player_id, p.name, pgs.minutes, pgs.pts,
-                   pgs.reb, pgs.ast, pgs.efg_pct
+            SELECT pgs.game_id, pgs.player_id, p.name, p.team_id, pgs.minutes,
+                   pgs.pts, pgs.reb, pgs.ast, pgs.efg_pct
             FROM player_game_stats pgs
             JOIN players p ON p.id = pgs.player_id
             WHERE pgs.game_id = :game_id

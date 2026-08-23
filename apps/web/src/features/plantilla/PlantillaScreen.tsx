@@ -1,28 +1,18 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useParams } from "react-router-dom";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
-import { useRoster, usePlayerForm } from "@/api/hooks";
+import { useRoster } from "@/api/hooks";
 import { QueryPanel } from "@/components/PanelState";
 import { StatCard, StatCardRow } from "@/components/StatCard";
-import { ExportButton } from "@/components/ExportButton";
 import { fmt, fmtPct } from "@/lib/format";
 
-const SEASON_STATS_LAST_N = 1000; // igual que app.py:897 (last_n grande = "toda la temporada")
-
-/** `/{teamSlug}/plantilla` — replica `render_roster_tab` + `render_player_card`, app.py:867-904, 703-748. */
+/** `/{teamId}/plantilla` — replica `render_roster_tab` + `render_player_card`, app.py:867-904, 703-748. */
 export function PlantillaScreen() {
-  const { teamSlug = "" } = useParams();
-  const filters = useGlobalFilters(teamSlug);
-  const filter = { season: filters.season, league: filters.league };
-  const rosterQuery = useRoster(teamSlug, filter);
-  const seasonFormQuery = usePlayerForm(teamSlug, filter, SEASON_STATS_LAST_N);
+  const { teamId = "" } = useParams();
+  const filters = useGlobalFilters(teamId);
+  const filter = { seasonLabel: filters.seasonLabel };
+  const rosterQuery = useRoster(teamId, filter);
   const [selectedName, setSelectedName] = useState<string | null>(null);
-
-  const seasonStatsByPlayer = useMemo(() => {
-    const map = new Map<string, NonNullable<typeof seasonFormQuery.data>["items"][number]>();
-    for (const row of seasonFormQuery.data?.items ?? []) map.set(row.player_name, row);
-    return map;
-  }, [seasonFormQuery.data]);
 
   return (
     <QueryPanel
@@ -32,28 +22,12 @@ export function PlantillaScreen() {
     >
       {(data) => {
         const player = data.players.find((p) => p.name === selectedName) ?? data.players[0];
-        const seasonStats = player ? seasonStatsByPlayer.get(player.name) : undefined;
-        const recentForm = player?.form as
-          | {
-              games: number;
-              avg_minutes: number | null;
-              avg_pts: number | null;
-              avg_efg_pct: number | null;
-              avg_ts_pct: number | null;
-              fg3a_rate: number | null;
-              ft_rate: number | null;
-            }
-          | null
-          | undefined;
 
         return (
           <div className="space-y-6">
-            <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold text-slate-800">
-                Plantilla actual ({data.players.length} jugadores)
-              </h2>
-              <ExportButton label="🎬 Generar ppt para Paolo" />
-            </div>
+            <h2 className="text-lg font-semibold text-slate-800">
+              Plantilla actual ({data.players.length} jugadores)
+            </h2>
 
             <div
               className="grid gap-4"
@@ -119,40 +93,16 @@ export function PlantillaScreen() {
 
                 <section>
                   <h4 className="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-500">
-                    Forma reciente (últimos {filters.lastN} partidos jugados)
-                  </h4>
-                  <StatCardRow>
-                    <StatCard label="Partidos" value={recentForm?.games ?? "-"} />
-                    <StatCard label="MIN" value={fmt(recentForm?.avg_minutes)} />
-                    <StatCard label="PTS" value={fmt(recentForm?.avg_pts)} />
-                    <StatCard label="eFG%" value={fmtPct(recentForm?.avg_efg_pct)} />
-                    <StatCard label="TS%" value={fmtPct(recentForm?.avg_ts_pct)} />
-                    <StatCard label="3PA%" value={fmtPct(recentForm?.fg3a_rate)} />
-                    <StatCard label="FTr" value={fmt(recentForm?.ft_rate)} />
-                  </StatCardRow>
-                </section>
-
-                <section>
-                  <h4 className="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-500">
                     Estadísticas de la temporada
                   </h4>
-                  <QueryPanel
-                    query={seasonFormQuery}
-                    isEmpty={() => !seasonStats}
-                    emptyMessage="Sin datos suficientes."
-                  >
-                    {() => (
-                      <StatCardRow>
-                        <StatCard label="Partidos" value={seasonStats?.games ?? "-"} />
-                        <StatCard label="MIN" value={fmt(seasonStats?.avg_minutes)} />
-                        <StatCard label="PTS" value={fmt(seasonStats?.avg_pts)} />
-                        <StatCard label="eFG%" value={fmtPct(seasonStats?.avg_efg_pct)} />
-                        <StatCard label="TS%" value={fmtPct(seasonStats?.avg_ts_pct)} />
-                        <StatCard label="3PA%" value={fmtPct(seasonStats?.fg3a_rate)} />
-                        <StatCard label="FTr" value={fmt(seasonStats?.ft_rate)} />
-                      </StatCardRow>
-                    )}
-                  </QueryPanel>
+                  <StatCardRow>
+                    <StatCard label="Partidos" value={player.gp ?? "-"} />
+                    <StatCard label="MIN" value={fmt(player.min_avg)} />
+                    <StatCard label="PTS" value={fmt(player.pts_avg)} />
+                    <StatCard label="REB" value={fmt(player.reb_avg)} />
+                    <StatCard label="AST" value={fmt(player.ast_avg)} />
+                    <StatCard label="eFG%" value={fmtPct(player.efg_pct)} />
+                  </StatCardRow>
                 </section>
               </div>
             )}

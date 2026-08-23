@@ -51,6 +51,7 @@ class BoxScoreRow(BaseModel):
     game_id: str
     player_id: str
     name: str
+    team_id: str
     minutes: float | None = None
     pts: int | None = None
     reb: int | None = None

@@ -5,6 +5,7 @@ de `local/features/012-api-nuevo-modelo-datos/01_design.md`: JSON en
 `snake_case`, números como números, fechas ISO-8601 y `null` para ausencia de
 dato. La identidad usa `team_id`/`game_id` TEXT (esquema de scouting).
 """
+from .discovery import MissingGamesResponse
 from .games import (
     BaskoniaBlock,
     BoxScoreResponse,
@@ -28,6 +29,7 @@ from .matchups import (
     UpcomingMatchup,
 )
 from .meta import DataFreshnessResponse, HealthResponse
+from .refresh import RefreshResponse
 from .players import (
     LoadItem,
     LoadResponse,
@@ -87,4 +89,7 @@ __all__ = [
     "HeadToHeadResponse",
     "UpcomingMatchup",
     "NarrativeResponse",
+    # refresco / discovery bajo demanda
+    "RefreshResponse",
+    "MissingGamesResponse",
 ]

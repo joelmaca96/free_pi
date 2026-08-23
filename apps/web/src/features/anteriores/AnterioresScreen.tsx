@@ -4,16 +4,15 @@ import { useGlobalFilters } from "@/lib/useGlobalFilters";
 import { useTeam, useTeamGames } from "@/api/hooks";
 import { QueryPanel } from "@/components/PanelState";
 import { GameDetail } from "@/components/GameDetail";
-import { ExportButton } from "@/components/ExportButton";
 import { formatDateEs, resultLabel } from "@/lib/format";
 
-/** `/{teamSlug}/anteriores` — replica `render_past_games_tab`, app.py:523-571. */
+/** `/{teamId}/anteriores` — replica `render_past_games_tab`, app.py:523-571. */
 export function AnterioresScreen() {
-  const { teamSlug = "" } = useParams();
-  const filters = useGlobalFilters(teamSlug);
-  const teamQuery = useTeam(teamSlug);
-  const gamesQuery = useTeamGames(teamSlug, { season: filters.season, league: filters.league });
-  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const { teamId = "" } = useParams();
+  const filters = useGlobalFilters(teamId);
+  const teamQuery = useTeam(teamId);
+  const gamesQuery = useTeamGames(teamId, { seasonLabel: filters.seasonLabel });
+  const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const played = useMemo(
     () => (gamesQuery.data?.items ?? []).filter((g) => g.result != null),
@@ -35,7 +34,7 @@ export function AnterioresScreen() {
               <select
                 className="mt-0.5 max-w-md rounded-md border border-slate-300 px-2 py-1.5 text-sm text-slate-900"
                 value={game?.id ?? ""}
-                onChange={(e) => setSelectedId(Number(e.target.value))}
+                onChange={(e) => setSelectedId(e.target.value)}
               >
                 {played.map((g) => (
                   <option key={g.id} value={g.id}>
@@ -46,24 +45,21 @@ export function AnterioresScreen() {
             </label>
 
             {game && (
-              <>
-                <GameDetail
-                  game={{
-                    id: game.id,
-                    date: game.date,
-                    isHome: game.is_home,
-                    opponentSlug: game.opponent.slug,
-                    opponentName: game.opponent.name,
-                    teamScore: game.team_score ?? null,
-                    opponentScore: game.opponent_score ?? null,
-                    pace: game.advanced?.pace ?? null,
-                    netRating: game.advanced?.net_rating ?? null,
-                  }}
-                  selfSlug={teamSlug}
-                  selfName={teamQuery.data?.name ?? teamSlug}
-                />
-                <ExportButton label="📄 Informe de este partido en PDF" />
-              </>
+              <GameDetail
+                game={{
+                  id: game.id,
+                  date: game.date,
+                  isHome: game.is_home,
+                  opponentId: game.opponent.id,
+                  opponentName: game.opponent.name,
+                  teamScore: game.team_score ?? null,
+                  opponentScore: game.opponent_score ?? null,
+                  pace: game.pace ?? null,
+                  netRating: game.advanced?.net_rating ?? null,
+                }}
+                selfId={teamId}
+                selfName={teamQuery.data?.name ?? teamId}
+              />
             )}
           </div>
         );

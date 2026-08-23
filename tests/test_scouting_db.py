@@ -180,6 +180,9 @@ def test_get_game_boxscore_matches_seed(repo):
     assert boxscore[0]["pts"] == 20
     assert boxscore[-1]["player_id"] == "lutse"
     assert boxscore[-1]["pts"] == 0
+    # Cada fila expone el team_id del jugador (para agrupar por equipo).
+    assert all("team_id" in row for row in boxscore)
+    assert boxscore[0]["team_id"] == "bas"
 
 
 def test_get_game_boxscore_unknown_game_returns_empty(repo):

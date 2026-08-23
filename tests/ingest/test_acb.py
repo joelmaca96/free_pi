@@ -4,7 +4,7 @@ from unittest import mock
 from sqlalchemy import text
 
 from ingest.acb.parser import parse_and_resolve
-from ingest.acb.pipeline import run
+from ingest.acb.pipeline import discover_missing_games, run, run_single_game
 from ingest.common.loader import load_game
 
 RAW_GAME = {
@@ -161,3 +161,75 @@ def test_acb_pipeline_run_isolates_failures():
 
     assert summary["failed"] == ["bad"]
     assert summary["loaded"] == ["good"]
+
+
+# --- Refresco por-partido y discovery (feature 014) -------------------------
+
+
+def _fake_acb_client(match_ids=("2025123401",)):
+    """Cliente ACB simulado: calendario en memoria + `fetch_game` fijo."""
+    client = mock.Mock()
+    client.fetch_season_finished_matches.return_value = [{"id": mid} for mid in match_ids]
+    client.fetch_game.return_value = RAW_GAME
+    return client
+
+
+def test_acb_run_single_game_carga_solo_el_partido_pedido(engine):
+    """Descarga un único partido tras listar el calendario (requisito de `fetch_game`)."""
+    client = _fake_acb_client(("2025123401", "2025123402"))
+
+    summary = run_single_game(engine, season=2025, game_id="2025123401", client=client)
+
+    assert summary == {"loaded": ["2025123401"], "failed": []}
+    client.fetch_season_finished_matches.assert_called_once_with(2025)
+    client.fetch_game.assert_called_once_with("2025123401")
+
+    with engine.connect() as conn:
+        assert conn.execute(
+            text("SELECT COUNT(*) FROM games WHERE id='acb-2025123401'")
+        ).scalar_one() == 1
+
+
+def test_acb_run_single_game_es_idempotente(engine):
+    """Refrescar dos veces el mismo partido no duplica filas."""
+    client = _fake_acb_client()
+    run_single_game(engine, season=2025, game_id="2025123401", client=client)
+    summary = run_single_game(engine, season=2025, game_id="2025123401", client=client)
+
+    assert summary["loaded"] == ["2025123401"]
+    with engine.connect() as conn:
+        assert conn.execute(
+            text("SELECT COUNT(*) FROM player_game_stats WHERE game_id='acb-2025123401'")
+        ).scalar_one() == 2
+
+
+def test_acb_run_single_game_partido_desconocido_queda_en_failed(engine):
+    """Un id que no está en el calendario de la temporada no lanza: va a `failed`."""
+    client = _fake_acb_client(("2025123401",))
+
+    summary = run_single_game(engine, season=2025, game_id="no-existe", client=client)
+
+    assert summary == {"loaded": [], "failed": ["no-existe"]}
+    client.fetch_game.assert_not_called()
+
+
+def test_acb_run_single_game_captura_el_fallo_de_la_fuente(engine):
+    """Si la fuente falla (500, red), el partido queda en `failed` sin propagar."""
+    client = _fake_acb_client()
+    client.fetch_game.side_effect = RuntimeError("500 del servidor")
+
+    summary = run_single_game(engine, season=2025, game_id="2025123401", client=client)
+
+    assert summary == {"loaded": [], "failed": ["2025123401"]}
+
+
+def test_acb_discover_missing_games_compara_calendario_con_bd(engine):
+    """Devuelve los finalizados que faltan en `games`, sin descargar ningún partido."""
+    client = _fake_acb_client(("2025123401", "2025123402"))
+    run_single_game(engine, season=2025, game_id="2025123401", client=client)
+    client.fetch_game.reset_mock()
+
+    missing = discover_missing_games(engine, season=2025, client=client)
+
+    assert missing == ["2025123402"]
+    client.fetch_game.assert_not_called()  # discovery no descarga partidos

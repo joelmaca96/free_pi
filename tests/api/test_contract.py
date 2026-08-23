@@ -27,18 +27,20 @@ def test_openapi_matches_versioned_contract():
     )
 
 
-def test_contract_has_18_endpoints():
-    """El contrato expone los 18 endpoints de negocio de la feature 012.
+def test_contract_has_20_endpoints():
+    """El contrato expone los 20 endpoints de negocio.
 
-    Se eliminaron jobs/reports/admin/streaks/scout (el esquema de scouting no
-    los soporta). Los paths de docs/openapi/redoc no cuentan como negocio.
+    18 de la feature 012 (se eliminaron jobs/reports/admin/streaks/scout, que el
+    esquema de scouting no soporta) + 2 de la feature 014 (refresco por-partido
+    bajo demanda y discovery de partidos ausentes). Los paths de
+    docs/openapi/redoc no cuentan como negocio.
     """
     spec = create_app().openapi()
     paths = spec["paths"]
     business_paths = [
         p for p in paths if not p.endswith(("/docs", "/redoc", "/openapi.json"))
     ]
-    assert len(business_paths) == 18, f"Se esperaban 18 endpoints, hay {len(business_paths)}"
+    assert len(business_paths) == 20, f"Se esperaban 20 endpoints, hay {len(business_paths)}"
 
 
 def test_contract_uses_team_id_and_game_id_text():

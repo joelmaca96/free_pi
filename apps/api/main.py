@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .errors import register_exception_handlers
 from .middleware import RequestContextMiddleware
-from .routers import games, matchups, meta, players, teams
+from .routers import discovery, games, matchups, meta, players, refresh, teams
 from .settings import settings
 
 API_PREFIX = "/api/v1"
@@ -48,7 +48,7 @@ def create_app() -> FastAPI:
 
     # Routers bajo el prefijo /api/v1.
     for r in (meta.router, teams.router, games.router, players.router,
-              matchups.router):
+              matchups.router, refresh.router, discovery.router):
         app.include_router(r, prefix=API_PREFIX)
 
     return app

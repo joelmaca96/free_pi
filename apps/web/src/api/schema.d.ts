@@ -377,6 +377,69 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/games/{game_id}/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Refresh Game
+         * @description Encola la recarga de un partido desde su fuente (202, fire-and-forget).
+         *
+         *     Args:
+         *         game_id: id del partido (`"<fuente>-<id externo>"`).
+         *         season_label: temporada, obligatoria solo si el partido aún no existe.
+         *
+         *     Returns:
+         *         `RefreshResponse` con `triggered`, `already_in_progress` o
+         *         `rejected_busy`.
+         *
+         *     Raises:
+         *         InvalidFilter: la fuente del `game_id` no admite refresco bajo demanda.
+         *         GameNotFound: el partido no existe y no se pasó `season_label`.
+         */
+        post: operations["refresh_game_api_v1_games__game_id__refresh_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/discovery/missing-games": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Discover Missing Games
+         * @description Lista los partidos jugados de la fuente/temporada que faltan en `games`.
+         *
+         *     `source`/`season_label` inválidos los rechaza la validación de FastAPI con
+         *     un 422 `problem+json` (ver `apps/api/errors.py`), sin código propio aquí.
+         *
+         *     Args:
+         *         source: fuente de ingesta (`acb` o `euroleague`).
+         *         season_label: temporada en formato `'2025-2026'`.
+         *
+         *     Returns:
+         *         `MissingGamesResponse` con los ids ya prefijados (`"<source>-<id>"`),
+         *         listos para `POST /games/{game_id}/refresh?season_label=...`.
+         */
+        post: operations["discover_missing_games_api_v1_discovery_missing_games_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -448,6 +511,8 @@ export interface components {
             player_id: string;
             /** Name */
             name: string;
+            /** Team Id */
+            team_id: string;
             /** Minutes */
             minutes?: number | null;
             /** Pts */
@@ -729,6 +794,31 @@ export interface components {
             items: components["schemas"]["LoadItem"][];
         };
         /**
+         * MissingGamesResponse
+         * @description Partidos del calendario de la fuente que aún no están cargados.
+         *
+         *     Solo reporta: este endpoint nunca dispara una carga. Los ids vienen ya
+         *     prefijados (`"acb-105370"`, `"euroleague-7"`) para poder pasarlos tal cual a
+         *     `POST /games/{game_id}/refresh?season_label=...`.
+         *
+         *     Attributes:
+         *         source: fuente consultada.
+         *         season_label: temporada consultada (`'2025-2026'`).
+         *         missing_game_ids: ids de partidos jugados/finalizados ausentes de
+         *             `games`; lista vacía si no falta ninguno.
+         */
+        MissingGamesResponse: {
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "acb" | "euroleague";
+            /** Season Label */
+            season_label: string;
+            /** Missing Game Ids */
+            missing_game_ids: string[];
+        };
+        /**
          * NarrativeResponse
          * @description Narrativa de scouting (único campo en español de la API).
          */
@@ -816,6 +906,31 @@ export interface components {
             last_n: number;
             /** Items */
             items: components["schemas"]["RatingTrendItem"][];
+        };
+        /**
+         * RefreshResponse
+         * @description Resultado de *encolar* un refresco (no del refresco en sí).
+         *
+         *     El trabajo real corre después en background: `triggered` significa
+         *     "aceptado y encolado", no "datos ya disponibles". El cliente comprueba el
+         *     resultado reconsultando los endpoints de lectura; si el fetch a la fuente
+         *     falla, esos endpoints siguen devolviendo `null`/`[]` (nunca un valor
+         *     fabricado).
+         *
+         *     Attributes:
+         *         game_id: id del partido para el que se pidió el refresco.
+         *         status: `triggered` (encolado), `already_in_progress` (ya hay un
+         *             refresco en curso para ese partido) o `rejected_busy` (límite de
+         *             refrescos concurrentes alcanzado; reintentar más tarde).
+         */
+        RefreshResponse: {
+            /** Game Id */
+            game_id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "triggered" | "already_in_progress" | "rejected_busy";
         };
         /**
          * RosterPlayer
@@ -1543,6 +1658,75 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HeadToHeadResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    refresh_game_api_v1_games__game_id__refresh_post: {
+        parameters: {
+            query?: {
+                /** @description Temporada del partido (p.ej. '2025-2026'). Solo necesario para cargar un partido que todavía no existe en `games` (descubierto con POST /discovery/missing-games). */
+                season_label?: string | null;
+            };
+            header?: never;
+            path: {
+                /** @description Id TEXT del partido (p.ej. 'g1') */
+                game_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RefreshResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    discover_missing_games_api_v1_discovery_missing_games_post: {
+        parameters: {
+            query: {
+                /** @description Fuente de ingesta a consultar */
+                source: "acb" | "euroleague";
+                /** @description Temporada a consultar (p.ej. '2025-2026') */
+                season_label: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MissingGamesResponse"];
                 };
             };
             /** @description Validation Error */

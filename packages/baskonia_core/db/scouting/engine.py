@@ -3,6 +3,7 @@
 El esquema completo (DDL + datos semilla) vive en `schema.sql`. Este módulo
 solo sabe crear un engine SQLAlchemy sobre él y ejecutar ese script una vez.
 """
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -45,10 +46,20 @@ VIEW_NAMES = [
 ]
 
 
-def _enable_foreign_keys(dbapi_connection, connection_record):
-    """SQLite no valida claves foráneas salvo que se active por conexión."""
+# Milisegundos que un escritor espera a que se libere el lock de la BD antes de
+# fallar con "database is locked". Necesario desde que la API puede disparar una
+# escritura (refresco de partido bajo demanda) en un hilo de su propio proceso
+# mientras atiende lecturas: sin `busy_timeout`, SQLite falla al instante en vez
+# de esperar. Sobreescribible con `SQLITE_BUSY_TIMEOUT_MS`.
+BUSY_TIMEOUT_MS = int(os.getenv("SQLITE_BUSY_TIMEOUT_MS", "15000"))
+
+
+def _apply_sqlite_pragmas(dbapi_connection, connection_record):
+    """Pragmas por conexión: claves foráneas (SQLite no las valida por defecto)
+    y `busy_timeout` (ver `BUSY_TIMEOUT_MS`)."""
     cursor = dbapi_connection.cursor()
     cursor.execute("PRAGMA foreign_keys=ON")
+    cursor.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
     cursor.close()
 
 
@@ -60,7 +71,7 @@ def create_scouting_engine(database_url: Optional[str] = None) -> Engine:
             `config.DATABASE_URL` (misma BD que usa el resto del proyecto).
 
     Returns:
-        Un `Engine` con `foreign_keys=ON` si es SQLite.
+        Un `Engine` con `foreign_keys=ON` y `busy_timeout` si es SQLite.
     """
     url = database_url or config.DATABASE_URL
     engine = create_engine(
@@ -68,7 +79,7 @@ def create_scouting_engine(database_url: Optional[str] = None) -> Engine:
         connect_args={"check_same_thread": False} if url.startswith("sqlite") else {},
     )
     if url.startswith("sqlite"):
-        event.listen(engine, "connect", _enable_foreign_keys)
+        event.listen(engine, "connect", _apply_sqlite_pragmas)
     return engine
 
 

@@ -131,6 +131,9 @@ def test_boxscore_includes_both_teams(engine, client):
     # Orden por puntos desc: howard (20) primero, campazzo (15) después.
     assert body["rows"][0]["player_id"] == "howard"
     assert body["rows"][1]["player_id"] == "campazzo"
+    # Cada fila expone el team_id del jugador (para agrupar por equipo).
+    assert all("team_id" in row for row in body["rows"])
+    assert {row["team_id"] for row in body["rows"]} == {"bas", "rm"}
 
 
 # ---------------------------------------------------------------------------
