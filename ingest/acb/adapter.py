@@ -25,17 +25,84 @@ decodificaron, no están documentados por ACB):
   inicial (10 eventos al principio del partido, 5 por equipo), 112=entra a
   pista, 115=sale de pista.
 """
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
+
+from ingest.common.zones import to_court_coords
 
 COMPETITION_NAME = "ACB"
 
-# Rango de coordenadas observado en vivo (mm): posX = distancia al aro
-# (0=canasta .. ~7300=tiro largo), posY = desplazamiento lateral
-# (-7000..7000 aprox). Asunción documentada (no hay especificación oficial
-# de ACB): se reescala con algo de margen a las constantes de abajo.
-_DEPTH_RANGE_MM = (0.0, 7500.0)
-_LATERAL_RANGE_MM = (-7500.0, 7500.0)
+# `Competition/matches?competitionId=1&...` (el filtro que recorre
+# `fetch_season_finished_matches`) devuelve TODOS los partidos de la
+# organización "Liga Endesa" en sentido amplio - Copa del Rey incluida, con
+# `competitionId=2` en la cabecera real del partido (`MatchHeader/
+# match-header`, ver `client.py`). Sin esto, todo lo que trae esa lista se
+# etiquetaba como "ACB" sin más. Catálogo verificado en vivo
+# (`availableFilters.competitions` de esa misma respuesta): 1=Liga Endesa,
+# 2=Copa del Rey, 3=Supercopa Endesa.
+_COMPETITION_BY_ID = {
+    1: COMPETITION_NAME,
+    2: "Copa del Rey",
+    3: "Supercopa",
+}
 
+# HALLAZGO (2026-08-24, corregido el mismo día): al ampliar el rastreo de
+# calendario para no parar en el primer hueco de `weekId` (ver historia en
+# `client.py::fetch_season_finished_matches`), empezaron a aparecer partidos
+# reales de Baskonia con `competitionId=10` ("Minicopa Endesa" en el
+# catálogo de la propia API - cantera/base, no primer equipo) mezclados en
+# la misma lista de `competitionId=1`. Como entonces todo lo no reconocido
+# caía en "ACB" por defecto, esos partidos de cantera se cargaban como
+# partidos reales de Liga Endesa - y sus jugadores, al compartir
+# `team_id='bas'` y a veces el mismo dorsal que un jugador del primer
+# equipo, pisaban el `name` real de ese jugador vía el fallback de
+# identidad por dorsal+equipo (`ingest/common/identity.py::
+# resolve_or_create_player`, paso 2 - actualiza `name` sin comprobar que
+# sea la misma persona). Por eso `client.fetch_game()` ahora rechaza
+# (`is_out_of_scope_competition`) cualquier `competition_id` que NO esté en
+# `_COMPETITION_BY_ID` **antes** de pedir boxscore/jugadores - "no
+# reconocida" ya no cae en ACB por defecto, se descarta el partido entero.
+# `None` (el header no se pudo obtener) es la única excepción: se trata
+# como "desconocida pero no rechazada" y cae en ACB, igual que antes de
+# este hallazgo - un fallo de red no debe tumbar partidos legítimos.
+def is_out_of_scope_competition(competition_id: Optional[int]) -> bool:
+    """`True` si `competition_id` es un valor real pero fuera de las competiciones que se cargan."""
+    return competition_id is not None and competition_id not in _COMPETITION_BY_ID
+
+
+def _competition_name(competition_id: Optional[int]) -> str:
+    """Nombre de competición (fuente de verdad: `_COMPETITION_BY_ID`) para el esquema de scouting."""
+    return _COMPETITION_BY_ID.get(competition_id, COMPETITION_NAME)
+
+# Coordenadas de tiro en MILÍMETROS RELATIVOS AL ARO: `posX` = distancia al
+# aro (0 = canasta), `posY` = desplazamiento lateral (negativo/positivo a cada
+# lado). No hay especificación oficial de ACB, pero está VERIFICADO en vivo
+# (2026-08-24, 566 tiros con coordenadas de 4 partidos reales) contra la
+# verdad de campo del propio feed -el `playType` distingue tiro de 2 (93/97)
+# de tiro de 3 (94/98)-: `hypot(posX, posY)` separa unos de otros justo en los
+# 6.750 mm de la línea de triple (0 de 336 tiros de 2 por encima, 2 de 230
+# tiros de 3 por debajo, ambos a 6.700 mm). Que `posX` sea la profundidad y
+# `posY` el lateral -y no al revés- se ve en sus rangos: `posX` nunca es
+# negativo (es una distancia) y llega a ~9.700, mientras que `posY` se queda
+# en +-7.300, o sea el ancho de media cancha (7.500 mm).
+#
+# ANTES se normalizaban los dos ejes contra un rango fijo (0-7.500 mm de
+# profundidad -> 0-500), lo que estiraba la profundidad un 76%: el aro
+# quedaba en y=500 en vez de 455 y la línea de triple en y=50 en vez de 170,
+# así que el 35% de los tiros se pintaba por encima del aro (detrás del
+# tablero) y el 77% no caía en ninguna zona. Además cortaba en 7.500 mm los
+# tiros más lejanos, que llegan a 9.700+. Ahora se ancla en el aro con la
+# misma conversión que Euroliga (`ingest.common.zones.to_court_coords`).
+
+# LOS MATES (100) NO TRAEN COORDENADAS: vienen con `posX=posY=0`, el mismo
+# centinela que los tiros libres (verificado en vivo 2026-08-24). Se siguen
+# cargando como tiro -son canastas de 2 reales, y dejarlos fuera sesgaría a la
+# baja el acierto de la pintura-, pero eso los apila a todos exactamente sobre
+# el aro (4,1% de los tiros ACB de la BD). Es la posición correcta a grandes
+# rasgos -un mate ES en el aro-, pero no es una coordenada medida, así que se
+# marcan con `located=False` (ver `shots.located` en `schema.sql`) y el mapa
+# de tiros los pinta aparte, como un único símbolo con su recuento, en vez de
+# como un tiro localizado más. No se dispersan a mano: inventar coordenadas
+# que la fuente no da sería peor que la limitación.
 _MADE_SHOT_PLAYTYPES = {93, 94, 100}
 _MISSED_SHOT_PLAYTYPES = {97, 98}
 _SCORE_POINTS_BY_PLAYTYPE = {92: 1, 93: 2, 94: 3, 100: 2}
@@ -169,16 +236,19 @@ def _quarter_stats(home_id: str, away_id: str, home_box: Dict[str, Any], away_bo
 
 
 def _rescale_shot_coords(pos_x_mm: float, pos_y_mm: float) -> tuple:
-    """`posX` (distancia al aro) / `posY` (lateral) en mm -> escala 0-500 de `court_zones`."""
-    depth_min, depth_max = _DEPTH_RANGE_MM
-    lateral_min, lateral_max = _LATERAL_RANGE_MM
-    y = 500 * (1 - (pos_x_mm - depth_min) / (depth_max - depth_min))  # cerca del aro = y alto (ver court_zones seed)
-    x = 500 * (pos_y_mm - lateral_min) / (lateral_max - lateral_min)
-    return x, y
+    """`posX` (distancia al aro) / `posY` (lateral) en mm -> escala de `court_zones`."""
+    return to_court_coords(lateral_cm=pos_y_mm / 10, depth_cm=pos_x_mm / 10)
 
 
 def _convert_shots(shot_points: List[dict], home_id: str, away_id: str) -> List[dict]:
-    """Tiros de campo con coordenadas reales (excluye tiros libres, sin `posX`/`posY`)."""
+    """Tiros de campo (excluye tiros libres, sin `posX`/`posY`).
+
+    Los mates llegan con el centinela `posX=posY=0` (ver `_MADE_SHOT_PLAYTYPES`):
+    se marcan `located=False` y su posición reescalada cae, por construcción,
+    justo en el aro. Se comprueba el centinela y no el `playType` porque lo que
+    importa aguas abajo es si la coordenada es medida o no — si otro tipo de
+    tiro apareciera algún día sin coordenadas, entra por el mismo sitio.
+    """
     shots = []
     for point in shot_points:
         play_type = point["playType"]
@@ -191,6 +261,7 @@ def _convert_shots(shot_points: List[dict], home_id: str, away_id: str) -> List[
                 "team_id": home_id if point["local"] else away_id,
                 "x": x,
                 "y": y,
+                "located": (point["posX"], point["posY"]) != (0, 0),
                 "made": play_type in _MADE_SHOT_PLAYTYPES,
             }
         )
@@ -252,6 +323,7 @@ def _score_progression(plays: List[dict]) -> List[dict]:
 def build_raw_game(
     match: Dict[str, Any], boxscore: Dict[str, Any], season: int,
     shots: Dict[str, Any] = None, play_by_play: Dict[str, Any] = None, advanced_stats: Dict[str, Any] = None,
+    competition_id: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Ensambla el contrato común a partir de un partido del calendario + boxscore/tiros/play-by-play.
 
@@ -266,6 +338,9 @@ def build_raw_game(
         advanced_stats: `AcbClient.fetch_game_advanced_stats(match["id"])`, opcional - si se
             da, sus números OFICIALES (posesiones/pace/ortg/drtg/net_rating/four factors)
             sustituyen a la estimación propia (`_advanced_stats_for_team`/`_estimate_possessions`).
+        competition_id: `AcbClient.fetch_match_header(match["id"])["competitionId"]`, opcional -
+            distingue Copa del Rey/Supercopa de "ACB" (ver `_competition_name`); sin él, cae
+            en "ACB" por defecto (comportamiento previo a que existiera `fetch_match_header`).
     """
     if not boxscore.get("matchFinished"):
         raise ValueError(f"AcbClient: boxscore del partido {match['id']} no está finalizado todavía")
@@ -332,7 +407,7 @@ def build_raw_game(
         "game_id": str(match["id"]),
         "date": str(match["startDateTime"])[:10],
         "season": season,
-        "competition": COMPETITION_NAME,
+        "competition": _competition_name(competition_id),
         "home_team": home_team,
         "away_team": away_team,
         "home_score": match["homeScore"],
@@ -348,4 +423,39 @@ def build_raw_game(
         "quarter_stats": quarter_stats,
         "starters": starters,
         "play_by_play": converted_pbp,
+    }
+
+
+def build_scheduled_matchup(
+    match: Dict[str, Any], teams_by_id: Dict[str, Dict[str, Any]], own_team_acb_id: str
+) -> Optional[Dict[str, Any]]:
+    """Convierte un partido de `AcbClient.fetch_season_scheduled_matches` en un registro
+    listo para `upcoming_matchups`, o `None` si el Baskonia no juega ese partido.
+
+    Esa lista trae TODOS los partidos programados de la competición (18 equipos,
+    calendario completo), no solo los del Baskonia - de ahí el filtro. No hace la
+    comprobación de competición vía `match_header` que sí hace `build_raw_game` para
+    partidos ya jugados (ver historia de esa comprobación en `client.py`): esa
+    contaminación (partidos de Copa del Rey/cantera etiquetados como ACB) se vio
+    siempre en huecos de `weekId` de temporadas YA jugadas, reutilizados por otras
+    competiciones - el calendario recién publicado de una temporada que aún no ha
+    empezado es, por construcción de la competición (se publica de una vez, como
+    liga regular de todos contra todos), solo Liga Endesa.
+    """
+    home_id = str(match["homeTeamId"])
+    away_id = str(match["awayTeamId"])
+    if own_team_acb_id not in (home_id, away_id):
+        return None
+
+    is_home = home_id == own_team_acb_id
+    opponent_id = away_id if is_home else home_id
+    opponent = teams_by_id.get(opponent_id, {"name": f"Equipo ACB {opponent_id}", "logo_url": None})
+    start = match.get("startDateTime")
+
+    return {
+        "opponent_acb_id": opponent_id,
+        "opponent_name": opponent["name"],
+        "opponent_logo_url": opponent.get("logo_url"),
+        "match_date": str(start)[:10] if start else None,
+        "is_home": is_home,
     }

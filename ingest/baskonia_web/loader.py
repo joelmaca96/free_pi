@@ -34,12 +34,14 @@ def load_roster(conn: Connection, players: List[ScrapedPlayer]) -> Dict[str, lis
         conn.execute(
             text(
                 "UPDATE players SET active = 1, photo_url = COALESCE(:photo_url, photo_url),"
+                " photo_local_path = COALESCE(:photo_local_path, photo_local_path),"
                 " birth_date = COALESCE(:birth_date, birth_date),"
                 " nationality = COALESCE(:nationality, nationality)"
                 " WHERE id = :id"
             ),
             {
-                "photo_url": player.photo_url, "birth_date": player.birth_date,
+                "photo_url": player.photo_url, "photo_local_path": player.photo_local_path,
+                "birth_date": player.birth_date,
                 "nationality": player.nationality, "id": player_id,
             },
         )

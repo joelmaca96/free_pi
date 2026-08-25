@@ -1,0 +1,13 @@
+# Dispara baskonia-ingest.service una vez al día. Ajusta OnCalendar si hace
+# falta más frecuencia en día de partido — la ingesta es idempotente
+# (upsert), así que correrla más a menudo no duplica datos, solo gasta
+# peticiones contra las fuentes reales.
+[Unit]
+Description=Ingesta diaria de datos Baskonia
+
+[Timer]
+OnCalendar=*-*-* 06:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

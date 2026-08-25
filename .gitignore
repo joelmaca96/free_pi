@@ -13,6 +13,12 @@ env/
 # Datos generados (base de datos SQLite y backups)
 data/*.db
 data/*.db.bak-*
+# Fotos de jugadores descargadas por ingest/baskonia_web (binarios regenerables)
+data/player_photos/
+# Estado local del asistente: contador diario de preguntas y votos del chat
+# (app/assistant/budget.py y feedback.py). Es el único punto escribible de la
+# interfaz y no es dato de dominio — se regenera solo.
+data/assistant_state/
 # Ficheros sidecar transitorios de SQLite (journal/WAL/SHM)
 *.db-journal
 *.db-wal

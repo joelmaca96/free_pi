@@ -4,10 +4,11 @@ El esquema completo (DDL + datos semilla) vive en `schema.sql`. Este módulo
 solo sabe crear un engine SQLAlchemy sobre él y ejecutar ese script una vez.
 """
 import os
+import re
 from pathlib import Path
 from typing import Optional
 
-from sqlalchemy import create_engine, event, inspect
+from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.engine import Engine
 
 from ... import config
@@ -29,6 +30,8 @@ TABLE_NAMES = [
     "player_game_stats",
     "lineups",
     "lineup_players",
+    "lineup_stints",
+    "lineup_stint_players",
     "game_zone_stats",
     "shots",
     "key_events",
@@ -43,7 +46,65 @@ VIEW_NAMES = [
     "player_stats_combined",
     "team_stats_by_competition",
     "team_stats_combined",
+    # Contexto de liga y equipo de quinteto — las usa el asistente de scouting
+    # (`app/assistant/`, ver `local/features/005-chatbot/01_design.md` §10.1).
+    # Van DESPUÉS de las de medias en esta lista y en `schema.sql`: se calculan
+    # sobre ellas.
+    "team_style_percentiles",
+    "player_percentiles",
+    "lineup_team",
 ]
+
+# Tablas añadidas a `schema.sql` después de que ya hubiera bases de datos
+# reales, igual que `_ADDITIVE_COLUMN_MIGRATIONS` pero a nivel de tabla: una
+# BD ya inicializada nunca vuelve a ejecutar el script entero, así que sin
+# esto una tabla nueva no aparece jamás salvo recreando la BD desde cero y
+# perdiendo todo lo ingerido. Se crean con su DDL literal de `schema.sql`
+# (junto a los índices que la nombren), así que no hay una segunda definición
+# que se pueda desincronizar.
+_ADDITIVE_TABLES = ["lineup_stints", "lineup_stint_players"]
+
+# Columnas añadidas a `schema.sql` DESPUÉS de que ya hubiera bases de datos
+# `data/baskonia.db` reales desplegadas con datos ingeridos de verdad. Este
+# proyecto no tiene un sistema de migraciones (ni Alembic ni versionado de
+# esquema, ver `doc/features/ingestor/01_estado.md`) — sin esto, cualquier
+# columna nueva nullable en `schema.sql` deja rota a una BD ya inicializada
+# hasta que alguien la borra y la recrea desde cero con `--force`, perdiendo
+# TODO lo ya ingerido (partidos/boxscores/tiros...) solo por una columna de
+# más. `init_scouting_db` aplica estas entradas con `ALTER TABLE ... ADD
+# COLUMN` cuando faltan, de forma idempotente y sin tocar ninguna fila
+# existente. Todas nullable a propósito (si no lo fueran, `ADD COLUMN`
+# necesitaría un `DEFAULT` para las filas ya existentes).
+_ADDITIVE_COLUMN_MIGRATIONS = [
+    # (tabla, columna, tipo SQL) — mismo orden en que se añadieron a schema.sql.
+    ("teams", "logo_url", "TEXT"),
+    ("players", "photo_local_path", "TEXT"),
+    ("shots", "located", "INTEGER"),
+    ("player_game_stats", "ftm", "INTEGER"),
+    ("player_game_stats", "fta", "INTEGER"),
+    ("game_advanced_stats", "ftm", "INTEGER"),
+    ("game_advanced_stats", "fta", "INTEGER"),
+    # Equipo del quinteto: antes se infería por el equipo ACTUAL de sus cinco
+    # jugadores, lo que estropea hacia atrás cualquier agregado histórico en
+    # cuanto hay un traspaso (ver `lineups.team_id` en `schema.sql`).
+    ("lineups", "team_id", "TEXT"),
+]
+
+# Las VISTAS (`VIEW_NAMES`) no se migran con `ALTER TABLE`: se recrean enteras
+# desde `schema.sql` en cada `init_scouting_db`. Son objetos derivados —
+# ninguna guarda datos, así que borrarlas y volver a crearlas no pierde nada—
+# y SQLite congela su definición al crearlas: una BD ya existente se quedaba
+# con la versión vieja de `player_stats_combined`/`team_stats_*` para siempre,
+# aunque `schema.sql` ganara columnas nuevas (las de tiros libres del
+# 2026-08-24 son el primer caso real). Sin esto, `_apply_additive_migrations`
+# añadía `player_game_stats.ftm` pero la vista seguía sin exponerla y la
+# interfaz veía "no such column: ft_pct".
+_CREATE_VIEW_RE = re.compile(r"CREATE\s+VIEW\s+(\w+)\b.*?;", re.IGNORECASE | re.DOTALL)
+
+# Mismo truco para las tablas/índices de `_ADDITIVE_TABLES`: se extrae su DDL
+# literal de `schema.sql` en vez de repetirlo aquí.
+_CREATE_TABLE_RE = re.compile(r"CREATE\s+TABLE\s+(\w+)\b.*?;", re.IGNORECASE | re.DOTALL)
+_CREATE_INDEX_RE = re.compile(r"CREATE\s+INDEX\s+(\w+)\s+ON\s+(\w+)\b.*?;", re.IGNORECASE | re.DOTALL)
 
 
 # Milisegundos que un escritor espera a que se libere el lock de la BD antes de
@@ -88,18 +149,85 @@ def is_initialized(engine: Engine) -> bool:
     return inspect(engine).has_table("seasons")
 
 
+def _apply_additive_migrations(engine: Engine) -> None:
+    """Añade con `ALTER TABLE ... ADD COLUMN` cualquier columna de
+    `_ADDITIVE_COLUMN_MIGRATIONS` que falte todavía — no hace nada si ya están
+    todas (BD recién creada desde `schema.sql`, o ya migrada en una llamada
+    anterior). Ver la constante para el porqué."""
+    inspector = inspect(engine)
+    with engine.begin() as conn:
+        for table, column, sql_type in _ADDITIVE_COLUMN_MIGRATIONS:
+            if not inspector.has_table(table):
+                continue  # tabla que tampoco existe todavía: la trae schema.sql, no esto
+            existing_columns = {col["name"] for col in inspector.get_columns(table)}
+            if column not in existing_columns:
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {sql_type}"))
+
+
+def _create_missing_tables(engine: Engine) -> None:
+    """Crea las tablas de `_ADDITIVE_TABLES` que falten, con su DDL de `schema.sql`.
+
+    Idempotente y no destructiva: una tabla que ya existe no se toca (ni se
+    recrea ni se compara), porque a diferencia de una vista sí guarda datos.
+    Ver `_ADDITIVE_TABLES` para el porqué.
+    """
+    script = SCHEMA_PATH.read_text(encoding="utf-8")
+    tables = {m.group(1): m.group(0) for m in _CREATE_TABLE_RE.finditer(script)}
+    indexes = [(m.group(1), m.group(2), m.group(0)) for m in _CREATE_INDEX_RE.finditer(script)]
+    inspector = inspect(engine)
+
+    with engine.begin() as conn:
+        for name in _ADDITIVE_TABLES:
+            if inspector.has_table(name) or name not in tables:
+                continue
+            conn.execute(text(tables[name].rstrip().rstrip(";")))
+            for index_name, index_table, ddl in indexes:
+                if index_table == name:
+                    conn.execute(text(ddl.rstrip().rstrip(";").replace("CREATE INDEX", "CREATE INDEX IF NOT EXISTS", 1)))
+
+
+def _refresh_views(engine: Engine) -> None:
+    """Recrea todas las vistas de `schema.sql` (DROP + CREATE), idempotente.
+
+    Ver `_CREATE_VIEW_RE` para el porqué. Se ejecuta DESPUÉS de
+    `_apply_additive_migrations`: una vista nueva puede referirse a una
+    columna que esa función acaba de añadir. También borra las vistas de
+    `VIEW_NAMES` que ya no estén en `schema.sql` (una vista retirada no debe
+    sobrevivir en las BD antiguas).
+    """
+    script = SCHEMA_PATH.read_text(encoding="utf-8")
+    definitions = [(m.group(1), m.group(0)) for m in _CREATE_VIEW_RE.finditer(script)]
+    obsolete = [name for name in VIEW_NAMES if name not in {n for n, _ in definitions}]
+
+    with engine.begin() as conn:
+        for name in obsolete:
+            conn.execute(text(f"DROP VIEW IF EXISTS {name}"))
+        for name, ddl in definitions:
+            conn.execute(text(f"DROP VIEW IF EXISTS {name}"))
+            conn.execute(text(ddl.rstrip().rstrip(";")))
+
+
 def init_scouting_db(engine: Engine, *, force: bool = False) -> None:
     """Crea el esquema y los datos semilla ejecutando `schema.sql`.
 
-    No hace nada si el esquema ya existe, salvo que `force=True`, en cuyo
-    caso borra antes las tablas conocidas para poder recrear la BD desde
-    cero (usado por tests y por `--force` en `tools/init_scouting_db.py`).
+    Si el esquema ya existe y no se pide `force`, no lo recrea — pero sí
+    aplica `_apply_additive_migrations` (columnas nuevas nullable que
+    `schema.sql` haya ganado desde que se creó esta BD en concreto),
+    `_create_missing_tables` (tablas nuevas, ver `_ADDITIVE_TABLES`) y
+    `_refresh_views` (las vistas, que SQLite congela al crearlas), para que
+    una BD con datos reales no quede rota por una columna o una tabla de más
+    sin tener que borrarla y perder todo lo ingerido. `force=True` (usado por
+    tests y `--force` en `tools/init_scouting_db.py`) borra antes las
+    tablas conocidas para recrear la BD desde cero.
 
     Args:
         engine: engine SQLAlchemy destino.
         force: si `True`, elimina el esquema existente antes de recrearlo.
     """
     if not force and is_initialized(engine):
+        _apply_additive_migrations(engine)
+        _create_missing_tables(engine)
+        _refresh_views(engine)
         return
 
     script = SCHEMA_PATH.read_text(encoding="utf-8")
@@ -117,3 +245,6 @@ def init_scouting_db(engine: Engine, *, force: bool = False) -> None:
         raw_conn.commit()
     finally:
         raw_conn.close()
+    _apply_additive_migrations(engine)  # no-op justo después de crear desde schema.sql; misma ruta siempre
+    _create_missing_tables(engine)      # ídem
+    _refresh_views(engine)

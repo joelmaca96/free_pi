@@ -10,8 +10,18 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 
+import ingest.acb.client as client_module
 from ingest.acb.adapter import build_raw_game
 from ingest.acb.client import AcbClient, season_to_edition_id
+
+
+@pytest.fixture(autouse=True)
+def _no_rate_limit(monkeypatch):
+    """Sin esto, tolerar huecos de `weekId` (ver `_MAX_CONSECUTIVE_GAPS`) haría
+    que cada test con un calendario incompleto en el fixture (la mayoría)
+    sumara hasta 80 sleeps de `ACB_REQUEST_DELAY` reales - la suite entera
+    debe seguir siendo offline y rápida."""
+    monkeypatch.setattr(client_module, "REQUEST_DELAY", 0.0)
 
 
 class _FakeResponse:
@@ -31,7 +41,7 @@ class _FakeResponse:
 class _FakeSession:
     """Simula `Competition/matches` (paginado por `weekId`), `Result/boxscores`, `MatchShots` y `PlayByPlay`."""
 
-    def __init__(self, edition_id, matches_by_week, last_week, boxscores, shots=None, plays=None):
+    def __init__(self, edition_id, matches_by_week, last_week, boxscores, shots=None, plays=None, match_headers=None):
         self.headers = {}
         self.edition_id = edition_id
         self.matches_by_week = matches_by_week
@@ -39,6 +49,7 @@ class _FakeSession:
         self.boxscores = boxscores
         self.shots = shots or {}
         self.plays = plays or {}
+        self.match_headers = match_headers or {}
 
     def get(self, url, timeout=30):
         parsed = urlparse(url)
@@ -64,13 +75,21 @@ class _FakeSession:
         if parsed.path.endswith("/PlayByPlay/play-by-play"):
             match_id = int(qs["matchId"][0])
             return _FakeResponse(200, payload=self.plays.get(match_id, {"plays": []}))
+        if parsed.path.endswith("/MatchHeader/match-header"):
+            match_id = int(qs["matchId"][0])
+            if match_id not in self.match_headers:
+                # Sin fixture para este partido: simula el endpoint no disponible,
+                # igual que `AdvancedStats` cuando no se le da fixture (fetch_game
+                # lo captura y cae en el comportamiento por defecto).
+                raise AssertionError(f"sin fixture de match-header para {match_id}")
+            return _FakeResponse(200, payload=self.match_headers[match_id])
         raise AssertionError(f"URL inesperada en el test: {url}")
 
 
-def _match(match_id, home_id, away_id, status="FINALIZED"):
+def _match(match_id, home_id, away_id, status="FINALIZED", start="2026-01-10T18:00:00Z"):
     return {
         "id": match_id, "homeTeamId": home_id, "awayTeamId": away_id,
-        "homeScore": 80, "awayScore": 75, "startDateTime": "2026-01-10T18:00:00Z",
+        "homeScore": 80, "awayScore": 75, "startDateTime": start,
         "matchStatus": status,
     }
 
@@ -109,6 +128,43 @@ def _totals(points, twopm, twopa, threepm, threepa, ftm, fta, tov, orb, drb, ast
 def test_season_to_edition_id_matches_verified_mapping():
     assert season_to_edition_id(2025) == 90
     assert season_to_edition_id(2024) == 89
+
+
+def test_fetch_season_finished_matches_bridges_a_week_id_gap():
+    """Verificado en vivo (2026-08-24): el espacio de `weekId` de una edición tiene huecos
+    reales de decenas de semanas (edición 90: 2891-2945 inválidas, 2810-2890 vuelven a ser
+    válidas con partidos reales - un partido de Baskonia de abril quedaba fuera del
+    calendario cargado). Sin tolerancia a huecos, este fixture pararía en 2983 y nunca
+    vería 2900."""
+    matches_by_week = {
+        2985: [_match(1001, 10, 20)],
+        # 2984..2911 sin definir en el fixture -> 400 (_WeekNotFound) para todas: el hueco
+        # (73 semanas, dentro de _MAX_CONSECUTIVE_GAPS=80).
+        2910: [_match(1003, 20, 30)],
+    }
+    session = _FakeSession(edition_id=90, matches_by_week=matches_by_week, last_week=2985, boxscores={})
+    client = AcbClient(session=session)
+
+    matches = client.fetch_season_finished_matches(2025)
+
+    assert {m["id"] for m in matches} == {1001, 1003}
+
+
+def test_fetch_season_finished_matches_discards_matches_outside_season_date_window():
+    """Red de seguridad: `selectedFilters.season` no valida nada de verdad (hace eco del
+    parámetro pedido incluso en `weekId` claramente ajenos a la temporada, verificado en
+    vivo) - sin el filtro de fecha, tolerar huecos podría arrastrar partidos de otra
+    temporada si el hueco real resultase más ancho que lo tolerado."""
+    matches_by_week = {
+        2985: [_match(1001, 10, 20)],  # fecha por defecto de _match(): 2026-01-10, dentro de temporada 2025
+        2900: [_match(1003, 20, 30, start="2019-03-01T18:00:00Z")],  # fuera de la ventana de la temporada 2025
+    }
+    session = _FakeSession(edition_id=90, matches_by_week=matches_by_week, last_week=2985, boxscores={})
+    client = AcbClient(session=session)
+
+    matches = client.fetch_season_finished_matches(2025)
+
+    assert {m["id"] for m in matches} == {1001}
 
 
 def test_fetch_season_finished_matches_walks_back_until_week_boundary():
@@ -150,12 +206,60 @@ def test_fetch_game_uses_cached_match_and_builds_common_contract():
     assert len(raw["players"]) == 2
     # sin shotPoints/plays en la fixture (ver _FakeSession), quedan vacíos - no por un hueco de la fuente
     assert raw["shots"] == [] and raw["lineups"] == [] and raw["score_progression"] == []
+    # sin fixture de match-header (ver _FakeSession): cae en "ACB" por defecto, no revienta.
+    assert raw["competition"] == "ACB"
 
 
 def test_fetch_game_unknown_id_raises():
     client = AcbClient(session=_FakeSession(edition_id=90, matches_by_week={}, last_week=2985, boxscores={}))
     with pytest.raises(ValueError):
         client.fetch_game("does-not-exist")
+
+
+def test_fetch_game_detects_copa_del_rey_from_match_header():
+    """`Competition/matches?competitionId=1` mezcla Copa del Rey (verificado en vivo,
+    2026-08-24: 3 partidos de Baskonia el 20-22 feb 2026 con `competitionId=2` real en
+    `MatchHeader/match-header`) - sin esto quedaban etiquetados como "ACB" sin más."""
+    matches_by_week = {2985: [_match(1001, 10, 20)]}
+    boxscore = {
+        "matchFinished": True,
+        "teamBoxscores": [
+            _team_period0(10, "Home Team", [_player_row(501, "A Home", "7", "20:00", 10, 4, 6, 0, 1, 2, 2)],
+                          _totals(80, 30, 50, 6, 20, 8, 10, 12, 10, 30)),
+            _team_period0(20, "Away Team", [_player_row(601, "B Away", "9", "22:00", 8, 3, 5, 0, 2, 2, 2)],
+                          _totals(75, 28, 55, 5, 18, 9, 12, 14, 8, 28)),
+        ],
+    }
+    session = _FakeSession(
+        edition_id=90, matches_by_week=matches_by_week, last_week=2985, boxscores={1001: boxscore},
+        match_headers={1001: {"competitionId": 2}},
+    )
+    client = AcbClient(session=session)
+    client.fetch_season_game_ids(2025)
+
+    raw = client.fetch_game("1001")
+
+    assert raw["competition"] == "Copa del Rey"
+
+
+def test_fetch_game_rejects_out_of_scope_competition():
+    """Hallazgo real (2026-08-24): partidos de Minicopa Endesa (`competitionId=10`, cantera,
+    no primer equipo) venían mezclados en la misma lista que Liga Endesa/Copa del Rey/
+    Supercopa. Sin este rechazo caían en "ACB" por defecto y sus jugadores, al compartir
+    dorsal con jugadores reales del primer equipo, pisaban su nombre vía el fallback de
+    identidad por dorsal+equipo. `fetch_game` debe fallar (el orquestador lo cuenta como
+    partido fallido, no debe llegar a boxscore/loader) para cualquier competición no listada
+    en `adapter._COMPETITION_BY_ID`, no solo para las reconocidas."""
+    matches_by_week = {2985: [_match(1001, 10, 20)]}
+    session = _FakeSession(
+        edition_id=90, matches_by_week=matches_by_week, last_week=2985, boxscores={},
+        match_headers={1001: {"competitionId": 10}},
+    )
+    client = AcbClient(session=session)
+    client.fetch_season_game_ids(2025)
+
+    with pytest.raises(ValueError, match="fuera de alcance"):
+        client.fetch_game("1001")
 
 
 def test_build_raw_game_computes_advanced_stats_and_pace():
@@ -229,6 +333,74 @@ def test_build_raw_game_converts_shots_starters_subs_and_score_progression():
         {"step": 0, "home": 0, "away": 0},
         {"step": 1, "home": 2, "away": 0},
     ]
+
+
+def test_shot_coords_land_on_the_drawn_court():
+    """`posX` es la distancia AL ARO en mm, no una coordenada normalizable de 0 a 7.500.
+
+    Regresión: se normalizaba contra un rango fijo, lo que estiraba la
+    profundidad un 76% — el aro caía en y=500 en vez de 455, así que el 35% de
+    los tiros se pintaba por encima del aro (detrás del tablero) y el 77% no
+    entraba en ninguna zona. Las coordenadas de referencia salen del seed de
+    `court_zones` (`schema.sql`).
+    """
+    match = _match(3002, 10, 20)
+    boxscore = {
+        "matchFinished": True,
+        "teamBoxscores": [
+            _team_period0(10, "Home Team", [_player_row(501, "A Home", "7", "30:00", 2, 1, 1, 0, 0, 0, 0)],
+                          _totals(2, 1, 1, 0, 0, 0, 0, 0, 0, 0)),
+            _team_period0(20, "Away Team", [_player_row(601, "B Away", "9", "28:00", 0, 0, 1, 0, 0, 0, 0)],
+                          _totals(0, 0, 1, 0, 0, 0, 0, 0, 0, 0)),
+        ],
+    }
+    shots = {
+        "shotPoints": [
+            {"playType": 93, "posX": 0, "posY": 0, "playerLicenseId": 501, "local": True},        # bajo el aro (0,0 = el propio aro)
+            {"playType": 94, "posX": 7000, "posY": 0, "playerLicenseId": 501, "local": True},     # triple frontal
+            {"playType": 98, "posX": 500, "posY": -6800, "playerLicenseId": 601, "local": False},  # triple esquina izq.
+        ]
+    }
+
+    raw = build_raw_game(match, boxscore, season=2025, shots=shots, play_by_play=None)
+    at_hoop, top_three, corner_three = raw["shots"]
+
+    # Bajo el aro: en 'Pintura' (x 195-305, y 300-455), pegado a su borde de fondo.
+    assert at_hoop["x"] == pytest.approx(250.0) and at_hoop["y"] == pytest.approx(455.0)
+    # Triple frontal: más allá del vértice del arco ('Triple exterior'.y_max = 170).
+    assert top_three["y"] < 170
+    # Triple de esquina izquierda: en 'Triple esquina izq.' (x 15-55, y 380-460).
+    assert 15 <= corner_three["x"] <= 55 and 380 <= corner_three["y"] <= 460
+
+
+def test_dunks_are_loaded_but_flagged_as_not_located():
+    """Los mates (100) llegan con `posX=posY=0`, el mismo centinela que los tiros
+    libres: se cargan igual -son canastas de 2 reales- pero marcados
+    `located=False`, para que el mapa no los presente como una coordenada
+    medida (ver `shots.located` en `schema.sql`)."""
+    match = _match(3003, 10, 20)
+    boxscore = {
+        "matchFinished": True,
+        "teamBoxscores": [
+            _team_period0(10, "Home Team", [_player_row(501, "A Home", "7", "30:00", 2, 1, 1, 0, 0, 0, 0)],
+                          _totals(2, 1, 1, 0, 0, 0, 0, 0, 0, 0)),
+            _team_period0(20, "Away Team", [_player_row(601, "B Away", "9", "28:00", 0, 0, 1, 0, 0, 0, 0)],
+                          _totals(0, 0, 1, 0, 0, 0, 0, 0, 0, 0)),
+        ],
+    }
+    shots = {
+        "shotPoints": [
+            {"playType": 100, "posX": 0, "posY": 0, "playerLicenseId": 501, "local": True},   # mate
+            {"playType": 93, "posX": 1500, "posY": 800, "playerLicenseId": 501, "local": True},
+        ]
+    }
+
+    raw = build_raw_game(match, boxscore, season=2025, shots=shots, play_by_play=None)
+    dunk, jumper = raw["shots"]
+
+    assert dunk["made"] is True and dunk["located"] is False
+    assert (dunk["x"], dunk["y"]) == (250.0, 455.0)  # el centinela cae en el aro
+    assert jumper["located"] is True
 
 
 def _official_side(efg, orb, tov, ft_rate, oer, der, net_rating, ast_pct, stl_pct, blk_pct, ts_pct, pace):

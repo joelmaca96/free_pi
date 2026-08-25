@@ -6,47 +6,28 @@ se decide "esto ya existe" vs "esto es nuevo", vía las tablas puente
 `team_external_ids`/`player_external_ids` (y, en su ausencia, un match por
 nombre normalizado). Se usan desde los tres módulos de ingesta para que la
 resolución de identidad sea idéntica en los tres.
+
+`normalize_name` ya no se define aquí: vive en
+`packages/baskonia_core/names.py` desde que el asistente de scouting
+(`app/assistant/resolve.py`) necesita normalizar exactamente igual que la
+ingesta, y `ingest/` no viaja en la imagen de la interfaz (ver el docstring
+de ese módulo para el razonamiento completo). Se reexporta desde aquí para
+que todo lo que ya la importaba de `ingest.common.identity` siga funcionando.
 """
-import re
-import unicodedata
 from typing import Optional
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
-# Palabras/sufijos habituales en nombres de clubes que sobran para comparar
-# (p.ej. "Valencia Basket Club" vs "Valencia" deben normalizar igual).
-_CLUB_NOISE_WORDS = {
-    "club", "baloncesto", "basket", "basquet", "cb", "bc", "sad", "s.a.d",
-    "saski", "kirolak", "kk", "bk",
-}
+from packages.baskonia_core.names import normalize_name
 
-
-# Alias conocidos que la normalización genérica no resuelve (nombres de
-# patrocinador, que cambian de temporada en temporada: "Kosner Baskonia",
-# "Saski Baskonia"... todos son el mismo equipo "Baskonia").
-_KNOWN_TEAM_ALIASES = {
-    "kosner baskonia": "baskonia",
-    "saski baskonia": "baskonia",
-    "baskonia vitoria gasteiz": "baskonia",
-}
-
-
-def normalize_name(raw: str) -> str:
-    """Normaliza un nombre (jugador o equipo) para comparar entre fuentes.
-
-    Quita acentos, pasa a minúsculas, elimina puntuación y palabras de ruido
-    de club, y colapsa espacios. P.ej. "Valencia Basket Club" y "Valencia"
-    normalizan ambos a "valencia". También resuelve alias conocidos de
-    patrocinador (`_KNOWN_TEAM_ALIASES`).
-    """
-    decomposed = unicodedata.normalize("NFKD", raw)
-    ascii_only = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
-    ascii_only = ascii_only.lower()
-    ascii_only = re.sub(r"[^a-z0-9\s]", " ", ascii_only)
-    words = [w for w in ascii_only.split() if w not in _CLUB_NOISE_WORDS]
-    normalized = " ".join(words).strip()
-    return _KNOWN_TEAM_ALIASES.get(normalized, normalized)
+__all__ = [
+    "normalize_name",
+    "get_or_create_season",
+    "get_competition_id",
+    "resolve_or_create_team",
+    "resolve_or_create_player",
+]
 
 
 def _slugify(raw: str, *, max_len: int = 12) -> str:
@@ -80,6 +61,7 @@ def resolve_or_create_team(
     source: str,
     external_id: str,
     name: str,
+    logo_url: Optional[str] = None,
 ) -> str:
     """Resuelve el `teams.id` para un equipo de una fuente externa.
 
@@ -87,6 +69,15 @@ def resolve_or_create_team(
     1. `team_external_ids` (source, external_id) ya vinculado.
     2. Nombre normalizado igual al de un equipo ya existente (crea el alias).
     3. Ninguno de los anteriores: crea el equipo y el alias.
+
+    Args:
+        logo_url: si se pasa (hoy solo `ingest/acb`, que trae `teams[].logo`
+            real en el mismo payload de calendario — ver
+            `AcbClient.fetch_season_scheduled_matches`), actualiza
+            `teams.logo_url` tanto si el equipo ya existía como si se acaba
+            de crear. `None` (por defecto) no toca la columna — así las
+            demás fuentes (`baskonia_web`, `euroleague`), que no tienen
+            escudo, no la pisan a `NULL` sin querer.
     """
     row = conn.execute(
         text(
@@ -95,28 +86,32 @@ def resolve_or_create_team(
         ),
         {"source": source, "external_id": external_id},
     ).first()
-    if row is not None:
-        return row[0]
-
-    normalized = normalize_name(name)
-    existing_teams = conn.execute(text("SELECT id, name FROM teams")).all()
-    match = next((t.id for t in existing_teams if normalize_name(t.name) == normalized), None)
+    match = row[0] if row is not None else None
 
     if match is None:
-        team_id = _unique_id(conn, "teams", _slugify(name))
-        conn.execute(
-            text("INSERT INTO teams (id, name, is_own_team) VALUES (:id, :name, 0)"),
-            {"id": team_id, "name": name},
-        )
-        match = team_id
+        normalized = normalize_name(name)
+        existing_teams = conn.execute(text("SELECT id, name FROM teams")).all()
+        match = next((t.id for t in existing_teams if normalize_name(t.name) == normalized), None)
 
-    conn.execute(
-        text(
-            "INSERT INTO team_external_ids (team_id, source, external_id)"
-            " VALUES (:team_id, :source, :external_id)"
-        ),
-        {"team_id": match, "source": source, "external_id": external_id},
-    )
+        if match is None:
+            team_id = _unique_id(conn, "teams", _slugify(name))
+            conn.execute(
+                text("INSERT INTO teams (id, name, is_own_team) VALUES (:id, :name, 0)"),
+                {"id": team_id, "name": name},
+            )
+            match = team_id
+
+        conn.execute(
+            text(
+                "INSERT INTO team_external_ids (team_id, source, external_id)"
+                " VALUES (:team_id, :source, :external_id)"
+            ),
+            {"team_id": match, "source": source, "external_id": external_id},
+        )
+
+    if logo_url:
+        conn.execute(text("UPDATE teams SET logo_url = :logo_url WHERE id = :id"), {"logo_url": logo_url, "id": match})
+
     return match
 
 

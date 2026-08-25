@@ -1,0 +1,191 @@
+"""Modal de detalle de un jugador, compartido entre páginas.
+
+Extraído de `app/pages/plantilla.py` (donde nació como función local) para
+poder abrirlo también desde "Próximo rival" sobre jugadores del equipo
+contrario — el contenido es idéntico, lo único que cambia es de qué galería
+se llega (ver `local/features/004-proximo-rival/01_design.md` §3.2).
+
+Lee `engine`/`season_id` de donde ya los lee cualquier página
+(`get_read_engine()` y `st.session_state["season_id"]`) en vez de recibirlos
+como parámetros: así el componente no queda atado al módulo que lo definió y
+las dos páginas lo invocan igual, `player_detail(player_id)`.
+
+Nada aquí asume que el jugador sea del Baskonia. Las secciones que dependen
+de datos que hoy solo puebla `ingest/baskonia_web` para la plantilla propia
+(foto real, altura, nacionalidad, fecha de nacimiento) ya degradaban a "—" /
+badge de iniciales antes de esta extracción — que es justo lo que hace falta
+para un rival, cuyas filas de `players` las crea `ingest/acb`/
+`ingest/euroleague` desde el boxscore y traen esos campos en `NULL` (ver
+`doc/features/ingestor/01_estado.md` §2.1).
+"""
+import datetime as dt
+
+import altair as alt
+import pandas as pd
+import streamlit as st
+
+from components.ask_assistant import ask_assistant_button
+from components.avatar import player_avatar_html
+from components.court import shot_chart, shot_chart_caption
+from data import queries
+from data.db import get_read_engine
+
+_ACCENT = "#008300"
+
+
+def _age(birth_date, today: dt.date) -> str:
+    """Edad en años a partir de `birth_date`, o "—" si no hay dato.
+
+    `today` se pasa explícitamente (en vez de llamar a `dt.date.today()`
+    dentro) por el mismo motivo que lo hacen las consultas de
+    `data/queries.py`: que el resultado no dependa de una llamada oculta al
+    reloj.
+    """
+    if pd.isna(birth_date):
+        return "—"
+    b = birth_date if isinstance(birth_date, dt.date) else dt.date.fromisoformat(str(birth_date))
+    years = today.year - b.year - ((today.month, today.day) < (b.month, b.day))
+    return str(years)
+
+
+@st.dialog("​", width="large")  # título real dentro (foto+nombre grandes), ver diseño §3
+def player_detail(player_id: str) -> None:
+    """Modal con toda la estadística disponible de `player_id`.
+
+    Secciones, en orden: bio, medias (combinada + por competición), récords
+    de temporada, tendencia de puntos, boxscore partido a partido y mapa de
+    tiros de la temporada. Cada una degrada con un aviso si no hay dato — un
+    jugador sin partidos registrados (fichaje reciente, o un rival del que
+    solo se conoce la ficha) sale con bio y nada más, no roto.
+    """
+    engine = get_read_engine()
+    season_id = st.session_state["season_id"]
+    today = dt.date.today()
+
+    bio = queries.player_bio(engine, player_id)
+    if bio is None:
+        st.error("No se encuentra este jugador.")
+        return
+
+    # ---------------------------------------------------------------- cabecera --
+    head_photo, head_info = st.columns([1, 4])
+    with head_photo:
+        st.markdown(
+            player_avatar_html(bio["name"], bio["photo_url"], local_path=bio["photo_local_path"], size=160),
+            unsafe_allow_html=True,
+        )
+    with head_info:
+        st.markdown(f"### #{bio['number']} · {bio['name']}")
+        position = bio["position"] if pd.notna(bio["position"]) else "—"
+        nationality = bio["nationality"] if pd.notna(bio["nationality"]) else "—"
+        st.caption(f"{position} · {nationality}")
+        c1, c2 = st.columns(2)
+        c1.metric("Edad", _age(bio["birth_date"], today))
+        c2.metric("Altura", f"{int(bio['height_cm'])} cm" if pd.notna(bio["height_cm"]) else "—")
+        # Entrada contextual al chat (ver `local/features/005-chatbot/
+        # 01_design.md` §9.4). Cierra el modal por el camino: `st.switch_page`
+        # cambia de pantalla, y un modal abierto sobre otra página no tendría
+        # sentido.
+        ask_assistant_button(
+            f"¿Qué tal está jugando {bio['name']} esta temporada?",
+            key=f"ask_player_{player_id}",
+            context=f"El usuario viene de la ficha del jugador {player_id} ({bio['name']}).",
+            label="Preguntar al asistente",
+            use_container_width=False,
+        )
+
+    st.divider()
+
+    # ---------------------------------------------------------------- medias --
+    st.markdown("**Medias**")
+    averages_df = queries.player_averages_all(engine, player_id, season_id)
+    if averages_df.empty:
+        st.info("Sin partidos registrados todavía para esta temporada.")
+    else:
+        tabs = st.tabs(averages_df["competition"].tolist())
+        for tab, row in zip(tabs, averages_df.itertuples()):
+            with tab:
+                cols = st.columns(6)
+                cols[0].metric("PJ", int(row.gp))
+                cols[1].metric("Min", f"{row.min_avg:.1f}" if pd.notna(row.min_avg) else "—")
+                cols[2].metric("Pts", f"{row.pts_avg:.1f}" if pd.notna(row.pts_avg) else "—")
+                cols[3].metric("Reb", f"{row.reb_avg:.1f}" if pd.notna(row.reb_avg) else "—")
+                cols[4].metric("Ast", f"{row.ast_avg:.1f}" if pd.notna(row.ast_avg) else "—")
+                cols[5].metric("eFG%", f"{row.efg_pct:.1f}" if pd.notna(row.efg_pct) else "—")
+
+    # ---------------------------------------------------------- partido a partido --
+    log_df = queries.player_game_log(engine, player_id, season_id)
+
+    if log_df.empty:
+        st.caption("Sin estadísticas registradas todavía — probablemente una alta reciente.")
+        return
+
+    st.divider()
+
+    # -------------------------------------------------------- récords de temporada --
+    st.markdown("**Récords de temporada**")
+    r1, r2, r3 = st.columns(3)
+    for col, stat, label in ((r1, "pts", "Máx. puntos"), (r2, "reb", "Máx. rebotes"), (r3, "ast", "Máx. asistencias")):
+        best = log_df.loc[log_df[stat].idxmax()]
+        col.metric(label, int(best[stat]))
+        col.caption(f"{best['game_date']} · vs {best['rival']}")
+
+    st.divider()
+
+    # -------------------------------------------------------------------- tendencia --
+    st.markdown("**Tendencia de puntos**")
+    trend = (
+        alt.Chart(log_df)
+        .mark_line(point=True, color=_ACCENT)
+        .encode(
+            x=alt.X("game_date:O", title=None),
+            y=alt.Y("pts:Q", title="Puntos"),
+            tooltip=[
+                alt.Tooltip("game_date:O", title="Fecha"),
+                alt.Tooltip("rival:N", title="Rival"),
+                alt.Tooltip("pts:Q", title="Puntos"),
+            ],
+        )
+        .properties(height=200)
+    )
+    st.altair_chart(trend, use_container_width=True)
+
+    st.divider()
+
+    # ----------------------------------------------------------- boxscore completo --
+    st.markdown("**Partido a partido**")
+    st.dataframe(
+        log_df,
+        hide_index=True,
+        use_container_width=True,
+        height=280,
+        column_order=["rival_logo_url", "rival", "game_date", "competition", "condicion", "minutes", "pts", "reb", "ast", "efg_pct"],
+        column_config={
+            # Escudo pegado al nombre (columnas adyacentes) — Streamlit no permite
+            # combinar imagen+texto en una misma celda de `st.dataframe`. `rival_logo_url`
+            # queda en blanco (no roto) para rivales sin escudo cargado todavía.
+            "rival_logo_url": st.column_config.ImageColumn(" ", width=40),
+            "rival": st.column_config.TextColumn("Rival"),
+            "game_date": st.column_config.TextColumn("Fecha"),
+            "competition": st.column_config.TextColumn("Comp."),
+            "condicion": st.column_config.TextColumn("Cond."),
+            "minutes": st.column_config.NumberColumn("Min", format="%.1f"),
+            "pts": st.column_config.NumberColumn("Pts"),
+            "reb": st.column_config.NumberColumn("Reb"),
+            "ast": st.column_config.NumberColumn("Ast"),
+            "efg_pct": st.column_config.NumberColumn("eFG%", format="%.1f"),
+        },
+    )
+
+    # -------------------------------------------------------------- mapa de tiros --
+    shots_df = queries.player_shots_season(engine, player_id, season_id)
+    if shots_df.empty:
+        st.caption("Sin tiros con coordenadas registrados esta temporada.")
+    else:
+        st.divider()
+        st.markdown("**Mapa de tiros de la temporada**")
+        zones_df = queries.court_zones(engine)
+        # Sin `use_container_width`: `shot_chart` ya fija su propio ancho (dominio
+        # cuadrado) — estirarlo al contenedor aplana la cancha (ver `court.py`).
+        st.altair_chart(shot_chart(shots_df, zones_df))
+        st.caption(shot_chart_caption(shots_df))

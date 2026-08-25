@@ -1,0 +1,58 @@
+# Despliegue de la interfaz en la Raspberry Pi (NAS). Dos servicios:
+#   - app: Streamlit, solo en red interna de Docker (sin "ports:").
+#   - cloudflared: túnel saliente hacia Cloudflare — es la ÚNICA vía de
+#     entrada desde fuera de la red local, sin abrir puertos en el router.
+#     Requiere un túnel creado en el dashboard de Cloudflare Zero Trust
+#     (Access > Tunnels) y su token en CLOUDFLARE_TUNNEL_TOKEN (.env, no
+#     versionado). Ver deploy/cloudflared/README.md.
+#
+# Uso: docker compose up -d --build
+services:
+  app:
+    build:
+      context: .
+      dockerfile: app/Dockerfile
+    environment:
+      - DATABASE_URL=sqlite:////data/baskonia.db
+      # Fotos de jugador descargadas por ingest/baskonia_web (ver
+      # app/components/avatar.py) — mismo volumen data/ que la BD, montado
+      # de solo lectura, ruta absoluta porque WORKDIR de la imagen no es la
+      # raíz del repo (ver app/Dockerfile).
+      - PLAYER_PHOTOS_DIR=/data/player_photos
+      # Asistente de scouting (pestaña "Asistente"). Todo por entorno y nada
+      # en la imagen: cambiar de proveedor de modelo es cambiar estas
+      # variables (ver .env.example y local/features/005-chatbot/01_design.md
+      # §8). Si faltan, la pestaña se explica sola y las otras cuatro siguen
+      # funcionando igual — el asistente no es un requisito de arranque.
+      - ASSISTANT_LLM_PROVIDER=${ASSISTANT_LLM_PROVIDER:-openai_compat}
+      - ASSISTANT_LLM_BASE_URL=${ASSISTANT_LLM_BASE_URL:-}
+      - ASSISTANT_LLM_MODEL=${ASSISTANT_LLM_MODEL:-}
+      - ASSISTANT_LLM_API_KEY=${ASSISTANT_LLM_API_KEY:-}
+      - ASSISTANT_MAX_TOOL_ITERATIONS=${ASSISTANT_MAX_TOOL_ITERATIONS:-6}
+      - ASSISTANT_TOOL_LOADING=${ASSISTANT_TOOL_LOADING:-eager}
+      - ASSISTANT_SESSION_LIMIT=${ASSISTANT_SESSION_LIMIT:-30}
+      - ASSISTANT_DAILY_LIMIT=${ASSISTANT_DAILY_LIMIT:-200}
+      # Contador de uso y votos del chat. Va a un volumen APARTE y escribible
+      # porque /data está montado :ro a propósito (ver abajo).
+      - ASSISTANT_STATE_DIR=/state
+    volumes:
+      # Todo data/ (incluye -wal/-shm de SQLite en modo WAL), de solo
+      # lectura — la interfaz nunca escribe en la base de datos.
+      - ./data:/data:ro
+      # Único punto escribible de la interfaz: contador diario de preguntas al
+      # asistente y votos de las respuestas (app/assistant/budget.py y
+      # feedback.py). Deliberadamente fuera de ./data para no abrir una vía de
+      # escritura sobre la base de datos.
+      - ./data/assistant_state:/state
+    expose:
+      - "8501"
+    restart: unless-stopped
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel run
+    environment:
+      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
+    depends_on:
+      - app

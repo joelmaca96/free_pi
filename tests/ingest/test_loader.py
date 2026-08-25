@@ -8,6 +8,7 @@ from ingest.common.schema_types import (
     PlayerGameStat,
     ScoreStep,
     ShotRecord,
+    StintRecord,
 )
 
 
@@ -30,11 +31,24 @@ def _sample_game() -> NormalizedGame:
             PlayerGameStat(player_id="howard", minutes=30.0, pts=20, reb=3, ast=5, efg_pct=58.0),
         ],
         lineups=[
-            LineupRecord(player_ids=["howard", "moneke", "codi", "sedekerskis", "kotsar"], minutes=15.0, plus_minus=6),
+            LineupRecord(
+                player_ids=["howard", "moneke", "codi", "sedekerskis", "kotsar"],
+                minutes=15.0, plus_minus=6, team_id="bas",
+            ),
+        ],
+        stints=[
+            StintRecord(
+                team_id="bas",
+                player_ids=["howard", "moneke", "codi", "sedekerskis", "kotsar"],
+                start_seconds=2100.0, end_seconds=2400.0,
+                points_for=10, points_against=6, margin_start=-2,
+            ),
         ],
         shots=[
             ShotRecord(player_id="howard", team_id="bas", pos_x=250, pos_y=400, made=True, zone_id=1),
             ShotRecord(player_id="howard", team_id="bas", pos_x=260, pos_y=410, made=False, zone_id=1),
+            # Sin coordenadas en origen (un mate de ACB): se carga igual, marcado.
+            ShotRecord(player_id="howard", team_id="bas", pos_x=250, pos_y=455, made=True, zone_id=1, located=False),
         ],
         key_events=[KeyEvent(team_id="bas", quarter="Q4", game_clock="00:30", label="Triple decisivo")],
         score_progression=[ScoreStep(step_index=0, home_score=0, away_score=0), ScoreStep(step_index=1, home_score=2, away_score=0)],
@@ -53,10 +67,23 @@ def test_load_game_inserts_all_child_tables(engine):
         assert conn.execute(text("SELECT pts FROM player_game_stats WHERE game_id='acb-99001'")).scalar_one() == 20
         assert conn.execute(text("SELECT COUNT(*) FROM lineups WHERE game_id='acb-99001'")).scalar_one() == 1
         assert conn.execute(text("SELECT COUNT(*) FROM lineup_players lp JOIN lineups l ON l.id=lp.lineup_id WHERE l.game_id='acb-99001'")).scalar_one() == 5
-        assert conn.execute(text("SELECT COUNT(*) FROM shots WHERE game_id='acb-99001'")).scalar_one() == 2
-        assert conn.execute(text("SELECT fg_pct, volume FROM game_zone_stats WHERE game_id='acb-99001' AND team_id='bas' AND zone_id=1")).first() == (50.0, 2)
+        assert conn.execute(text("SELECT COUNT(*) FROM shots WHERE game_id='acb-99001'")).scalar_one() == 3
+        # `located` viaja hasta la BD (por defecto 1; 0 solo el que lo pide).
+        assert conn.execute(text("SELECT COUNT(*) FROM shots WHERE game_id='acb-99001' AND located=0")).scalar_one() == 1
+        assert conn.execute(text("SELECT fg_pct, volume FROM game_zone_stats WHERE game_id='acb-99001' AND team_id='bas' AND zone_id=1")).first() == (66.7, 3)
         assert conn.execute(text("SELECT COUNT(*) FROM key_events WHERE game_id='acb-99001'")).scalar_one() == 1
         assert conn.execute(text("SELECT COUNT(*) FROM score_progression WHERE game_id='acb-99001'")).scalar_one() == 2
+        # Equipo explícito del quinteto: sin esto había que inferirlo por el
+        # equipo ACTUAL de sus jugadores (ver `lineups.team_id` en schema.sql).
+        assert conn.execute(text("SELECT team_id FROM lineups WHERE game_id='acb-99001'")).scalar_one() == "bas"
+        # Tramos con reloj y marcador: lo que hace contestable el "clutch".
+        assert conn.execute(
+            text("SELECT start_seconds, end_seconds, margin_start FROM lineup_stints WHERE game_id='acb-99001'")
+        ).first() == (2100.0, 2400.0, -2)
+        assert conn.execute(
+            text("SELECT COUNT(*) FROM lineup_stint_players sp JOIN lineup_stints s ON s.id=sp.stint_id"
+                 " WHERE s.game_id='acb-99001'")
+        ).scalar_one() == 5
 
 
 def test_load_game_is_idempotent_on_rerun(engine):
@@ -72,7 +99,12 @@ def test_load_game_is_idempotent_on_rerun(engine):
         assert conn.execute(text("SELECT COUNT(*) FROM games WHERE id='acb-99001'")).scalar_one() == 1
         assert conn.execute(text("SELECT COUNT(*) FROM player_game_stats WHERE game_id='acb-99001'")).scalar_one() == 1
         assert conn.execute(text("SELECT COUNT(*) FROM lineups WHERE game_id='acb-99001'")).scalar_one() == 1
-        assert conn.execute(text("SELECT COUNT(*) FROM shots WHERE game_id='acb-99001'")).scalar_one() == 2
+        assert conn.execute(text("SELECT COUNT(*) FROM lineup_stints WHERE game_id='acb-99001'")).scalar_one() == 1
+        assert conn.execute(
+            text("SELECT COUNT(*) FROM lineup_stint_players sp JOIN lineup_stints s ON s.id=sp.stint_id"
+                 " WHERE s.game_id='acb-99001'")
+        ).scalar_one() == 5
+        assert conn.execute(text("SELECT COUNT(*) FROM shots WHERE game_id='acb-99001'")).scalar_one() == 3
         assert conn.execute(text("SELECT COUNT(*) FROM key_events WHERE game_id='acb-99001'")).scalar_one() == 1
 
 

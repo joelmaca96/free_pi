@@ -11,15 +11,24 @@ las dos, así la resolución de identidad/carga se escribe una sola vez:
   "home_score": 88, "away_score": 82, "pace": 71.2, "narrative": None,
   "team_stats": [{"team_id":.., "efg_pct":.., "ts_pct":.., "tov_pct":.., "orb_pct":..,
                   "ortg":.., "drtg":.., "ast_pct":.., "stl_pct":.., "blk_pct":..,
-                  "ft_rate":.., "ast_to_ratio":..}, ...],
-                 # los últimos 5 son opcionales (fieles a 04_team_stats.R de
-                 # OpenACB: S_assist/S_steal/S_blocks/FT_rate/ast_to_ratio).
+                  "ft_rate":.., "ast_to_ratio":.., "ftm":.., "fta":..}, ...],
+                 # todo lo que va detrás de orb_pct es opcional: los 5 primeros
+                 # fieles a 04_team_stats.R de OpenACB (S_assist/S_steal/
+                 # S_blocks/FT_rate/ast_to_ratio) y "ftm"/"fta" el recuento
+                 # bruto de tiros libres del equipo (los del rival son la
+                 # entrada del OTRO equipo de este mismo partido).
   "players": [{"player_id":.., "team_id":.., "name":.., "number":.., "position":..,
-               "minutes":.., "pts":.., "reb":.., "ast":.., "efg_pct":..}, ...],
+               "minutes":.., "pts":.., "reb":.., "ast":.., "efg_pct":..,
+               "ftm":.., "fta":..}, ...],
+           # "ftm"/"fta" opcionales (tiros libres convertidos/intentados): una
+           # fuente que no los dé deja las columnas en NULL, no en 0.
   "lineups": [{"team_id":.., "player_ids":[...], "minutes":.., "plus_minus":..}, ...],
            # opcional: si no se da (lista vacía) pero sí hay "play_by_play" +
            # "starters", los quintetos se reconstruyen jugada a jugada (ver
-           # `ingest.common.lineups.reconstruct_lineups`).
+           # `ingest.common.lineups.reconstruct_lineups`) y, con ellos, los
+           # TRAMOS con reloj y marcador (`lineup_stints`). Una fuente que
+           # entrega los quintetos ya agregados aquí no produce tramos: el
+           # detalle por tiempo solo existe si hay play-by-play.
   "shots": [{"player_id":.., "team_id":.., "x":.., "y":.., "made": bool}, ...],
            # x/y ya en la escala 0-500 de court_zones; la conversión desde el
            # sistema de coordenadas nativo de cada fuente es responsabilidad
@@ -37,7 +46,7 @@ las dos, así la resolución de identidad/carga se escribe una sola vez:
 }
 ```
 """
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from sqlalchemy.engine import Connection
 
@@ -58,6 +67,7 @@ from ingest.common.schema_types import (
     QuarterStat,
     ScoreStep,
     ShotRecord,
+    StintRecord,
 )
 from ingest.common.zones import classify_zone
 
@@ -88,6 +98,7 @@ def parse_and_resolve(conn: Connection, raw: Dict[str, Any], source: str) -> Nor
             PlayerGameStat(
                 player_id=player_id, minutes=player["minutes"], pts=player["pts"],
                 reb=player["reb"], ast=player["ast"], efg_pct=player["efg_pct"],
+                ftm=player.get("ftm"), fta=player.get("fta"),
             )
         )
 
@@ -98,6 +109,7 @@ def parse_and_resolve(conn: Connection, raw: Dict[str, Any], source: str) -> Nor
             net_rating=(row["ortg"] - row["drtg"]) if row.get("ortg") is not None and row.get("drtg") is not None else None,
             ast_pct=row.get("ast_pct"), stl_pct=row.get("stl_pct"), blk_pct=row.get("blk_pct"),
             ft_rate=row.get("ft_rate"), ast_to_ratio=row.get("ast_to_ratio"),
+            ftm=row.get("ftm"), fta=row.get("fta"),
         )
         for row in raw.get("team_stats", [])
     ]
@@ -114,13 +126,18 @@ def parse_and_resolve(conn: Connection, raw: Dict[str, Any], source: str) -> Nor
         LineupRecord(
             player_ids=[player_lookup[pid] for pid in row["player_ids"]],
             minutes=row["minutes"], plus_minus=row["plus_minus"],
+            # Una fuente que entrega quintetos ya agregados suele decir de qué
+            # equipo son; si no lo dice, queda en None y se infiere aguas
+            # abajo (ver `LineupRecord.team_id`).
+            team_id=team_lookup.get(row.get("team_id")),
         )
         for row in raw.get("lineups", [])
     ]
+    stints: List[StintRecord] = []
     if not lineups and raw.get("play_by_play"):
         starters = raw.get("starters") or _derive_starters_from_players(raw)
         if starters is not None:
-            lineups = _reconstruct_lineups_from_pbp(
+            lineups, stints = _reconstruct_lineups_from_pbp(
                 raw, starters, team_lookup, player_lookup, home_team_id, away_team_id
             )
 
@@ -131,6 +148,7 @@ def parse_and_resolve(conn: Connection, raw: Dict[str, Any], source: str) -> Nor
             player_id=player_lookup[row["player_id"]], team_id=team_lookup[row["team_id"]],
             pos_x=row["x"], pos_y=row["y"], made=row["made"],
             zone_id=classify_zone(conn, row["x"], row["y"]),
+            located=row.get("located", True),
         )
         for row in raw.get("shots", [])
         if row["player_id"] in player_lookup
@@ -160,6 +178,7 @@ def parse_and_resolve(conn: Connection, raw: Dict[str, Any], source: str) -> Nor
         advanced=advanced,
         boxscore=boxscore,
         lineups=lineups,
+        stints=stints,
         shots=shots,
         key_events=key_events,
         score_progression=score_progression,
@@ -174,6 +193,10 @@ def _reconstruct_lineups_from_pbp(raw, starters, team_lookup, player_lookup, hom
     (inconsistencias reales entre endpoints de una misma fuente) se
     descartan en vez de fallar: es preferible un quinteto con algún hueco a
     tumbar la carga de todo el partido.
+
+    Returns:
+        `(lineups, stints)` — los quintetos agregados de los DOS equipos y sus
+        tramos con reloj y marcador (ver `ingest/common/lineups.py`).
     """
     events = []
     for row in raw["play_by_play"]:
@@ -192,8 +215,9 @@ def _reconstruct_lineups_from_pbp(raw, starters, team_lookup, player_lookup, hom
     home_starters = [player_lookup[pid] for pid in starters["home"] if pid in player_lookup]
     away_starters = [player_lookup[pid] for pid in starters["away"] if pid in player_lookup]
 
-    by_team = reconstruct_lineups(home_team_id, away_team_id, home_starters, away_starters, events)
-    return by_team[home_team_id] + by_team[away_team_id]
+    reconstruction = reconstruct_lineups(home_team_id, away_team_id, home_starters, away_starters, events)
+    by_team = reconstruction.by_team
+    return by_team[home_team_id] + by_team[away_team_id], reconstruction.stints
 
 
 def _derive_starters_from_players(raw) -> Optional[Dict[str, list]]:

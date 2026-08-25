@@ -4,7 +4,7 @@ from unittest import mock
 from sqlalchemy import text
 
 from ingest.acb.parser import parse_and_resolve
-from ingest.acb.pipeline import discover_missing_games, run, run_single_game
+from ingest.acb.pipeline import discover_missing_games, run, run_single_game, run_upcoming
 from ingest.common.loader import load_game
 
 RAW_GAME = {
@@ -233,3 +233,119 @@ def test_acb_discover_missing_games_compara_calendario_con_bd(engine):
 
     assert missing == ["2025123402"]
     client.fetch_game.assert_not_called()  # discovery no descarga partidos
+
+
+# --- Calendario futuro (upcoming_matchups, feature 003-vista-plantilla, escudos) ---
+
+_SCHEDULED_TEAMS_BY_ID = {
+    "4463": {"name": "Kosner Baskonia", "logo_url": "https://static.acb.com/baskonia.png"},
+    "4467": {"name": "Barça", "logo_url": "https://static.acb.com/barca.png"},
+    "4477": {"name": "Unicaja", "logo_url": None},
+}
+
+_SCHEDULED_MATCHES = [
+    # Baskonia (4463) de local ante Barça (4467).
+    {"id": 1, "homeTeamId": 4463, "awayTeamId": 4467, "startDateTime": "2026-09-26T18:00:00Z", "matchStatus": "NOT_STARTED"},
+    # Baskonia de visitante ante Unicaja (4477, sin escudo verificado).
+    {"id": 2, "homeTeamId": 4477, "awayTeamId": 4463, "startDateTime": "2026-10-03T19:00:00Z", "matchStatus": "NOT_STARTED"},
+    # Partido entre otros dos equipos: no debe entrar en upcoming_matchups del Baskonia.
+    {"id": 3, "homeTeamId": 4467, "awayTeamId": 4477, "startDateTime": "2026-09-27T18:00:00Z", "matchStatus": "NOT_STARTED"},
+]
+
+
+def _fake_scheduled_client(matches=None, teams_by_id=None):
+    client = mock.Mock()
+    client.fetch_season_scheduled_matches.return_value = (
+        matches if matches is not None else _SCHEDULED_MATCHES,
+        teams_by_id if teams_by_id is not None else _SCHEDULED_TEAMS_BY_ID,
+    )
+    return client
+
+
+def test_run_upcoming_carga_solo_los_partidos_del_baskonia(engine):
+    client = _fake_scheduled_client()
+
+    summary = run_upcoming(engine, season=2026, client=client)
+
+    assert summary["upcoming"] == 2  # el partido Barça-Unicaja se descarta
+    with engine.connect() as conn:
+        # Filtrado por `season_id` a propósito: `schema.sql` siembra filas de
+        # ejemplo en `upcoming_matchups` con `season_id` NULL (contenido de
+        # muestra del esquema original, no de esta temporada) — sin este
+        # filtro el recuento incluiría también esas filas ajenas.
+        rows = conn.execute(
+            text(
+                "SELECT is_home, match_date FROM upcoming_matchups"
+                " WHERE season_id = :season_id ORDER BY match_date"
+            ),
+            {"season_id": summary["season_id"]},
+        ).all()
+    assert rows == [(1, "2026-09-26"), (0, "2026-10-03")]
+
+
+def test_run_upcoming_resuelve_el_equipo_propio_por_la_edicion_actual_no_por_un_external_id_viejo(engine):
+    """Regresión: ACB asigna un `id` de equipo NUEVO cada vez que cambia el
+    patrocinador — el Baskonia real ya tenía en vivo tres `external_id` de
+    temporadas anteriores (`4398`/`4462`/`4425`) sin que ninguno coincidiera
+    con el de la edición 2026-2027 (`4463`). Antes de la corrección,
+    `_own_team_acb_external_id` cogía cualquiera de los ya vinculados con
+    `LIMIT 1` y el filtro de partidos del Baskonia se quedaba en 0 en
+    silencio (sin excepción). Se siembra aquí ese mismo escenario: varios
+    external_id de `acb` ya vinculados al Baskonia, NINGUNO igual al `4463`
+    del catálogo de esta edición.
+    """
+    with engine.begin() as conn:
+        for stale_id in ("4398", "4462", "4425"):
+            conn.execute(
+                text("INSERT INTO team_external_ids (team_id, source, external_id) VALUES ('bas', 'acb', :eid)"),
+                {"eid": stale_id},
+            )
+
+    client = _fake_scheduled_client()
+    summary = run_upcoming(engine, season=2026, client=client)
+
+    assert summary["upcoming"] == 2  # no 0 — se resuelve por nombre de la edición, no por un id viejo
+
+
+def test_run_upcoming_backfillea_el_escudo_del_baskonia_y_del_rival(engine):
+    """Verifica el escudo verificado en vivo de ACB (`teams[].logo`, ver
+    `AcbClient.fetch_season_scheduled_matches`) — primera fuente real de
+    escudo del proyecto."""
+    client = _fake_scheduled_client()
+
+    run_upcoming(engine, season=2026, client=client)
+
+    with engine.connect() as conn:
+        bas_logo = conn.execute(text("SELECT logo_url FROM teams WHERE id = 'bas'")).scalar_one()
+        barca_logo = conn.execute(
+            text("SELECT t.logo_url FROM teams t JOIN team_external_ids tei ON tei.team_id = t.id"
+                 " WHERE tei.source='acb' AND tei.external_id='4467'")
+        ).scalar_one()
+
+    assert bas_logo == "https://static.acb.com/baskonia.png"
+    assert barca_logo == "https://static.acb.com/barca.png"
+
+
+def test_run_upcoming_es_idempotente_reemplaza_en_vez_de_acumular(engine):
+    client = _fake_scheduled_client()
+
+    run_upcoming(engine, season=2026, client=client)
+    summary = run_upcoming(engine, season=2026, client=client)
+
+    with engine.connect() as conn:
+        count = conn.execute(
+            text("SELECT COUNT(*) FROM upcoming_matchups WHERE season_id = :season_id"),
+            {"season_id": summary["season_id"]},
+        ).scalar_one()
+    assert count == 2  # no 4 — la segunda llamada reemplaza el calendario de esa temporada
+
+
+def test_run_upcoming_descarta_partidos_sin_fecha_confirmada(engine):
+    matches = [
+        {"id": 9, "homeTeamId": 4463, "awayTeamId": 4467, "startDateTime": None, "matchStatus": "NOT_STARTED"},
+    ]
+    client = _fake_scheduled_client(matches=matches)
+
+    summary = run_upcoming(engine, season=2026, client=client)
+
+    assert summary["upcoming"] == 0

@@ -1,0 +1,17 @@
+# Dependencias de la interfaz (app/). Autocontenido a propósito: no reutiliza
+# el requirements.txt de la raíz (arrastraría euroleague-api/beautifulsoup4/
+# pytest, que la imagen que sirve la UI no necesita — ver app/Dockerfile).
+streamlit>=1.36.0
+pandas>=2.0.0
+altair>=5.0.0
+SQLAlchemy>=2.0.0
+python-dotenv>=1.0.0
+# Cliente del dialecto OpenAI, para el asistente de scouting (`app/assistant/`).
+# Sirve para TODOS los proveedores compatibles — LLM local (Ollama/LM Studio),
+# Groq, Cerebras, Cloudflare Workers AI, OpenRouter — que es el camino del PoC
+# (`local/features/005-chatbot/01_design.md` §8.3). NO se instala `anthropic`:
+# el adaptador de Claude existe (`app/assistant/llm/anthropic.py`) pero es fase
+# futura y el PoC corre a coste cero. La interfaz arranca igual sin esta
+# dependencia: la pestaña del asistente lo explica y las otras cuatro no se
+# enteran.
+openai>=1.0

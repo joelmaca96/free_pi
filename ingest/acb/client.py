@@ -84,7 +84,7 @@ la web hoy en día - **distinta** de la que documenta/usa OpenACB:
 """
 import os
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
@@ -104,10 +104,37 @@ API_KEY = os.getenv("ACB_API_KEY", "0dd94928-6f57-4c08-a3bd-b1b2f092976e")
 _EDITION_ID_OFFSET = int(os.getenv("ACB_EDITION_ID_OFFSET", "1936"))
 COMPETITION_ID = int(os.getenv("ACB_COMPETITION_ID", "1"))  # 1 = Liga Endesa
 
+# Cuántos `weekId` inválidos SEGUIDOS se toleran antes de dar la temporada por
+# terminada (ver historia en `fetch_season_finished_matches`) - el hueco más
+# ancho verificado en vivo fue de 55 semanas, este margen lo cubre sin
+# arriesgarse a recorrer cientos de semanas de más en cada llamada.
+_MAX_CONSECUTIVE_GAPS = int(os.getenv("ACB_MAX_CONSECUTIVE_WEEK_GAPS", "80"))
+
+# Techo absoluto de `weekId` visitados por llamada, independiente de
+# `_MAX_CONSECUTIVE_GAPS`: verificado en vivo que semanas MUY antiguas (fuera
+# de cualquier temporada real) pueden seguir devolviendo 200 con partidos en
+# vez de 400 (`selectedFilters.season` no lo distingue, ver historia arriba) -
+# sin este techo, una racha de huecos válidos-pero-vacíos podría alargar el
+# recorrido mucho más de lo que cualquier temporada real necesita (~120
+# semanas entre liga regular/playoffs/huecos vistos hasta ahora).
+_MAX_TOTAL_WEEKS_WALKED = int(os.getenv("ACB_MAX_TOTAL_WEEKS_WALKED", "300"))
+
 
 def season_to_edition_id(season: int) -> int:
     """Convierte un año de inicio de temporada (`2025` = "2025-2026") a `editionId`."""
     return (season + 1) - _EDITION_ID_OFFSET
+
+
+def _season_date_bounds(season: int) -> tuple:
+    """Ventana de fechas (`YYYY-MM-DD`, `YYYY-MM-DD`) razonable para una temporada.
+
+    Red de seguridad de `fetch_season_finished_matches`: `selectedFilters.season`
+    no valida nada de verdad (ver historia ahí), así que sin esto tolerar
+    huecos de `weekId` podría arrastrar partidos de temporadas ajenas si el
+    hueco real resultara más ancho que `_MAX_CONSECUTIVE_GAPS`. Julio de
+    `season` a agosto de `season + 1` cubre pretemporada y playoffs con margen.
+    """
+    return f"{season}-07-01", f"{season + 1}-08-31"
 
 
 class _WeekNotFound(Exception):
@@ -150,26 +177,51 @@ class AcbClient:
     def fetch_season_finished_matches(self, season: int) -> List[Dict[str, Any]]:
         """Partidos finalizados (`matchStatus == "FINALIZED"`) de una temporada.
 
-        Recorre hacia atrás cada `weekId` de la edición (empezando por la
-        última semana disponible) hasta que la API señala el límite de la
-        temporada (400) o el `season` devuelto deja de coincidir con
-        `edition_id` (semana fuera de rango que la API resuelve haciendo
-        fallback a otra edición en vez de dar error).
+        HISTORIA (2026-08-24): la primera versión de este método paraba en el
+        PRIMER `weekId` inválido (400) al recorrer hacia atrás desde la última
+        semana disponible, asumiendo un rango contiguo. Falso: verificado en
+        vivo que el espacio de `weekId` de una misma edición tiene huecos
+        reales de decenas de semanas seguidas devolviendo 400 (p.ej. edición
+        90: semanas 2891-2945 inválidas, pero 2810-2890 vuelven a ser válidas
+        y tienen partidos reales - un partido de Baskonia de abril,
+        `matchId=104679`, quedaba así fuera del calendario cargado). Tampoco
+        sirve `selectedFilters.season` como señal de límite: se comprobó que
+        devuelve el `edition_id` pedido incluso en `weekId` claramente ajenos
+        a la temporada (huecos de decenas/cientos de semanas más atrás) - no
+        valida nada del lado del servidor, solo hace eco del parámetro.
+
+        Por eso ahora: (1) tolera hasta `_MAX_CONSECUTIVE_GAPS` semanas
+        inválidas SEGUIDAS antes de dar la temporada por terminada (en vez de
+        pararse en la primera), para saltar huecos como el de arriba; (2)
+        como red de seguridad ante que el recorrido se alargue más de la
+        cuenta hacia semanas realmente ajenas a la temporada, descarta
+        cualquier partido cuya fecha caiga fuera de una ventana amplia
+        alrededor de `season` (`_season_date_bounds`) - sin esto, un hueco
+        más ancho que el ya visto arrastraría partidos de otras temporadas;
+        (3) `_MAX_TOTAL_WEEKS_WALKED` como techo absoluto de peticiones, por
+        si semanas antiguas ajenas a cualquier temporada siguen devolviendo
+        200 en vez de 400 (verificado en vivo que puede pasar).
         """
         edition_id = season_to_edition_id(season)
         anchor = self._get_matches_page(edition_id, week_id=None)
         week_id = anchor["selectedFilters"]["week"]
+        date_min, date_max = _season_date_bounds(season)
 
         matches_by_id: Dict[Any, Dict[str, Any]] = {}
-        while True:
+        consecutive_gaps = 0
+        weeks_walked = 0
+        while consecutive_gaps <= _MAX_CONSECUTIVE_GAPS and weeks_walked < _MAX_TOTAL_WEEKS_WALKED:
+            weeks_walked += 1
             try:
                 page = self._get_matches_page(edition_id, week_id)
             except _WeekNotFound:
-                break
-            if page["selectedFilters"]["season"] != edition_id:
-                break
+                consecutive_gaps += 1
+                week_id -= 1
+                continue
+            consecutive_gaps = 0
             for match in page["matches"]:
-                matches_by_id[match["id"]] = match
+                if date_min <= str(match.get("startDateTime", ""))[:10] <= date_max:
+                    matches_by_id[match["id"]] = match
             week_id -= 1
 
         finished = [m for m in matches_by_id.values() if m.get("matchStatus") == "FINALIZED"]
@@ -178,6 +230,76 @@ class AcbClient:
             self._match_cache[key] = match
             self._season_by_match[key] = season
         return finished
+
+    def fetch_season_scheduled_matches(self, season: int) -> Tuple[List[Dict[str, Any]], Dict[str, Dict[str, Any]]]:
+        """Calendario NO finalizado (`matchStatus != "FINALIZED"`) de una temporada.
+
+        VERIFICADO EN VIVO (2026-08-24): a diferencia de una temporada ya jugada, la
+        semana ancla (`weekId` sin especificar) de una temporada que **todavía no ha
+        empezado** no cae cerca del final del calendario sino cerca del PRINCIPIO -
+        edición 91 (temporada 2026-2027, sin un solo partido finalizado todavía): la
+        ancla devolvió `weekId=2987` con partidos del 26-27/09/2026 (la primera
+        jornada), y siguió habiendo semanas válidas hacia ADELANTE (`weekId` hasta
+        ~3020) con partidos programados hasta mediados de mayo de 2027 (35 semanas ≈
+        34 jornadas de liga regular, mismo patrón que una temporada completa). Por
+        eso este método recorre la ancla en AMBAS direcciones (a diferencia de
+        `fetch_season_finished_matches`, que solo recorre hacia atrás porque ahí la
+        ancla sí es el final) - con la misma tolerancia a huecos de `weekId` ya
+        verificada (ver historia de ese método), no se puede asumir de nuevo que el
+        rango es contiguo.
+
+        Returns:
+            Tupla `(matches, teams_by_id)`: `matches` son los partidos con
+            `matchStatus != "FINALIZED"` (calendario futuro; para una temporada sin
+            empezar, prácticamente todos). `teams_by_id` mapea el id numérico de
+            equipo de ACB (`str`) a `{"name": ..., "logo_url": ...}` de esta edición
+            (p.ej. `"Kosner Baskonia"` en 2026-2027) - viene del mismo payload, así
+            que `adapter.build_scheduled_matchup` no necesita una llamada aparte
+            para resolver nombre/escudo del rival. `logo_url` es el campo `logo`
+            real que trae ACB (verificado en vivo, 2026-08-24:
+            `https://static.acb.com/img/www/clubes2024/...png`) - primera fuente
+            de escudo de equipo verificada en el proyecto (ver
+            `local/features/003-vista-plantilla/01_design.md` §9, que documentaba
+            este hueco como sin resolver).
+        """
+        edition_id = season_to_edition_id(season)
+        anchor = self._get_matches_page(edition_id, week_id=None)
+        anchor_week = anchor["selectedFilters"]["week"]
+        date_min, date_max = _season_date_bounds(season)
+
+        matches_by_id: Dict[Any, Dict[str, Any]] = {}
+        teams_by_id: Dict[str, Dict[str, Any]] = {}
+
+        def _collect(page: Dict[str, Any]) -> None:
+            for match in page["matches"]:
+                if date_min <= str(match.get("startDateTime", ""))[:10] <= date_max:
+                    matches_by_id[match["id"]] = match
+            for team in page.get("teams", []):
+                teams_by_id[str(team["id"])] = {
+                    "name": team.get("shortName") or team.get("fullName") or str(team["id"]),
+                    "logo_url": team.get("logo"),
+                }
+
+        _collect(anchor)
+
+        for step in (-1, 1):
+            week_id = anchor_week + step
+            consecutive_gaps = 0
+            weeks_walked = 0
+            while consecutive_gaps <= _MAX_CONSECUTIVE_GAPS and weeks_walked < _MAX_TOTAL_WEEKS_WALKED:
+                weeks_walked += 1
+                try:
+                    page = self._get_matches_page(edition_id, week_id)
+                except _WeekNotFound:
+                    consecutive_gaps += 1
+                    week_id += step
+                    continue
+                consecutive_gaps = 0
+                _collect(page)
+                week_id += step
+
+        scheduled = [m for m in matches_by_id.values() if m.get("matchStatus") != "FINALIZED"]
+        return scheduled, teams_by_id
 
     def fetch_game_boxscore(self, match_id: Any) -> Dict[str, Any]:
         """Boxscore completo (por equipo y jugador) de un partido."""
@@ -201,6 +323,23 @@ class AcbClient:
         """
         return self._get(f"{MATCHDATA_BASE}/AdvancedStats/match-advanced-stats?matchId={match_id}")
 
+    def fetch_match_header(self, match_id: Any) -> Dict[str, Any]:
+        """Cabecera del partido (`competitionId`/marcador por cuarto/equipos).
+
+        Único sitio donde `Competition/matches?competitionId=1&...` (que trae
+        TODOS los partidos de "Liga Endesa" en sentido amplio de la API, no
+        solo liga regular) dice de qué competición es realmente cada
+        partido: verificado en vivo (2026-08-24) que la Copa del Rey
+        (3 partidos de Baskonia el 20-22 feb 2026, formato de eliminatoria a
+        un partido en días consecutivos) viene mezclada en esa misma lista
+        con `competitionId=2`, no la `1` ("Liga Endesa") que cabría esperar -
+        de ahí que `adapter.py` necesite esto para no etiquetar Copa del Rey
+        como ACB. Catálogo real (`availableFilters.competitions` de
+        `Competition/matches`): 1=Liga Endesa, 2=Copa del Rey,
+        3=Supercopa Endesa (ver `adapter._competition_name`).
+        """
+        return self._get(f"{MATCHDATA_BASE}/MatchHeader/match-header?matchId={match_id}")
+
     # ---- Compatibilidad con pipeline.py/tests existentes ----
 
     def fetch_season_game_ids(self, season: int) -> List[str]:
@@ -215,7 +354,7 @@ class AcbClient:
         el resumen del partido - equipo local/visitante, marcador, fecha -
         cacheado en memoria); boxscore, tiros y play-by-play se piden aquí.
         """
-        from .adapter import build_raw_game  # import diferido: evita ciclo con parser.py
+        from .adapter import build_raw_game, is_out_of_scope_competition  # import diferido: evita ciclo con parser.py
 
         key = str(game_id)
         match = self._match_cache.get(key)
@@ -224,6 +363,21 @@ class AcbClient:
                 f"AcbClient.fetch_game: partido {game_id} desconocido - llama antes a "
                 "fetch_season_finished_matches/fetch_season_game_ids."
             )
+        # `match_header` primero y barato (una llamada) a propósito: si resulta ser una
+        # competición ajena (ver `is_out_of_scope_competition`), no merece la pena pedir
+        # boxscore/tiros/play-by-play - y sobre todo, no hay que dejar que sus jugadores
+        # lleguen a `build_raw_game`/el loader (ver historia de ese chequeo).
+        try:
+            competition_id = self.fetch_match_header(game_id).get("competitionId")
+        except Exception:  # noqa: BLE001 - opcional: si falla, se trata como "desconocida" (cae en ACB)
+            competition_id = None
+        if is_out_of_scope_competition(competition_id):
+            raise ValueError(
+                f"AcbClient: partido {game_id} pertenece a una competición fuera de "
+                f"alcance (competitionId={competition_id}, ver adapter._COMPETITION_BY_ID) "
+                "- no se carga."
+            )
+
         boxscore = self.fetch_game_boxscore(game_id)
         shots = self.fetch_game_shots(game_id)
         play_by_play = self.fetch_game_play_by_play(game_id)
@@ -234,5 +388,6 @@ class AcbClient:
         return build_raw_game(
             match, boxscore, self._season_by_match[key],
             shots=shots, play_by_play=play_by_play, advanced_stats=advanced_stats,
+            competition_id=competition_id,
         )
 

@@ -5,11 +5,13 @@ import time
 from typing import Any, Callable, Dict, List, Optional
 
 import requests
+from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
+from ingest.common.identity import get_competition_id, get_or_create_season, normalize_name, resolve_or_create_team
 from ingest.common.loader import list_existing_external_ids, load_game
 
-from .adapter import build_raw_game
+from .adapter import COMPETITION_NAME, build_raw_game, build_scheduled_matchup
 from .client import EuroleagueClient
 from .parser import SOURCE, parse_and_resolve
 
@@ -167,3 +169,114 @@ def discover_missing_games(
         season, len(game_codes), len(existing), len(missing),
     )
     return missing
+
+
+# --- Calendario futuro (upcoming_matchups) + escudos ------------------------
+
+
+def _own_team_euroleague_code(conn, clubs_by_code: Dict[str, Dict[str, Any]]) -> str:
+    """Código de club de Euroliga (p.ej. `"BAS"`) del Baskonia en el catálogo de esta
+    temporada, para filtrar el calendario en `build_scheduled_matchup`.
+
+    A diferencia de ACB (id numérico que cambia con el patrocinador cada
+    temporada, ver `ingest/acb/pipeline.py::_own_team_acb_external_id`), el
+    `code` de Euroliga es el identificador propio y estable del club en el
+    backend - no cambia con el sponsor (verificado en vivo: el mismo `"BAS"`
+    ya estaba vinculado en `team_external_ids` de una carga de partidos
+    jugados de una temporada anterior). Por eso aquí se prueba PRIMERO ese
+    enlace ya guardado (barato, sin ambigüedad) y solo se cae a resolver por
+    nombre normalizado dentro del catálogo de clubes de esta temporada (con
+    `_KNOWN_TEAM_ALIASES` cubriendo el nombre real 2026-2027, "Kosner
+    Baskonia Vitoria-Gasteiz") si no hay enlace todavía - una BD nueva sin
+    ningún partido de Euroliga cargado.
+    """
+    row = conn.execute(
+        text(
+            "SELECT tei.external_id FROM team_external_ids tei"
+            " JOIN teams t ON t.id = tei.team_id"
+            " WHERE t.is_own_team = 1 AND tei.source = 'euroleague' LIMIT 1"
+        )
+    ).first()
+    if row is not None and row[0] in clubs_by_code:
+        return row[0]
+
+    for code, info in clubs_by_code.items():
+        if normalize_name(info["name"]) == "baskonia":
+            return code
+
+    raise ValueError(
+        "Euroliga: no se pudo identificar al Baskonia en el catálogo de clubes de esta "
+        "temporada (ni por team_external_ids ni por nombre normalizado) - revisa "
+        "ingest.common.identity._KNOWN_TEAM_ALIASES."
+    )
+
+
+def run_upcoming(engine: Engine, season: int, client: Optional[EuroleagueClient] = None) -> Dict[str, int]:
+    """Refresca el calendario NO jugado del Baskonia en Euroliga (`upcoming_matchups`).
+
+    Igual que `ingest/acb/pipeline.py::run_upcoming`: no toca `games` (los
+    partidos ya jugados siguen yendo por `run()`), y de paso backfillea el
+    escudo (`teams.logo_url`) del Baskonia y de cada rival vía
+    `EuroleagueClient.fetch_clubs` - funciona también para escudos de
+    rivales que solo aparecen en partidos YA jugados de temporadas
+    anteriores (misma fila de `teams`, se actualiza igual). Idempotente vía
+    borrar-e-insertar, acotado a `(season_id, competition_id)` para no tocar
+    el calendario futuro de ACB que pueda haber para la misma temporada
+    (`ingest/acb/pipeline.py::run_upcoming` hace la misma acotación).
+
+    Returns:
+        `{"season_id": ..., "upcoming": N}` - cuántos partidos futuros del
+        Baskonia se cargaron.
+    """
+    client = client or EuroleagueClient()
+    schedule_rows = _to_records(client.fetch_season_game_codes(season))
+    clubs = client.fetch_clubs(season)
+    clubs_by_code = {c["code"]: c for c in clubs}
+
+    with engine.begin() as conn:
+        own_code = _own_team_euroleague_code(conn, clubs_by_code)
+        season_id = get_or_create_season(conn, season)
+        competition_id = get_competition_id(conn, COMPETITION_NAME)
+
+        own_info = clubs_by_code.get(own_code)
+        if own_info:
+            resolve_or_create_team(
+                conn, SOURCE, own_code, own_info["name"], logo_url=(own_info.get("images") or {}).get("crest")
+            )
+
+        matchups = [
+            m
+            for m in (
+                build_scheduled_matchup(row, clubs_by_code, own_code)
+                for row in schedule_rows
+                if str(row.get("played", "")).strip().lower() != "true"
+            )
+            if m and m["match_date"]
+        ]
+
+        conn.execute(
+            text("DELETE FROM upcoming_matchups WHERE season_id = :season_id AND competition_id = :competition_id"),
+            {"season_id": season_id, "competition_id": competition_id},
+        )
+        for matchup in matchups:
+            opponent_team_id = resolve_or_create_team(
+                conn, SOURCE, matchup["opponent_code"], matchup["opponent_name"],
+                logo_url=matchup["opponent_logo_url"],
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO upcoming_matchups"
+                    " (opponent_team_id, competition_id, match_date, is_home, season_id)"
+                    " VALUES (:opponent_team_id, :competition_id, :match_date, :is_home, :season_id)"
+                ),
+                {
+                    "opponent_team_id": opponent_team_id,
+                    "competition_id": competition_id,
+                    "match_date": matchup["match_date"],
+                    "is_home": 1 if matchup["is_home"] else 0,
+                    "season_id": season_id,
+                },
+            )
+
+    logger.info("Euroliga %s: %d partidos futuros del Baskonia cargados en upcoming_matchups", season, len(matchups))
+    return {"season_id": season_id, "upcoming": len(matchups)}

@@ -24,7 +24,12 @@ CREATE TABLE competitions (
 CREATE TABLE teams (
   id          TEXT PRIMARY KEY,       -- 'bas', 'rm', 'fcb'...
   name        TEXT NOT NULL,
-  is_own_team INTEGER NOT NULL DEFAULT 0 CHECK (is_own_team IN (0,1))
+  is_own_team INTEGER NOT NULL DEFAULT 0 CHECK (is_own_team IN (0,1)),
+  -- Escudo: nullable a propósito, igual que players.photo_url. Ningún módulo
+  -- de ingest/ lo puebla todavía (ver local/features/003-vista-plantilla/
+  -- 01_design.md §9) — la UI debe degradar a un badge con iniciales, no a un
+  -- hueco vacío, mientras esta columna esté en NULL para todos los equipos.
+  logo_url    TEXT
 );
 
 -- Puente de identidad: un mismo equipo real (p.ej. Valencia Basket) aparece
@@ -57,6 +62,13 @@ CREATE TABLE players (
   -- Bio/foto: solo se rellena de forma fiable para la plantilla propia,
   -- vía scraper de baskonia.com. Rivales pueden quedar NULL.
   photo_url   TEXT,
+  -- Copia local del binario de `photo_url`, descargada por
+  -- `ingest/baskonia_web/scraper.py::download_player_photos` (ruta relativa
+  -- a `data/`, p.ej. 'player_photos/145.jpg') — evita depender de que
+  -- baskonia.com esté arriba/accesible para pintar la plantilla. NULL si no
+  -- hay foto real (silueta genérica) o la descarga falló ese jugador
+  -- concreto; `photo_url` sigue siendo la fuente de verdad del origen.
+  photo_local_path TEXT,
   height_cm   INTEGER,
   birth_date  DATE,
   nationality TEXT
@@ -115,6 +127,17 @@ CREATE TABLE game_advanced_stats (
   blk_pct       REAL,
   ft_rate       REAL,
   ast_to_ratio  REAL,
+  -- Tiros libres del equipo en bruto (convertidos/intentados). `ft_rate` ya
+  -- estaba, pero es una TASA (FTM/FGA) y no permite reconstruir ni el volumen
+  -- ni el acierto desde la línea. Nullable porque son columnas añadidas
+  -- (2026-08-24) sobre bases de datos ya cargadas: los partidos ingeridos
+  -- antes quedan en NULL hasta que se recargan (ver `engine.py::
+  -- _ADDITIVE_COLUMN_MIGRATIONS` y `_refresh_views`). Los tiros libres del
+  -- RIVAL de un partido son la fila de este mismo `game_id` con el otro
+  -- `team_id` — no hay columnas "concedidas" duplicadas; las vistas de
+  -- equipo los agregan con un self-join (`opp_*`).
+  ftm           INTEGER,
+  fta           INTEGER,
   PRIMARY KEY (game_id, team_id)
 );
 
@@ -142,6 +165,17 @@ CREATE TABLE player_game_stats (
   reb       INTEGER NOT NULL,
   ast       INTEGER NOT NULL,
   efg_pct   REAL NOT NULL,
+  -- Tiros libres convertidos/intentados. `efg_pct` los excluye por
+  -- definición (mide solo tiro de campo), así que sin estas dos columnas no
+  -- había forma de leer el juego desde la línea de ningún jugador — ni propio
+  -- ni rival (los boxscores de ACB/Euroliga se cargan de LOS DOS equipos de
+  -- cada partido, así que un rival tiene sus propias filas aquí igual que un
+  -- jugador del Baskonia). Nullable por el mismo motivo que en
+  -- `game_advanced_stats`: son columnas añadidas (2026-08-24) sobre BDs ya
+  -- cargadas; NULL = partido ingerido antes de que existieran, no "0 tiros
+  -- libres" — por eso las vistas cuentan aparte `gp_ft`.
+  ftm       INTEGER,
+  fta       INTEGER,
   PRIMARY KEY (game_id, player_id)
 );
 
@@ -150,7 +184,16 @@ CREATE TABLE lineups (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   game_id     TEXT NOT NULL REFERENCES games(id),
   minutes     REAL NOT NULL,
-  plus_minus  INTEGER NOT NULL
+  plus_minus  INTEGER NOT NULL,
+  -- Equipo del quinteto, explícito. Antes no existía y había que inferirlo
+  -- por el `players.team_id` de sus cinco jugadores — que es el equipo ACTUAL
+  -- del jugador, no el que tenía en ese partido, así que un traspaso ensuciaba
+  -- retroactivamente todo agregado histórico (ver la vista `lineup_team`, que
+  -- sigue existiendo como respaldo para las filas anteriores a esta columna).
+  -- Nullable porque es una columna añadida (2026-08-24) sobre bases de datos
+  -- ya cargadas, igual que ftm/fta: NULL = quinteto ingerido antes de que
+  -- existiera, no "sin equipo". Ver `engine.py::_ADDITIVE_COLUMN_MIGRATIONS`.
+  team_id     TEXT REFERENCES teams(id)
 );
 
 CREATE TABLE lineup_players (
@@ -158,6 +201,35 @@ CREATE TABLE lineup_players (
   player_id TEXT NOT NULL REFERENCES players(id),
   PRIMARY KEY (lineup_id, player_id)
 );
+
+-- Tramos (stints): un quinteto continuo en pista, con principio, fin y
+-- marcador. `lineups` agrega el partido entero por combinación de cinco, así
+-- que "los últimos minutos" no se podía recortar: los tramos se fundían al
+-- persistir aunque `ingest/common/lineups.py` ya trabajaba en segundos de
+-- partido y los adaptadores de ACB y Euroliga ya entregaban cuarto y reloj
+-- por jugada. Esta tabla es ese dato que se tiraba a la basura
+-- (`local/features/005-chatbot/01_design.md` §2.3 y §10.2).
+--
+-- `margin_start` es lo que convierte "últimos minutos" en "clutch": sin el
+-- marcador al abrir el tramo, un +25 y un empate a falta de tres minutos son
+-- el mismo dato, y no lo son.
+CREATE TABLE lineup_stints (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  game_id        TEXT NOT NULL REFERENCES games(id),
+  team_id        TEXT NOT NULL REFERENCES teams(id),
+  start_seconds  REAL NOT NULL,     -- desde el inicio del partido (game_clock_to_seconds)
+  end_seconds    REAL NOT NULL,
+  points_for     INTEGER NOT NULL,
+  points_against INTEGER NOT NULL,
+  margin_start   INTEGER NOT NULL   -- marcador (a favor - en contra) al abrir el tramo
+);
+
+CREATE TABLE lineup_stint_players (
+  stint_id  INTEGER NOT NULL REFERENCES lineup_stints(id),
+  player_id TEXT NOT NULL REFERENCES players(id),
+  PRIMARY KEY (stint_id, player_id)
+);
+CREATE INDEX idx_stints_game_team ON lineup_stints(game_id, team_id);
 
 -- Mapa de calor por zona de tiro (heatzones en el origen), por equipo: un
 -- partido puede registrar el mapa propio y/o el del rival.
@@ -170,8 +242,8 @@ CREATE TABLE game_zone_stats (
   PRIMARY KEY (game_id, team_id, zone_id)
 );
 
--- Tiros individuales (hoy simulados con PRNG a partir de game_zone_stats;
--- en producción vendrían de un tracker real de tiro).
+-- Tiros individuales, con las coordenadas de la fuente reescaladas a la escala
+-- de `court_zones` (ver `ingest/common/zones.py::to_court_coords`).
 CREATE TABLE shots (
   id        INTEGER PRIMARY KEY AUTOINCREMENT,
   game_id   TEXT NOT NULL REFERENCES games(id),
@@ -179,7 +251,16 @@ CREATE TABLE shots (
   zone_id   INTEGER REFERENCES court_zones(id),
   pos_x     REAL NOT NULL,
   pos_y     REAL NOT NULL,
-  made      INTEGER NOT NULL CHECK (made IN (0,1))
+  made      INTEGER NOT NULL CHECK (made IN (0,1)),
+  -- 1 = `pos_x`/`pos_y` son las coordenadas MEDIDAS que dio la fuente.
+  -- 0 = la fuente no las dio y son una posición inferida del tipo de tiro:
+  --     hoy solo los mates de ACB, que vienen con `posX=posY=0` (el mismo
+  --     centinela que los tiros libres) y se colocan en el aro. Sin esta
+  --     columna, el mapa de tiros los pintaba como un tiro localizado más y
+  --     no había forma de distinguirlos aguas abajo.
+  -- NULL = fila anterior a esta columna (ver `engine.py::
+  --     _ADDITIVE_COLUMN_MIGRATIONS`); la interfaz la trata como 1.
+  located   INTEGER CHECK (located IN (0,1))
 );
 
 CREATE TABLE key_events (
@@ -209,6 +290,13 @@ CREATE TABLE upcoming_matchups (
   competition_id        INTEGER NOT NULL REFERENCES competitions(id),
   match_date            DATE NOT NULL,
   is_home               INTEGER NOT NULL CHECK (is_home IN (0,1)),
+  -- Temporada del partido — columna añadida (2026-08-24): esta tabla era
+  -- contenido de ejemplo sin ingesta real ni columna de temporada (ver
+  -- `local/features/002-ajustes-interfaz/00_request.md`); ahora la puebla
+  -- de verdad `ingest/acb/pipeline.py::run_upcoming` (calendario real de
+  -- ACB), y necesita saber de qué temporada es cada fila para que
+  -- `next_matchup` no mezcle calendarios de temporadas distintas.
+  season_id             INTEGER REFERENCES seasons(id),
   predicted_net_rating  REAL,
   predicted_pace        REAL,
   predicted_ortg        REAL,
@@ -227,6 +315,19 @@ CREATE TABLE upcoming_matchups (
 -- sin duplicar ni mantener nada a mano. z-scores y "streak" (forma
 -- hot/cold) se calculan en la capa de aplicación a partir de estas vistas,
 -- no se almacenan.
+--
+-- TIROS LIBRES (2026-08-24): `ftm_avg`/`fta_avg`/`ft_pct` salen de las
+-- columnas nuevas `player_game_stats.ftm/fta` y `game_advanced_stats.ftm/fta`.
+-- `ft_pct` es el acierto PONDERADO POR VOLUMEN (SUM(ftm)/SUM(fta)), no la
+-- media de los porcentajes de cada partido — un 1/1 no puede pesar lo mismo
+-- que un 8/12. `gp_ft` (partidos con dato de tiros libres) va aparte de `gp`
+-- a propósito: los partidos ingeridos ANTES de que existieran esas columnas
+-- quedan en NULL, y `AVG`/`SUM` los ignoran — sin `gp_ft` no habría forma de
+-- distinguir "no tiró un solo libre" de "ese partido no trae el dato".
+-- Las vistas de equipo añaden además la misma familia con prefijo `opp_`
+-- (tiros libres del RIVAL en esos mismos partidos, vía self-join sobre
+-- `game_advanced_stats`): es lo que hace falta para leer cuántos tiros
+-- libres CONCEDE un equipo, no solo cuántos lanza.
 
 CREATE VIEW player_stats_by_competition AS
 SELECT
@@ -238,7 +339,13 @@ SELECT
   AVG(pgs.pts)                AS pts_avg,
   AVG(pgs.reb)                AS reb_avg,
   AVG(pgs.ast)                AS ast_avg,
-  AVG(pgs.efg_pct)            AS efg_pct
+  AVG(pgs.efg_pct)            AS efg_pct,
+  COUNT(pgs.fta)              AS gp_ft,
+  SUM(pgs.ftm)                AS ftm,
+  SUM(pgs.fta)                AS fta,
+  AVG(pgs.ftm)                AS ftm_avg,
+  AVG(pgs.fta)                AS fta_avg,
+  100.0 * SUM(pgs.ftm) / NULLIF(SUM(pgs.fta), 0) AS ft_pct
 FROM player_game_stats pgs
 JOIN games g ON g.id = pgs.game_id
 GROUP BY pgs.player_id, g.season_id, g.competition_id;
@@ -252,7 +359,13 @@ SELECT
   AVG(pgs.pts)                AS pts_avg,
   AVG(pgs.reb)                AS reb_avg,
   AVG(pgs.ast)                AS ast_avg,
-  AVG(pgs.efg_pct)            AS efg_pct
+  AVG(pgs.efg_pct)            AS efg_pct,
+  COUNT(pgs.fta)              AS gp_ft,
+  SUM(pgs.ftm)                AS ftm,
+  SUM(pgs.fta)                AS fta,
+  AVG(pgs.ftm)                AS ftm_avg,
+  AVG(pgs.fta)                AS fta_avg,
+  100.0 * SUM(pgs.ftm) / NULLIF(SUM(pgs.fta), 0) AS ft_pct
 FROM player_game_stats pgs
 JOIN games g ON g.id = pgs.game_id
 GROUP BY pgs.player_id, g.season_id;
@@ -268,9 +381,23 @@ SELECT
   AVG(gas.efg_pct)                      AS efg_pct,
   AVG(gas.ts_pct)                       AS ts_pct,
   AVG(gas.ortg)                         AS ortg,
-  AVG(gas.drtg)                         AS drtg
+  AVG(gas.drtg)                         AS drtg,
+  COUNT(gas.fta)                        AS gp_ft,
+  SUM(gas.ftm)                          AS ftm,
+  SUM(gas.fta)                          AS fta,
+  AVG(gas.ftm)                          AS ftm_avg,
+  AVG(gas.fta)                          AS fta_avg,
+  100.0 * SUM(gas.ftm) / NULLIF(SUM(gas.fta), 0) AS ft_pct,
+  COUNT(opp.fta)                        AS gp_opp_ft,
+  SUM(opp.ftm)                          AS opp_ftm,
+  SUM(opp.fta)                          AS opp_fta,
+  AVG(opp.ftm)                          AS opp_ftm_avg,
+  AVG(opp.fta)                          AS opp_fta_avg,
+  100.0 * SUM(opp.ftm) / NULLIF(SUM(opp.fta), 0) AS opp_ft_pct
 FROM game_advanced_stats gas
 JOIN games g ON g.id = gas.game_id
+LEFT JOIN game_advanced_stats opp
+       ON opp.game_id = gas.game_id AND opp.team_id <> gas.team_id
 GROUP BY gas.team_id, g.season_id, g.competition_id;
 
 CREATE VIEW team_stats_combined AS
@@ -283,10 +410,88 @@ SELECT
   AVG(gas.efg_pct)                      AS efg_pct,
   AVG(gas.ts_pct)                       AS ts_pct,
   AVG(gas.ortg)                         AS ortg,
-  AVG(gas.drtg)                         AS drtg
+  AVG(gas.drtg)                         AS drtg,
+  COUNT(gas.fta)                        AS gp_ft,
+  SUM(gas.ftm)                          AS ftm,
+  SUM(gas.fta)                          AS fta,
+  AVG(gas.ftm)                          AS ftm_avg,
+  AVG(gas.fta)                          AS fta_avg,
+  100.0 * SUM(gas.ftm) / NULLIF(SUM(gas.fta), 0) AS ft_pct,
+  COUNT(opp.fta)                        AS gp_opp_ft,
+  SUM(opp.ftm)                          AS opp_ftm,
+  SUM(opp.fta)                          AS opp_fta,
+  AVG(opp.ftm)                          AS opp_ftm_avg,
+  AVG(opp.fta)                          AS opp_fta_avg,
+  100.0 * SUM(opp.ftm) / NULLIF(SUM(opp.fta), 0) AS opp_ft_pct
 FROM game_advanced_stats gas
 JOIN games g ON g.id = gas.game_id
+LEFT JOIN game_advanced_stats opp
+       ON opp.game_id = gas.game_id AND opp.team_id <> gas.team_id
 GROUP BY gas.team_id, g.season_id;
+
+-- ---------- Contexto de liga: percentiles ----------
+-- "Estilo de juego" no es una columna: es una LECTURA RELATIVA. 73.6
+-- posesiones no significan nada sueltas — significan algo comparadas con la
+-- media de su liga. Sin este contexto, cualquier asistente que describa a un
+-- equipo solo puede recitar números o, peor, adjetivarlos a ojo, que es
+-- exactamente la alucinación que hay que impedir
+-- (`local/features/005-chatbot/01_design.md` §6).
+--
+-- El `PARTITION BY` incluye la COMPETICIÓN a propósito: ACB y Euroliga son
+-- ligas con ritmos distintos, y un percentil calculado mezclándolas no dice
+-- nada de ninguna de las dos. `gp >= 5` evita que lidere el ranking quien ha
+-- jugado un partido. (Funciones de ventana: SQLite >= 3.25.)
+CREATE VIEW team_style_percentiles AS
+SELECT t.team_id, t.season_id, t.competition_id, t.gp,
+       t.pace, t.ortg, t.drtg, t.net_rating, t.efg_pct, t.ts_pct,
+       PERCENT_RANK() OVER (PARTITION BY t.season_id, t.competition_id ORDER BY t.pace)       AS pace_pct,
+       PERCENT_RANK() OVER (PARTITION BY t.season_id, t.competition_id ORDER BY t.ortg)       AS ortg_pct,
+       -- DRtg se ordena INVERTIDO: menos encajado es mejor, así que p90 tiene
+       -- que significar "gran defensa", no "la peor defensa de la liga".
+       PERCENT_RANK() OVER (PARTITION BY t.season_id, t.competition_id ORDER BY -t.drtg)      AS drtg_pct,
+       PERCENT_RANK() OVER (PARTITION BY t.season_id, t.competition_id ORDER BY t.net_rating) AS net_rating_pct,
+       PERCENT_RANK() OVER (PARTITION BY t.season_id, t.competition_id ORDER BY t.efg_pct)    AS efg_pct_pct,
+       PERCENT_RANK() OVER (PARTITION BY t.season_id, t.competition_id ORDER BY t.ts_pct)     AS ts_pct_pct,
+       COUNT(*)      OVER (PARTITION BY t.season_id, t.competition_id)                        AS league_teams
+FROM team_stats_by_competition t
+WHERE t.gp >= 5;
+
+-- Lo mismo para jugadores. Mismo mínimo de partidos y por el mismo motivo.
+CREATE VIEW player_percentiles AS
+SELECT p.player_id, p.season_id, p.competition_id, p.gp,
+       p.min_avg, p.pts_avg, p.reb_avg, p.ast_avg, p.efg_pct,
+       PERCENT_RANK() OVER (PARTITION BY p.season_id, p.competition_id ORDER BY p.pts_avg) AS pts_pct,
+       PERCENT_RANK() OVER (PARTITION BY p.season_id, p.competition_id ORDER BY p.reb_avg) AS reb_pct,
+       PERCENT_RANK() OVER (PARTITION BY p.season_id, p.competition_id ORDER BY p.ast_avg) AS ast_pct,
+       PERCENT_RANK() OVER (PARTITION BY p.season_id, p.competition_id ORDER BY p.efg_pct) AS efg_pct_pct,
+       PERCENT_RANK() OVER (PARTITION BY p.season_id, p.competition_id ORDER BY p.min_avg) AS min_pct,
+       COUNT(*)      OVER (PARTITION BY p.season_id, p.competition_id)                     AS league_players
+FROM player_stats_by_competition p
+WHERE p.gp >= 5;
+
+-- Equipo de cada quinteto, resuelto en UN solo sitio con su advertencia.
+-- Prefiere `lineups.team_id` (el dato explícito, poblado por la ingesta desde
+-- 2026-08-24) y solo cuando falta cae a la mayoría de `players.team_id` de
+-- sus cinco jugadores — que es el equipo ACTUAL del jugador y por tanto una
+-- aproximación que un traspaso estropea hacia atrás. `is_inferred` viaja con
+-- la fila para que quien la use pueda decirlo en voz alta en vez de
+-- disimularlo.
+CREATE VIEW lineup_team AS
+SELECT l.id AS lineup_id,
+       l.game_id,
+       l.minutes,
+       l.plus_minus,
+       COALESCE(l.team_id, (
+         SELECT p.team_id
+         FROM lineup_players lp
+         JOIN players p ON p.id = lp.player_id
+         WHERE lp.lineup_id = l.id
+         GROUP BY p.team_id
+         ORDER BY COUNT(*) DESC, p.team_id
+         LIMIT 1
+       )) AS team_id,
+       CASE WHEN l.team_id IS NULL THEN 1 ELSE 0 END AS is_inferred
+FROM lineups l;
 
 -- ---------- Índices útiles ----------
 

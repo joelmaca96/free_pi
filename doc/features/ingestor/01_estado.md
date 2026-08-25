@@ -16,15 +16,24 @@ a los demás, se reporta `{"loaded": [...], "failed": [...]}` por módulo).
   esquema. Un solo sitio para esa lógica, no duplicada por fuente.
 - `ingest/common/identity.py` — resolución de equipo/jugador entre fuentes vía
   `team_external_ids`/`player_external_ids` (con fallback a nombre normalizado / dorsal+equipo).
+  `normalize_name` vive ahora en `packages/baskonia_core/names.py` (se reexporta desde aquí):
+  el asistente de scouting necesita normalizar EXACTAMENTE igual que la ingesta, e `ingest/` no
+  viaja en la imagen de la interfaz.
 - `ingest/common/loader.py` — upsert idempotente contra `packages/baskonia_core/db/scouting`
   (natural keys con `ON CONFLICT DO UPDATE` donde existen; borrar-y-reinsertar para tablas sin
   clave natural como `lineups`/`shots`/`key_events`).
 - `ingest/common/lineups.py` + `game_clock.py` — reconstrucción de quintetos a partir de
-  play-by-play (sustituciones + puntos), fuente-agnóstica.
+  play-by-play (sustituciones + puntos), fuente-agnóstica. Desde 2026-08-24 devuelve además
+  los **tramos** sin agregar (`lineup_stints`: apertura, cierre, puntos a favor/en contra y
+  marcador de entrada), que es lo que permite recortar por tiempo y por marcador — ver §2.5.
 - Esquema destino: `packages/baskonia_core/db/scouting/schema.sql` (ver ese fichero para la
   lista completa de tablas/columnas).
 
-Suite completa: **223 passed, 2 skipped** (offline al 100%, sin red real en tests — mocks/
+Suite completa: **245 passed** (incluye `tests/app/assistant/`: resolución de entidades,
+herramientas del chat, guardas de SQL, bucle de agente con cliente de LLM falso y la propia
+página con `AppTest`)
+
+Antes de esta entrega: **223 passed, 2 skipped** (offline al 100%, sin red real en tests — mocks/
 fixtures que replican las formas de payload verificadas en vivo).
 
 ## 2. Estado por fuente
@@ -42,6 +51,42 @@ fixtures que replican las formas de payload verificadas en vivo).
 - **Falta / limitación conocida:** `height_cm` siempre `NULL` — esa página no publica altura en
   ningún campo (no es un bug, es una ausencia real de dato en la fuente).
 
+**Fotos descargadas a disco (2026-08-24):** hasta ahora `photo_url` solo guardaba la URL remota
+de baskonia.com — la interfaz (`app/components/avatar.py`) hacía *hotlink* directo a esa URL,
+así que pintar la plantilla dependía de que baskonia.com estuviera arriba y accesible desde el
+navegador del visitante. `scraper.download_player_photos` descarga ahora el binario real a
+`BASKONIA_WEB_PHOTOS_DIR` (por defecto `data/player_photos/`, mismo volumen que monta `app/`
+de solo lectura en `docker-compose.yml`) y lo persiste en la columna nueva
+`players.photo_local_path` (`schema.sql`) — `photo_url` se mantiene intacta como origen. Nombra
+los ficheros por `external_id` (el id de baskonia.com, estable entre ejecuciones) y es
+idempotente: si el fichero ya existe en disco, no vuelve a pedirlo por red. Un fallo puntual
+(URL caída, robots.txt lo deniega, `Content-Type` que no es imagen) se registra y se salta ese
+jugador sin tumbar el resto de la carga. `pipeline.run(engine, download_photos=True)` la llama
+por defecto; `--skip-photos` en `cli.py` la desactiva para una ejecución rápida sin tráfico de
+imágenes.
+
+**Hallazgo corregido el mismo día, al ejecutar la descarga por primera vez contra la BD
+real:** `photo.data.attributes.url` viene como ruta relativa (`/uploads/xxx.png`) y este
+módulo la resolvía contra `www.baskonia.com` (el host de `ROSTER_URL`) — da `200` pero
+devuelve el HTML de la propia SPA Angular, no la imagen (esa ruta no está servida ahí, la
+SPA la intercepta como ruta de cliente más). El backend real de medios (Strapi) es
+`cms.deportivoalaves.com` — compartido con la web del Deportivo Alavés, mismo grupo
+propietario —, confirmado en vivo con varios ficheros jpg/png distintos antes de fijarlo.
+Corregido con `scraper.MEDIA_BASE_URL` (overridable con `BASKONIA_WEB_MEDIA_BASE_URL`).
+**Esto significa que el hotlink directo que hacía la interfaz antes de tener descarga local
+(`photo_url` tal cual en un `<img src>`) también estaba roto desde siempre** — nadie lo
+había notado porque nunca se había intentado descargar/renderizar de verdad ese campo.
+
+**Capa de app actualizada (2026-08-24):** `app/components/avatar.py` ahora prefiere
+`photo_local_path` sobre `photo_url` — lee el fichero descargado y lo embebe en el `<img
+src="data:...">` como `data:` URI (Streamlit no expone `data/` como estático), con `photo_url`
+como fallback si la copia local no existe todavía o no se puede leer. La ruta real dentro del
+contenedor de la interfaz no es la que guardó el ingestor (que corre fuera de Docker, ver
+`deploy/systemd/`) sino `PLAYER_PHOTOS_DIR` (`docker-compose.yml`, mismo patrón que
+`DATABASE_URL`) + el nombre de fichero — `avatar.py` solo se fía del nombre, no de la ruta
+completa guardada en `photo_local_path`. Cubierto por `tests/app/test_avatar.py` (primer test
+de la capa `app/`, sin red ni Streamlit real: construcción de HTML pura).
+
 ### 2.2 `acb` — Liga Endesa vía la API real de acb.com — ✅ el más completo de los tres
 
 Usa la API real del frontend actual de acb.com (`api2.acb.com/api/{seasondata,matchdata}`,
@@ -56,22 +101,85 @@ Implementado y poblando datos reales:
 | `game_advanced_stats` | ✅ **con los números OFICIALES de acb.com** (`AdvancedStats/match-advanced-stats`: posesiones/pace/ortg/drtg/net_rating/four factors/ast·stl·blk %), no una estimación propia — solo `ast_to_ratio` se calcula desde el boxscore (no viene en ese endpoint) |
 | `game_team_quarter_stats` | ✅ puntos anotados/encajados por cuarto (desde el boxscore por cuarto) |
 | `player_game_stats` | ✅ boxscore completo por jugador |
-| `lineups` + `lineup_players` | ✅ reconstruidos desde play-by-play real (quinteto inicial + sustituciones, `playType` decodificado en vivo) |
+| `lineups` + `lineup_players` | ✅ reconstruidos desde play-by-play real (quinteto inicial + sustituciones, `playType` decodificado en vivo); desde 2026-08-24 con `lineups.team_id` explícito |
+| `lineup_stints` + `lineup_stint_players` | ✅ (2026-08-24) tramos con reloj y marcador, del mismo recorrido de eventos — **requieren reingesta** para poblarse |
 | `shots` | ✅ con coordenadas reales (`MatchShots/match-shots`), tiros libres excluidos (no traen coordenadas) |
 | `game_zone_stats` | ✅ agregado automáticamente desde `shots` por el loader |
 | `score_progression` | ✅ derivado del play-by-play (deduplicado por cambio de marcador) |
+| `games.competition_id` | ✅ (2026-08-24) distingue ACB/Copa del Rey/Supercopa vía `MatchHeader/match-header` — ver hallazgo abajo |
+
+**Hallazgo corregido (2026-08-24):** `Competition/matches?competitionId=1&...` (el listado que
+recorre `fetch_season_finished_matches`) trae **todos** los partidos de la organización "Liga
+Endesa" en sentido amplio, Copa del Rey incluida — verificado en vivo con los 3 partidos reales
+de Baskonia del 20-22 feb 2026 (eliminatoria a un partido en días consecutivos vs Tenerife/
+Barça/Real Madrid), que llegaban con `competition_id=1` (ACB) pese a ser Copa del Rey. Se
+detecta ahora vía `AcbClient.fetch_match_header()` (`MatchHeader/match-header?matchId=...`, ya
+documentado pero sin integrar antes de hoy): catálogo real
+(`availableFilters.competitions` de `Competition/matches`) = `1` Liga Endesa, `2` Copa del Rey,
+`3` Supercopa Endesa → mapeados en `ingest/acb/adapter.py::_competition_name`. Igual que
+`advanced_stats`, si `match-header` falla la petición cae en "ACB" por defecto (comportamiento
+previo), no rompe la carga del partido.
 
 **Falta / limitaciones conocidas:**
-- **Clutch stats** (últimos 5 min ± 5 puntos) y **segmentos de 2 minutos**/eficiencia
-  post-tiempo-muerto: el play-by-play ya tiene marcas de tiempo (`quarter`/`minute`/`second`),
-  así que es **técnicamente posible** implementarlo — simplemente no se ha hecho.
-- **On/off de quintetos** (impacto de combinaciones de jugadores más allá de minutos/±): no
-  implementado, requeriría agregación adicional sobre los quintetos ya reconstruidos.
+- **Clutch stats** (últimos 5 min ± 5 puntos): **resuelto (2026-08-24)**. El dato de tiempo ya
+  circulaba por el play-by-play y se descartaba al agregar; ahora `reconstruct_lineups` devuelve
+  también los tramos y el loader los escribe en `lineup_stints`. Los partidos ya ingeridos
+  quedan **sin tramos hasta que se reingieran** — el asistente lo detecta y apaga la herramienta
+  `clutch_lineups` mientras tanto, en vez de ofrecer una respuesta que no puede sostener.
+- **Segmentos de 2 minutos** / eficiencia post-tiempo-muerto: siguen sin implementarse, aunque
+  con `lineup_stints` el trabajo restante es menor.
+- **On/off de quintetos** (impacto de combinaciones de jugadores más allá de minutos/±):
+  cubierto parcialmente por `app/data/queries_assistant.py::player_pair_impact` (rendimiento con
+  dos jugadores juntos frente a por separado), calculado sobre los quintetos ya reconstruidos.
 - Un puñado de partidos concretos devuelven `500` real desde el propio endpoint de boxscore de
   acb.com (~10 de ~280 en una temporada) — no es un bug nuestro, son huecos de datos del lado
   del servidor; el orquestador los reporta como fallidos y sigue con el resto.
 - No hay endpoint de fotos/roster vía esta fuente (se cubre por `baskonia_web` para el Baskonia;
   para el resto de equipos no hay fuente de fotos).
+- **`fetch_season_finished_matches` paraba en el primer hueco de `weekId` — corregido
+  (2026-08-24), con una vuelta atrás importante ver más abajo.** Un usuario reportó un partido
+  real de Baskonia de abril (`matchId=104679`, BAXI Manresa) ausente. Verificado en vivo: el
+  espacio de `weekId` de una edición **no es contiguo** — huecos reales de decenas de semanas
+  seguidas devolviendo 400 (edición 90: 2891-2945 inválidas, pero 2810-2890 vuelven a tener
+  partidos reales) separan bloques con partidos legítimos. La primera versión de este método
+  paraba en el primer 400, perdiendo esos bloques enteros. `selectedFilters.season` tampoco
+  sirve como límite: hace eco del `edition_id` pedido incluso en `weekId` claramente ajenos
+  (se comprobó con valores tan bajos como 500/1000/2000). Corregido tolerando hasta 80
+  `weekId` inválidos seguidos + un techo absoluto de 300 peticiones + una ventana de fecha de
+  seguridad (`AcbClient._season_date_bounds`) — ver historia completa en
+  `ingest/acb/client.py::fetch_season_finished_matches`.
+- **Ese mismo hueco escondía partidos de OTRAS competiciones (cantera), no solo de ACB —
+  hallazgo más grave, corregido el mismo día.** Al ampliar el rastreo, aparecieron partidos
+  reales de Baskonia con `competitionId=10` ("Minicopa Endesa", cantera) y `134`
+  (sin identificar en el catálogo) mezclados en la misma lista de `competitionId=1`. Antes de
+  este hallazgo, cualquier `competition_id` no reconocido caía en "ACB" por defecto — así que
+  esos partidos de cantera se cargaban como partidos reales de Liga Endesa, y sus jugadores,
+  al compartir `team_id='bas'` y a veces el mismo dorsal que un jugador del primer equipo,
+  **pisaban el nombre real de ese jugador** vía el fallback de identidad por dorsal+equipo
+  (`ingest/common/identity.py::resolve_or_create_player`, paso 2 — no comprueba que sea la
+  misma persona). Auditoría completa en vivo de los 258 partidos que había en `data/
+  baskonia.db` etiquetados "ACB": **239 eran en realidad de otra competición (92.6%)** — solo
+  quedaban 19 partidos ACB reales. Purgados los 239 (y todas sus filas dependientes:
+  boxscore/quintetos/tiros/etc.), y `AcbClient.fetch_game()` ahora rechaza
+  (`adapter.is_out_of_scope_competition`) cualquier partido cuya competición real no esté en
+  `adapter._COMPETITION_BY_ID` **antes** de pedir boxscore/jugadores — "no reconocida" ya no
+  cae en ACB por defecto, se descarta el partido entero (test:
+  `test_fetch_game_rejects_out_of_scope_competition` en `tests/ingest/test_acb_client.py`).
+  **Nota para quien siga esta traza:** la nota anterior de este documento ("solo 9 partidos
+  totales de Baskonia, hueco real de la fuente") quedó **superada por este hallazgo** — parte
+  de esos "9" (p.ej. `105165`) eran justo de esta contaminación, no partidos reales de ACB.
+
+**Calendario futuro + escudos (`run_upcoming`, ver también 2.3):** además del backfill de
+partidos finalizados, `ingest/acb/pipeline.py::run_upcoming` refresca `upcoming_matchups` con
+el calendario NO jugado del Baskonia (Liga Endesa/Copa del Rey/Supercopa — `Competition/
+matches` trae las tres, ver hallazgo de cantera arriba) y backfillea `teams.logo_url` del
+Baskonia y de cada rival con el campo `logo` real que trae ACB en ese mismo payload —
+primera fuente de escudo verificada del proyecto (`local/features/003-vista-plantilla/
+01_design.md` §9 documentaba ese hueco como sin resolver). Idempotente (borra e inserta el
+calendario de esa `season`+`competition_id` en cada llamada — acotado también por
+`competition_id` desde el 2026-08-24, para no borrar el calendario de Euroliga de la misma
+temporada, ver 2.3). CLI: `python -m ingest.acb.cli --season 2026 --upcoming-only` (para una
+temporada que aún no ha empezado, donde `run()` no encontraría ningún partido finalizado).
 
 ### 2.3 `euroleague` — Euroliga vía `euroleague_api` — ⚠️ funciona, pero no a escala de temporada completa
 
@@ -82,6 +190,25 @@ Implementado y poblando datos reales:
   la fórmula Dean Oliver, aquí sí porque **no** hay un endpoint oficial equivalente al de ACB)/
   `player_game_stats`/`shots` (con coordenadas reales)/`lineups` (reconstruidos desde
   play-by-play, igual que ACB).
+
+**Calendario futuro + escudos (`run_upcoming`, 2026-08-24, mismo patrón que ACB arriba):**
+`euroleague_api` no envuelve ningún endpoint de calendario futuro NI de clubes/escudos —
+`Schedule.get_schedule(season)` ya trae el calendario COMPLETO de la temporada (jugado y no
+jugado) en una sola llamada, sin paginar por semana como ACB; los escudos se piden aparte con
+`EuroleagueClient.fetch_clubs(season)`, una llamada `requests` directa (no envuelta por la
+librería) al mismo backend que usa por debajo (`api-live.euroleague.net/v2/competitions/
+{code}/seasons/{code}{season}/clubs`, encontrado probando en vivo — sin `robots.txt`, es una
+API JSON). El `code` de club (p.ej. `"BAS"`) es el identificador propio del backend y NO
+cambia con el patrocinador (a diferencia del id numérico de ACB) — `_own_team_euroleague_code`
+prueba primero el enlace ya guardado en `team_external_ids` (si algún partido de Euroliga se
+cargó antes) y solo cae a resolver por nombre normalizado (`_KNOWN_TEAM_ALIASES`, con el
+nombre real 2026-2027 "Kosner Baskonia Vitoria-Gasteiz" añadido) si la BD es nueva. Verificado
+en vivo contra `data/baskonia.db`: **38 partidos futuros cargados** para la temporada
+2026-2027, con escudo real de los 20 clubes de la competición. Acotado por `(season_id,
+competition_id)` igual que ACB — necesario desde que hay dos fuentes escribiendo en
+`upcoming_matchups` para la misma temporada, si no una pisaría el calendario de la otra. CLI:
+`python -m ingest.euroleague.cli --season 2026 --upcoming-only`.
+
 - **Falta / limitaciones conocidas:**
   - **Rate limiting sin resolver a escala de temporada completa.** `euroleague_api` no aplica
     ningún throttling propio; se añadió una pausa (3 s/partido) + reintento con backoff (3
@@ -110,3 +237,18 @@ Implementado y poblando datos reales:
   backfill fiable de ambas competiciones de una sentada.
 - **Clutch stats / on-off / segmentos de 2 min** (ver 2.2): con los datos ya disponibles de ACB
   es la ampliación más barata de construir si se necesita más adelante.
+- **`court_zones` no cubre la cancha entera → `game_zone_stats` es un subconjunto sesgado**
+  (hallazgo 2026-08-24, al construir la pantalla "Próximo rival"). Las 6 zonas semilla de
+  `schema.sql` son rectángulos sueltos que dejan fuera la mayor parte de la superficie, así
+  que el loader deja `shots.zone_id = NULL` en la mayoría de tiros y nunca llegan a
+  `game_zone_stats`: **52% de los tiros sin zona en Euroliga, 75% en Copa del Rey, 77% en ACB,
+  79% en Supercopa** (medido sobre los 95.263 tiros de `data/baskonia.db`). Consecuencia
+  práctica: un agregado por zona NO se puede leer como "acierto del equipo desde el triple/la
+  pintura" — es el acierto dentro de ese rectángulo concreto (verificado con Olympiacos
+  2025-2026: salía "66% en Triple exterior", que como 3P% de equipo es falso). Las
+  **coordenadas en sí están bien** (98% de los tiros caen dentro del cuadro 0-500 que asume
+  `app/components/court.py`), así que el mapa de tiros sí es fiable; lo que falla es la
+  discretización en zonas. `app/pages/proximo_rival.py` declara la cobertura y pliega esa
+  tabla en vez de presentarla como dato de scouting. Arreglarlo de verdad es redefinir
+  `court_zones` para que teselen media pista (y recalcular `game_zone_stats`), no un cambio de
+  la capa de interfaz.

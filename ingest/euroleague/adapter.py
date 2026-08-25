@@ -9,16 +9,22 @@ temporada 2025 / gamecode 7 - Virtus Bologna vs Real Madrid):
   para referirse a un equipo, no el nombre), `ScoreA`/`ScoreB`, `Competition`
   (p.ej. `"EUROLEAGUE 2025-26"`). A = local, B = visitante.
 - boxscore (`get_players_boxscore_stats`): `Player_ID`, `Player`
-  (`"APELLIDO, Nombre"`), `Team` (código corto, como `CodeTeamA/B`), `Dorsal`,
-  `IsStarter` (`0.0`/`1.0`), `Minutes` (`"MM:SS"`, no decimal), `Points`,
-  `FieldGoalsMade2/Attempted2/Made3/Attempted3`, `FreeThrowsMade/Attempted`,
-  `OffensiveRebounds`, `DefensiveRebounds`, `TotalRebounds`, `Assistances`,
-  `Turnovers`.
+  (`"APELLIDO, Nombre"`, verificado en vivo 2026-08-24: AMBAS partes en
+  MAYÚSCULAS de verdad - p.ej. `"VILDOZA, LUCA"`, `"ALSTON JR., DERRICK"` -
+  no solo el apellido como sugería el ejemplo original de este docstring;
+  ver `_format_player_name`), `Team` (código corto, como `CodeTeamA/B`),
+  `Dorsal`, `IsStarter` (`0.0`/`1.0`), `Minutes` (`"MM:SS"`, no decimal),
+  `Points`, `FieldGoalsMade2/Attempted2/Made3/Attempted3`,
+  `FreeThrowsMade/Attempted`, `OffensiveRebounds`, `DefensiveRebounds`,
+  `TotalRebounds`, `Assistances`, `Turnovers`.
 - shot data (`get_game_shot_data`): `ID_PLAYER` (¡no `PLAYER_ID`!), `TEAM`
-  (código corto), `COORD_X`/`COORD_Y` (rango observado real: X en
-  [-696, 677], Y en [-94, 777]; `(-1, -1)` es el centinela de "sin
-  ubicación", usado en tiros libres - se descartan), `ID_ACTION` (`"2FGM"`,
-  `"3FGM"`, `"FTM"` anotados; `"2FGA"`, `"3FGA"` fallados).
+  (código corto), `COORD_X`/`COORD_Y` (cm RELATIVOS AL ARO: X lateral
+  [-750, 750], Y distancia al aro [0, ~1300] con 0 = canasta; `(-1, -1)` es
+  el centinela de "sin ubicación", usado en tiros libres - se descartan; ver
+  `_rescale_shot_coords`), `ZONE` (letra de zona oficial: "A" bajo el aro,
+  "H"/"I" triples izquierda/derecha... - no se importa, pero sirve para
+  verificar la convención de coordenadas), `ID_ACTION` (`"2FGM"`, `"3FGM"`,
+  `"FTM"` anotados; `"2FGA"`, `"3FGA"` fallados).
 - play-by-play (`get_game_play_by_play_data`): `CODETEAM` (código corto -
   usarlo, no `TEAM` que trae el nombre completo), `PLAYER_ID`, `PLAYTYPE`
   (`"IN"`/`"OUT"` sustituciones; `"2FGM"`/`"3FGM"`/`"FTM"` canastas
@@ -44,30 +50,68 @@ titular; si no se pasa play-by-play, o ningún jugador viene marcado
 Si la versión instalada de `euroleague_api` difiere, este es el único
 fichero que hay que tocar — el contrato de salida (`ingest.common.raw_game`)
 no cambia.
+
+CALENDARIO FUTURO (`build_scheduled_matchup`, 2026-08-24): `Schedule.get_schedule`
+(la misma llamada que ya usa `fetch_season_game_codes`) trae el calendario
+COMPLETO de la temporada -jugado y no jugado- en una sola respuesta (a
+diferencia de ACB, no hace falta recorrer semanas): columnas verificadas en
+vivo (temporada 2026, 380 filas) `date` (`"Sep 24, 2026"`), `hometeam`/
+`awayteam` (nombre completo MAYÚSCULAS), `homecode`/`awaycode` (código
+corto, mismo espacio que `CodeTeamA/B` del boxscore y `code` de
+`fetch_clubs`), `played` (`"true"`/`"false"`, string). Fiel al patrón de
+`ingest/acb/adapter.py::build_scheduled_matchup`.
 """
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+from ingest.common.zones import to_court_coords
+
 COMPETITION_NAME = "Euroliga"
 
-# Cancha: rango observado real de COORD_X/COORD_Y (ver docstring del módulo),
-# reescalado al rango 0-500 que usa `court_zones`.
-_COORD_X_RANGE = (-750.0, 750.0)
-_COORD_Y_RANGE = (-100.0, 800.0)
+# Cancha: COORD_X/COORD_Y vienen en CENTÍMETROS RELATIVOS AL ARO, no en un
+# rango arbitrario que haya que normalizar de extremo a extremo (verificado en
+# vivo 2026-08-24 contra la columna `ZONE` del propio feed: la zona "A" -bajo
+# el aro- tiene COORD_Y en [0, 25], y el pico de la distribución de COORD_Y
+# está en 0-100 -bandejas- y en 650-750 -la línea de 6.75 m-):
+#   COORD_Y = distancia al aro hacia el centro del campo (0 = canasta),
+#   COORD_X = desplazamiento lateral (negativo = izquierda del atacante).
+# Se reescala anclando en el aro, no normalizando rangos (ver
+# `ingest.common.zones.to_court_coords`, compartido con ACB): `court_zones`
+# usa la convención "y ALTO = cerca del aro", así que la profundidad va
+# RESTANDO. La versión anterior la sumaba, lo que dejaba el mapa de tiros de
+# Euroliga invertido en vertical: las bandejas caían en "Triple exterior"
+# (con un 62% de acierto, imposible para triples) y los triples junto al aro.
 _NO_LOCATION_SENTINEL = (-1, -1)
 
 
 def _rescale_shot_coords(coord_x: float, coord_y: float) -> tuple:
-    x_min, x_max = _COORD_X_RANGE
-    y_min, y_max = _COORD_Y_RANGE
-    x = (coord_x - x_min) / (x_max - x_min) * 500
-    y = (coord_y - y_min) / (y_max - y_min) * 500
-    return x, y
+    """`COORD_X` (lateral) / `COORD_Y` (distancia al aro) en cm -> escala de `court_zones`."""
+    return to_court_coords(lateral_cm=coord_x, depth_cm=coord_y)
 
 
 def _clean_id(value: Any) -> str:
     """`str(value).strip()` - el boxscore real trae `Player_ID`/`Team` con espacios de relleno."""
     return str(value).strip()
+
+
+def _format_player_name(raw: Any) -> str:
+    """`"APELLIDO, Nombre"` (formato real del boxscore, ver docstring del módulo) ->
+    `"Nombre Apellido"` con capitalización normal.
+
+    Sin este formateo, `players.name` se guardaba tal cual venía de la fuente
+    (p.ej. `"VILDOZA, LUCA"`) y se propagaba a toda la interfaz (roster,
+    quintetos, boxscore...) - se detectó al ver nombres con la coma en medio
+    y el apellido primero en "Quintetos más utilizados" de Próximo rival.
+    Se parte por la PRIMERA coma (no por espacios): un apellido compuesto
+    como `"ALSTON JR."` no se rompe. Sin coma en el valor, se deja tal cual
+    (defensivo, no debería pasar con el boxscore real pero no debe romper la
+    carga de un partido si pasa).
+    """
+    text = str(raw).strip()
+    if "," not in text:
+        return text
+    last, _, first = text.partition(",")
+    return f"{first.strip().title()} {last.strip().title()}"
 
 
 def _parse_minutes(value: Any) -> float:
@@ -259,7 +303,7 @@ def build_raw_game(
             {
                 "player_id": player_id,
                 "team_id": team_ids_by_code.get(team_code, team_code),
-                "name": row["Player"],
+                "name": _format_player_name(row["Player"]),
                 "number": row.get("Dorsal"),
                 "position": None,  # no viene en el boxscore de euroleague_api
                 "minutes": _parse_minutes(row.get("Minutes")),
@@ -318,4 +362,61 @@ def build_raw_game(
         "score_progression": [],
         "quarter_stats": quarter_stats,
         "play_by_play": converted_pbp,
+    }
+
+
+def _parse_schedule_date(value: Any) -> Optional[str]:
+    """`"Sep 24, 2026"` -> `"2026-09-24"`; `None` si no se puede parsear (columna
+    `date` vacía/formato inesperado - un partido sin fecha no debe entrar en
+    `upcoming_matchups`, que exige `match_date NOT NULL`)."""
+    try:
+        return datetime.strptime(str(value).strip(), "%b %d, %Y").strftime("%Y-%m-%d")
+    except (ValueError, TypeError):
+        return None
+
+
+def build_scheduled_matchup(
+    row: Dict[str, Any], clubs_by_code: Dict[str, Dict[str, Any]], own_code: str
+) -> Optional[Dict[str, Any]]:
+    """Convierte una fila (ya jugada o no) de `Schedule.get_schedule` en un registro
+    listo para `upcoming_matchups`, o `None` si el Baskonia no juega ese partido.
+
+    `Schedule.get_schedule` trae el calendario COMPLETO de la competición (20
+    equipos en 2026-2027), de ahí el filtro - `pipeline.run_upcoming` ya
+    descarta antes las filas jugadas (`played == "true"`), esta función solo
+    se ocupa de qué partidos son del Baskonia. Mismo criterio que
+    `ingest/acb/adapter.py::build_scheduled_matchup`.
+
+    Args:
+        row: una fila de `EuroleagueClient.fetch_season_game_codes(season)`
+            (ya convertida a `dict`).
+        clubs_by_code: `{code: club}` de `EuroleagueClient.fetch_clubs(season)`,
+            para resolver nombre/escudo real del rival sin una llamada aparte.
+        own_code: código de club del Baskonia en `clubs_by_code`
+            (`pipeline._own_team_euroleague_code`).
+    """
+    home_code = _clean_id(row["homecode"])
+    away_code = _clean_id(row["awaycode"])
+    if own_code not in (home_code, away_code):
+        return None
+
+    is_home = home_code == own_code
+    opponent_code = away_code if is_home else home_code
+    opponent = clubs_by_code.get(opponent_code)
+    if opponent is not None:
+        opponent_name = opponent["name"]
+        opponent_logo_url = (opponent.get("images") or {}).get("crest")
+    else:
+        # Sin fixture en `fetch_clubs` (no debería pasar salvo desajuste puntual
+        # entre calendario y catálogo de clubes) - se usa el nombre del propio
+        # calendario en vez de descartar el partido entero.
+        opponent_name = str(row["awayteam" if is_home else "hometeam"]).title()
+        opponent_logo_url = None
+
+    return {
+        "opponent_code": opponent_code,
+        "opponent_name": opponent_name,
+        "opponent_logo_url": opponent_logo_url,
+        "match_date": _parse_schedule_date(row.get("date")),
+        "is_home": is_home,
     }

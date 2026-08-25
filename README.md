@@ -1,8 +1,9 @@
 # baskonia-pipeline
 
 > Pipeline de captura de datos de baloncesto (ACB, Euroliga y la web oficial del Baskonia)
-> hacia una base de datos SQLite de scouting. Es una aplicación de **ingesta de datos**: no
-> incluye interfaz de usuario ni API — solo descarga, normaliza y persiste.
+> hacia una base de datos SQLite de scouting, más una interfaz Streamlit de solo lectura sobre
+> esos datos (`app/`). La ingesta (`ingest/`) sigue siendo el núcleo: descarga, normaliza y
+> persiste; la interfaz solo consulta lo que la ingesta ya dejó en `data/baskonia.db`.
 
 ---
 
@@ -18,7 +19,9 @@ contrato común y parser, orquestados por `ingest/run_all.py`:
   ACB, con ORtg/DRtg/pace estimados (fórmula Dean Oliver) al no haber un endpoint oficial
   equivalente.
 - **`ingest/baskonia_web/`** — plantilla y fotos del Baskonia desde `baskonia.com` (JSON
-  embebido de la web oficial). Solo escribe `players`/`player_external_ids`.
+  embebido de la web oficial). Solo escribe `players`/`player_external_ids`; además descarga a
+  disco (`data/player_photos/` por defecto) la foto real de cada jugador, para no depender de
+  baskonia.com al servir la interfaz.
 
 Un módulo que falla no detiene a los demás: `run_all` reporta `{"loaded": [...], "failed":
 [...]}` por módulo.
@@ -98,7 +101,54 @@ para desarrollo/tests, nunca contra `data/baskonia.db` con datos reales sin back
 
 ---
 
-## 5. Tests
+## 5. Interfaz web (`app/`)
+
+Streamlit de un solo proceso, de **solo lectura** sobre `data/baskonia.db` — no crea el
+esquema ni escribe nunca; si la base de datos no está inicializada, falla con un mensaje claro
+en vez de intentar poblarla (eso sigue siendo trabajo de `ingest/`/`tools/init_scouting_db.py`).
+Cinco pantallas: estado del equipo (récord, calendario, carga de minutos), plantilla (galería
++ detalle por jugador), próximo rival (scouting completo), partidos anteriores (selector +
+detalle: parciales, avanzadas, boxscore, tiros, quintetos) y **asistente** (chat en lenguaje
+natural sobre los datos cargados).
+
+### Asistente de scouting (`app/assistant/`)
+
+Chat con herramientas: el modelo **no escribe SQL** — elige qué herramienta llamar de un
+catálogo de ~25 (jugador, equipo, liga, quintetos, comparación) cuyas cifras salen de SQL fijo
+y probado, y redacta a partir de ellas. Toda respuesta lleva su procedencia y su traza de
+consultas, y las cifras que no aparezcan en ningún resultado de herramienta se marcan como sin
+verificar.
+
+Es **opcional**: sin `ASSISTANT_LLM_BASE_URL`/`ASSISTANT_LLM_MODEL` la pestaña lo explica y las
+otras cuatro funcionan igual. Cambiar de proveedor de modelo (LLM local, Groq, Cerebras,
+Cloudflare Workers AI, OpenRouter, y Claude en el futuro) es cambiar variables de entorno, no
+código — ver [`.env.example`](.env.example) y el diseño.
+
+```bash
+# Comprobar que el modelo configurado sabe usar herramientas, antes de nada
+.venv/Scripts/python.exe tools/assistant_smoke_test.py
+```
+
+Diseño completo en
+[`local/features/005-chatbot/01_design.md`](local/features/005-chatbot/01_design.md).
+
+```bash
+# Desarrollo local (desde la raíz del repo, con el venv activado)
+.venv/Scripts/streamlit.exe run app/Home.py
+```
+
+```bash
+# Despliegue (p.ej. Raspberry Pi) — Streamlit + túnel de Cloudflare, sin
+# exponer puertos en el router. Ver deploy/cloudflared/README.md.
+docker compose up -d --build
+```
+
+Diseño completo (arquitectura, contratos de datos, decisiones) en
+[`local/features/001-interfaz-baskonia/01_design.md`](local/features/001-interfaz-baskonia/01_design.md).
+
+---
+
+## 6. Tests
 
 ```bash
 pip install -r requirements.txt   # incluye pytest
@@ -106,18 +156,23 @@ python -m pytest                  # ejecuta toda la suite
 ```
 
 Suite 100% offline (mocks/fixtures que replican payloads reales verificados en vivo, sin red
-real). Ubicaciones:
+real). El asistente no rompe esa propiedad: el bucle de agente se prueba con un cliente de LLM
+falso que implementa el mismo `Protocol` que los adaptadores reales, y los adaptadores con
+respuestas HTTP grabadas de cada dialecto. Ubicaciones:
 
 - `tests/ingest/` — por fuente (`test_acb.py`, `test_acb_client.py`, `test_euroleague.py`,
   `test_baskonia_web.py`) y compartido (`test_identity.py`, `test_lineups.py`,
   `test_loader.py`, `test_run_all.py`, `test_raw_game_lineups.py`).
+- `tests/app/` — piezas de la interfaz con lógica pura (`test_avatar.py`, `test_court.py`,
+  `test_queries.py`) y `tests/app/assistant/` (resolución de entidades, herramientas, guardas
+  de SQL, bucle de agente con un cliente de LLM falso, verificador de cifras y topes de uso).
 - `tests/test_scouting_db.py` — carga del esquema (`schema.sql`) contra SQLite en memoria.
 
 Los tests nunca tocan `data/baskonia.db` real.
 
 ---
 
-## 6. Notas / Riesgos
+## 7. Notas / Riesgos
 
 - **Rate limiting de Euroliga sin resolver a escala de temporada completa**: `euroleague_api`
   no aplica throttling propio; el backoff actual no basta para un backfill fiable de ~400

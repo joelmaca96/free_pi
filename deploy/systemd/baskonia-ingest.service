@@ -1,0 +1,25 @@
+# Ejecuta la ingesta completa (ingest/run_all.py) en el host de la Raspberry
+# Pi — deliberadamente FUERA del contenedor de la interfaz (ver
+# local/features/001-interfaz-baskonia/01_design.md §2): la app nunca
+# dispara ingesta, y separar procesos evita que un backfill largo de
+# Euroliga compita por CPU/red con las peticiones de la interfaz.
+#
+# Instalación (en la Pi, ajustando WorkingDirectory/rutas):
+#   sudo cp deploy/systemd/baskonia-ingest.* /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now baskonia-ingest.timer
+#
+# Ver también baskonia-ingest.timer (la periodicidad) y el `README.md` de la
+# raíz del repo para las variables de entorno esperadas (`.env`).
+
+[Unit]
+Description=Ingesta de datos Baskonia (ACB + Euroliga + baskonia.com)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/pi/free_pi
+ExecStart=/home/pi/free_pi/.venv/bin/python -m ingest.run_all --season 2025
+# La ingesta escribe en data/baskonia.db (WAL); la interfaz solo lee, así que
+# no hace falta parar el contenedor `app` durante la ejecución.

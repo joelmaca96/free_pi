@@ -4,8 +4,9 @@ Estrategia de idempotencia (re-ejecutar el pipeline no duplica filas):
 - Tablas con clave natural real (`games`, `game_advanced_stats`,
   `game_team_quarter_stats`, `player_game_stats`, `game_zone_stats`):
   `INSERT ... ON CONFLICT DO UPDATE`.
-- Tablas "detalle" sin clave natural (`lineups`+`lineup_players`, `shots`,
-  `key_events`): se borran las filas de ese `game_id` y se reinsertan enteras.
+- Tablas "detalle" sin clave natural (`lineups`+`lineup_players`,
+  `lineup_stints`+`lineup_stint_players`, `shots`, `key_events`): se borran
+  las filas de ese `game_id` y se reinsertan enteras.
   Es más simple y igual de idempotente que intentar casar cada fila.
 
 `games.id` no necesita tabla puente de identidad (a diferencia de equipos y
@@ -66,13 +67,15 @@ def load_game(conn: Connection, game: NormalizedGame) -> None:
     for stat in game.boxscore:
         _upsert_player_game_stats(conn, game.id, stat)
     _replace_lineups(conn, game.id, game.lineups)
+    _replace_stints(conn, game.id, game.stints)
     _replace_shots(conn, game.id, game.shots)
     _replace_zone_stats_from_shots(conn, game.id, game.shots)
     _replace_key_events(conn, game.id, game.key_events)
     _replace_score_progression(conn, game.id, game.score_progression)
     logger.info(
-        "game %s cargado (%d boxscore, %d lineups, %d shots, %d eventos)",
-        game.id, len(game.boxscore), len(game.lineups), len(game.shots), len(game.key_events),
+        "game %s cargado (%d boxscore, %d lineups, %d tramos, %d shots, %d eventos)",
+        game.id, len(game.boxscore), len(game.lineups), len(game.stints),
+        len(game.shots), len(game.key_events),
     )
 
 
@@ -119,10 +122,10 @@ def _upsert_game_advanced_stats(conn: Connection, game_id: str, advanced) -> Non
             """
             INSERT INTO game_advanced_stats
                 (game_id, team_id, ortg, drtg, net_rating, efg_pct, ts_pct, tov_pct, orb_pct,
-                 ast_pct, stl_pct, blk_pct, ft_rate, ast_to_ratio)
+                 ast_pct, stl_pct, blk_pct, ft_rate, ast_to_ratio, ftm, fta)
             VALUES
                 (:game_id, :team_id, :ortg, :drtg, :net_rating, :efg_pct, :ts_pct, :tov_pct, :orb_pct,
-                 :ast_pct, :stl_pct, :blk_pct, :ft_rate, :ast_to_ratio)
+                 :ast_pct, :stl_pct, :blk_pct, :ft_rate, :ast_to_ratio, :ftm, :fta)
             ON CONFLICT (game_id, team_id) DO UPDATE SET
                 ortg = excluded.ortg,
                 drtg = excluded.drtg,
@@ -135,7 +138,9 @@ def _upsert_game_advanced_stats(conn: Connection, game_id: str, advanced) -> Non
                 stl_pct = excluded.stl_pct,
                 blk_pct = excluded.blk_pct,
                 ft_rate = excluded.ft_rate,
-                ast_to_ratio = excluded.ast_to_ratio
+                ast_to_ratio = excluded.ast_to_ratio,
+                ftm = excluded.ftm,
+                fta = excluded.fta
             """
         ),
         {
@@ -153,6 +158,8 @@ def _upsert_game_advanced_stats(conn: Connection, game_id: str, advanced) -> Non
             "blk_pct": advanced.blk_pct,
             "ft_rate": advanced.ft_rate,
             "ast_to_ratio": advanced.ast_to_ratio,
+            "ftm": advanced.ftm,
+            "fta": advanced.fta,
         },
     )
 
@@ -182,14 +189,17 @@ def _upsert_player_game_stats(conn: Connection, game_id: str, stat) -> None:
     conn.execute(
         text(
             """
-            INSERT INTO player_game_stats (game_id, player_id, minutes, pts, reb, ast, efg_pct)
-            VALUES (:game_id, :player_id, :minutes, :pts, :reb, :ast, :efg_pct)
+            INSERT INTO player_game_stats
+                (game_id, player_id, minutes, pts, reb, ast, efg_pct, ftm, fta)
+            VALUES (:game_id, :player_id, :minutes, :pts, :reb, :ast, :efg_pct, :ftm, :fta)
             ON CONFLICT (game_id, player_id) DO UPDATE SET
                 minutes = excluded.minutes,
                 pts = excluded.pts,
                 reb = excluded.reb,
                 ast = excluded.ast,
-                efg_pct = excluded.efg_pct
+                efg_pct = excluded.efg_pct,
+                ftm = excluded.ftm,
+                fta = excluded.fta
             """
         ),
         {
@@ -200,6 +210,8 @@ def _upsert_player_game_stats(conn: Connection, game_id: str, stat) -> None:
             "reb": stat.reb,
             "ast": stat.ast,
             "efg_pct": stat.efg_pct,
+            "ftm": stat.ftm,
+            "fta": stat.fta,
         },
     )
 
@@ -220,8 +232,18 @@ def _replace_lineups(conn: Connection, game_id: str, lineups: List) -> None:
 
     for lineup in lineups:
         result = conn.execute(
-            text("INSERT INTO lineups (game_id, minutes, plus_minus) VALUES (:g, :m, :pm)"),
-            {"g": game_id, "m": lineup.minutes, "pm": lineup.plus_minus},
+            text(
+                "INSERT INTO lineups (game_id, minutes, plus_minus, team_id)"
+                " VALUES (:g, :m, :pm, :team_id)"
+            ),
+            {
+                "g": game_id,
+                "m": lineup.minutes,
+                "pm": lineup.plus_minus,
+                # `None` si la fuente no lo dio: la columna es nullable y la
+                # vista `lineup_team` lo infiere, avisando de que lo hace.
+                "team_id": getattr(lineup, "team_id", None),
+            },
         )
         lineup_id = result.lastrowid
         for player_id in lineup.player_ids:
@@ -231,13 +253,58 @@ def _replace_lineups(conn: Connection, game_id: str, lineups: List) -> None:
             )
 
 
+def _replace_stints(conn: Connection, game_id: str, stints: List) -> None:
+    """Reescribe los tramos de un partido (`lineup_stints` + `lineup_stint_players`).
+
+    Mismo patrón de borrar-y-reinsertar por `game_id` que `_replace_lineups`,
+    y por el mismo motivo: son tablas de detalle sin clave natural, así que
+    casar fila a fila costaría más y sería igual de idempotente.
+    """
+    stint_ids = [
+        row[0]
+        for row in conn.execute(text("SELECT id FROM lineup_stints WHERE game_id = :g"), {"g": game_id}).all()
+    ]
+    if stint_ids:
+        conn.execute(
+            text("DELETE FROM lineup_stint_players WHERE stint_id IN :ids").bindparams(
+                bindparam("ids", expanding=True)
+            ),
+            {"ids": stint_ids},
+        )
+        conn.execute(text("DELETE FROM lineup_stints WHERE game_id = :g"), {"g": game_id})
+
+    for stint in stints:
+        result = conn.execute(
+            text(
+                "INSERT INTO lineup_stints"
+                " (game_id, team_id, start_seconds, end_seconds, points_for, points_against, margin_start)"
+                " VALUES (:g, :team_id, :start, :end, :pf, :pa, :margin)"
+            ),
+            {
+                "g": game_id,
+                "team_id": stint.team_id,
+                "start": stint.start_seconds,
+                "end": stint.end_seconds,
+                "pf": stint.points_for,
+                "pa": stint.points_against,
+                "margin": stint.margin_start,
+            },
+        )
+        stint_id = result.lastrowid
+        for player_id in stint.player_ids:
+            conn.execute(
+                text("INSERT INTO lineup_stint_players (stint_id, player_id) VALUES (:s, :p)"),
+                {"s": stint_id, "p": player_id},
+            )
+
+
 def _replace_shots(conn: Connection, game_id: str, shots: List) -> None:
     conn.execute(text("DELETE FROM shots WHERE game_id = :g"), {"g": game_id})
     for shot in shots:
         conn.execute(
             text(
-                "INSERT INTO shots (game_id, player_id, zone_id, pos_x, pos_y, made)"
-                " VALUES (:g, :p, :z, :x, :y, :made)"
+                "INSERT INTO shots (game_id, player_id, zone_id, pos_x, pos_y, made, located)"
+                " VALUES (:g, :p, :z, :x, :y, :made, :located)"
             ),
             {
                 "g": game_id,
@@ -246,6 +313,7 @@ def _replace_shots(conn: Connection, game_id: str, shots: List) -> None:
                 "x": shot.pos_x,
                 "y": shot.pos_y,
                 "made": int(shot.made),
+                "located": int(shot.located),
             },
         )
 

@@ -12,10 +12,10 @@ import pytest
 from sqlalchemy import text
 
 from ingest.common.loader import load_game
-from ingest.euroleague.adapter import build_raw_game
+from ingest.euroleague.adapter import _format_player_name, build_raw_game, build_scheduled_matchup
 from ingest.euroleague.parser import parse_and_resolve
 import ingest.euroleague.pipeline as pipeline_module
-from ingest.euroleague.pipeline import discover_missing_games, run, run_single_game
+from ingest.euroleague.pipeline import discover_missing_games, run, run_single_game, run_upcoming
 
 
 @pytest.fixture(autouse=True)
@@ -67,6 +67,73 @@ def test_build_raw_game_matches_common_contract():
     assert len(raw["shots"]) == 2  # el tiro con COORD (-1,-1) se descarta
     assert raw["shots"][0]["made"] is True
     assert raw["shots"][1]["made"] is False
+
+
+# --- Coordenadas de tiro ---------------------------------------------------
+
+
+def test_shot_coords_put_shots_near_the_hoop_at_high_y():
+    """`COORD_Y` es la distancia AL ARO, y `court_zones` usa "y alto = cerca del aro".
+
+    Regresión: se reescalaba `COORD_Y` como si fuera una coordenada de campo
+    normalizable de extremo a extremo, sin invertirla, y el mapa de tiros de
+    Euroliga salía del revés — las bandejas caían en la zona "Triple exterior"
+    (con un 62% de acierto, imposible para triples) y los triples junto al aro.
+    """
+    hoop = {"ID_PLAYER": "EL-HOWARD", "TEAM": "BAS", "COORD_X": 0.0, "COORD_Y": 0.0, "ID_ACTION": "2FGM"}
+    three = {"ID_PLAYER": "EL-HOWARD", "TEAM": "BAS", "COORD_X": 0.0, "COORD_Y": 700.0, "ID_ACTION": "3FGM"}
+    raw = build_raw_game(METADATA, BOXSCORE_DF.to_dict("records"), [hoop, three])
+
+    at_hoop, from_three = raw["shots"]
+    assert at_hoop["y"] > from_three["y"]
+    # Y en las coordenadas concretas del seed de `court_zones` (`schema.sql`):
+    # el tiro bajo el aro cae en 'Pintura' (x 195-305, y 300-455)...
+    assert 195 <= at_hoop["x"] <= 305 and 300 <= at_hoop["y"] <= 455
+    # ...y el triple frontal, más allá del vértice del arco ('Triple exterior'.y_max).
+    assert from_three["y"] < 170
+
+
+def test_shot_coords_keep_left_and_right_apart():
+    """`COORD_X` es el desplazamiento lateral: negativo a la izquierda del centro."""
+    left = {"ID_PLAYER": "EL-HOWARD", "TEAM": "BAS", "COORD_X": -680.0, "COORD_Y": 50.0, "ID_ACTION": "3FGM"}
+    right = {"ID_PLAYER": "EL-HOWARD", "TEAM": "BAS", "COORD_X": 680.0, "COORD_Y": 50.0, "ID_ACTION": "3FGM"}
+    raw = build_raw_game(METADATA, BOXSCORE_DF.to_dict("records"), [left, right])
+
+    from_left, from_right = raw["shots"]
+    # Esquinas: dentro del dominio 0-500 del gráfico y en su zona respectiva
+    # ('Triple esquina izq.' x 15-55, 'Triple esquina der.' x 445-485).
+    assert 15 <= from_left["x"] <= 55
+    assert 445 <= from_right["x"] <= 485
+
+
+# --- Nombres de jugador "APELLIDO, Nombre" -> "Nombre Apellido" -------------
+
+
+def test_format_player_name_swaps_apellido_nombre_order():
+    assert _format_player_name("HOWARD, Marcus") == "Marcus Howard"
+
+
+def test_format_player_name_uppercases_both_parts_in_real_data():
+    """Verificado en vivo (2026-08-24): el boxscore real trae AMBAS partes en
+    mayúsculas, no solo el apellido (`"VILDOZA, LUCA"`, no `"VILDOZA, Luca"`)."""
+    assert _format_player_name("VILDOZA, LUCA") == "Luca Vildoza"
+
+
+def test_format_player_name_keeps_compound_surname_with_suffix_together():
+    """Se parte por la PRIMERA coma, no por espacios — un apellido compuesto
+    como "ALSTON JR." no debe perder el "JR." al reordenar."""
+    assert _format_player_name("ALSTON JR., DERRICK") == "Derrick Alston Jr."
+
+
+def test_format_player_name_leaves_value_without_comma_unchanged():
+    assert _format_player_name("Sin Coma") == "Sin Coma"
+
+
+def test_build_raw_game_formats_player_names():
+    raw = build_raw_game(METADATA, BOXSCORE_DF.to_dict("records"), SHOTS_DF.to_dict("records"))
+
+    names = [p["name"] for p in raw["players"]]
+    assert names == ["Marcus Howard", "Jugador Rival"]
 
 
 def test_euroleague_transform_and_load_reuses_baskonia_and_is_idempotent(engine):
@@ -204,3 +271,169 @@ def test_euroleague_discover_missing_games_solo_jugados_y_ausentes(engine):
 
     assert missing == [306]  # 305 ya cargado, 307 no jugado
     client.fetch_game_metadata.assert_not_called()  # discovery no descarga partidos
+
+
+# --- Calendario futuro (upcoming_matchups) + escudos ------------------------
+
+_CLUBS_BY_CODE = {
+    "BAS": {"code": "BAS", "name": "Kosner Baskonia Vitoria-Gasteiz", "images": {"crest": "https://cdn/bas.png"}},
+    "MAD": {"code": "MAD", "name": "Real Madrid", "images": {"crest": "https://cdn/mad.png"}},
+    "PAM": {"code": "PAM", "name": "Valencia Basket", "images": {}},  # sin escudo (hueco real posible)
+}
+
+_SCHEDULE_ROWS = [
+    # Baskonia (BAS) de local ante Real Madrid (MAD).
+    {"homecode": "BAS", "awaycode": "MAD", "hometeam": "KOSNER BASKONIA VITORIA-GASTEIZ", "awayteam": "REAL MADRID",
+     "date": "Sep 24, 2026", "played": "false"},
+    # Baskonia de visitante ante Valencia (PAM, sin escudo en el catálogo).
+    {"homecode": "PAM", "awaycode": "BAS", "hometeam": "VALENCIA BASKET", "awayteam": "KOSNER BASKONIA VITORIA-GASTEIZ",
+     "date": "Oct 01, 2026", "played": "false"},
+    # Partido entre otros dos equipos: no debe entrar en upcoming_matchups del Baskonia.
+    {"homecode": "MAD", "awaycode": "PAM", "hometeam": "REAL MADRID", "awayteam": "VALENCIA BASKET",
+     "date": "Sep 25, 2026", "played": "false"},
+    # Ya jugado: `run_upcoming` lo descarta antes de llamar a `build_scheduled_matchup`.
+    {"homecode": "BAS", "awaycode": "MAD", "hometeam": "KOSNER BASKONIA VITORIA-GASTEIZ", "awayteam": "REAL MADRID",
+     "date": "Jan 20, 2026", "played": "true"},
+]
+
+
+def test_build_scheduled_matchup_filtra_partidos_ajenos_al_baskonia():
+    ajeno = build_scheduled_matchup(_SCHEDULE_ROWS[2], _CLUBS_BY_CODE, own_code="BAS")
+    assert ajeno is None
+
+
+def test_build_scheduled_matchup_resuelve_rival_nombre_y_escudo_desde_clubs():
+    visitante = build_scheduled_matchup(_SCHEDULE_ROWS[0], _CLUBS_BY_CODE, own_code="BAS")
+    assert visitante == {
+        "opponent_code": "MAD", "opponent_name": "Real Madrid", "opponent_logo_url": "https://cdn/mad.png",
+        "match_date": "2026-09-24", "is_home": True,
+    }
+
+
+def test_build_scheduled_matchup_sin_escudo_en_el_catalogo_no_falla():
+    """`images` puede venir vacío (hueco real de la fuente) - `opponent_logo_url` queda
+    `None`, no lanza `KeyError`."""
+    local = build_scheduled_matchup(_SCHEDULE_ROWS[1], _CLUBS_BY_CODE, own_code="BAS")
+    assert local["opponent_name"] == "Valencia Basket"
+    assert local["opponent_logo_url"] is None
+    assert local["is_home"] is False
+
+
+def _fake_upcoming_client(schedule_rows=None, clubs=None):
+    client = mock.Mock()
+    client.fetch_season_game_codes.return_value = pd.DataFrame(
+        schedule_rows if schedule_rows is not None else _SCHEDULE_ROWS
+    )
+    client.fetch_clubs.return_value = list((clubs or _CLUBS_BY_CODE).values())
+    return client
+
+
+def test_run_upcoming_carga_solo_los_partidos_no_jugados_del_baskonia(engine):
+    client = _fake_upcoming_client()
+
+    summary = run_upcoming(engine, season=2026, client=client)
+
+    assert summary["upcoming"] == 2  # el 3º (ajeno) y el 4º (ya jugado) se descartan
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT is_home, match_date FROM upcoming_matchups"
+                " WHERE season_id = :season_id ORDER BY match_date"
+            ),
+            {"season_id": summary["season_id"]},
+        ).all()
+    assert rows == [(1, "2026-09-24"), (0, "2026-10-01")]
+
+
+def test_run_upcoming_resuelve_el_equipo_propio_por_nombre_cuando_no_hay_enlace_previo(engine):
+    """Sin ningún partido de Euroliga cargado antes (BD nueva, sin `team_external_ids`
+    `source='euroleague'`), se resuelve por nombre normalizado + alias del sponsor
+    real 2026-2027 (`_KNOWN_TEAM_ALIASES`), no por un código hardcodeado."""
+    client = _fake_upcoming_client()
+
+    summary = run_upcoming(engine, season=2026, client=client)
+
+    assert summary["upcoming"] == 2  # no 0 — si no resolviera al Baskonia, no encontraría ningún partido propio
+
+
+def test_run_upcoming_prefiere_el_enlace_ya_existente_en_team_external_ids(engine):
+    """Si ya hay un enlace `euroleague/BAS` -> `bas` (de una carga de partidos jugados
+    anterior), se usa directamente — más barato y sin depender de coincidencia de
+    nombre (que podría fallar si el sponsor vuelve a cambiar)."""
+    with engine.begin() as conn:
+        conn.execute(
+            text("INSERT INTO team_external_ids (team_id, source, external_id) VALUES ('bas', 'euroleague', 'BAS')")
+        )
+    client = _fake_upcoming_client()
+
+    summary = run_upcoming(engine, season=2026, client=client)
+
+    assert summary["upcoming"] == 2
+
+
+def test_run_upcoming_backfillea_el_escudo_del_baskonia_y_del_rival(engine):
+    client = _fake_upcoming_client()
+
+    run_upcoming(engine, season=2026, client=client)
+
+    with engine.connect() as conn:
+        bas_logo = conn.execute(text("SELECT logo_url FROM teams WHERE id = 'bas'")).scalar_one()
+        mad_logo = conn.execute(
+            text("SELECT t.logo_url FROM teams t JOIN team_external_ids tei ON tei.team_id = t.id"
+                 " WHERE tei.source='euroleague' AND tei.external_id='MAD'")
+        ).scalar_one()
+
+    assert bas_logo == "https://cdn/bas.png"
+    assert mad_logo == "https://cdn/mad.png"
+
+
+def test_run_upcoming_es_idempotente_y_no_toca_el_calendario_de_acb(engine):
+    """Reemplaza su propio calendario (no acumula) y no borra filas de otra
+    competición para la misma temporada (ver fix del mismo día en
+    `ingest/acb/pipeline.py::run_upcoming` — acotar solo por `season_id` borraba
+    también el calendario de la otra fuente)."""
+    from ingest.common.identity import get_competition_id, get_or_create_season
+
+    with engine.begin() as conn:
+        season_id = get_or_create_season(conn, 2026)
+        acb_competition_id = get_competition_id(conn, "ACB")
+        conn.execute(
+            text(
+                "INSERT INTO upcoming_matchups (opponent_team_id, competition_id, match_date, is_home, season_id)"
+                " VALUES ('rm', :cid, '2026-09-20', 1, :sid)"
+            ),
+            {"cid": acb_competition_id, "sid": season_id},
+        )
+
+    client = _fake_upcoming_client()
+    run_upcoming(engine, season=2026, client=client)
+    summary = run_upcoming(engine, season=2026, client=client)  # segunda llamada: no debe duplicar
+
+    with engine.connect() as conn:
+        euroleague_count = conn.execute(
+            text(
+                "SELECT COUNT(*) FROM upcoming_matchups um JOIN competitions c ON c.id = um.competition_id"
+                " WHERE um.season_id = :sid AND c.name = 'Euroliga'"
+            ),
+            {"sid": summary["season_id"]},
+        ).scalar_one()
+        acb_count = conn.execute(
+            text(
+                "SELECT COUNT(*) FROM upcoming_matchups um JOIN competitions c ON c.id = um.competition_id"
+                " WHERE um.season_id = :sid AND c.name = 'ACB'"
+            ),
+            {"sid": summary["season_id"]},
+        ).scalar_one()
+
+    assert euroleague_count == 2  # no 4: la 2ª llamada reemplazó, no acumuló
+    assert acb_count == 1  # sigue ahí: run_upcoming de Euroliga no la tocó
+
+
+def test_run_upcoming_descarta_partidos_sin_fecha_valida(engine):
+    rows = [{"homecode": "BAS", "awaycode": "MAD", "hometeam": "KOSNER BASKONIA VITORIA-GASTEIZ",
+              "awayteam": "REAL MADRID", "date": None, "played": "false"}]
+    client = _fake_upcoming_client(schedule_rows=rows)
+
+    summary = run_upcoming(engine, season=2026, client=client)
+
+    assert summary["upcoming"] == 0

@@ -13,9 +13,26 @@ módulo y que rompían en ejecución real; corregidos aquí.
 Import perezoso (`_lazy_import`): que `euroleague_api` no esté instalado no
 debe romper el resto del proyecto (tests de `parser`/`loader` no lo
 necesitan, solo trabajan sobre el contrato interno ya adaptado).
+
+CLUBES/ESCUDOS (`fetch_clubs`, 2026-08-24): `euroleague_api` no envuelve
+ningún endpoint de clubes (solo calendario/boxscore/tiros/metadata/pbp, ver
+arriba) - se pide directo al mismo backend que usa la librería por debajo
+(`EuroLeagueData.BASE_URL = "https://api-live.euroleague.net"`, verificado
+leyendo el código instalado). Encontrado probando en vivo variantes de ruta
+plausibles a partir de ese base URL (sin documentación oficial):
+`GET /v2/competitions/{code}/seasons/{code}{season}/clubs` devuelve
+`{"data": [...]}`, un objeto por club con `code` (identificador corto
+estable, el mismo que usan `homecode`/`awaycode` del calendario y
+`CodeTeamA`/`CodeTeamB` del boxscore - NO cambia con el patrocinador, a
+diferencia del id numérico de ACB), `name` (con patrocinador, p.ej. "Kosner
+Baskonia Vitoria-Gasteiz" en 2026-2027) e `images.crest` (URL del escudo,
+confirmada en vivo con varios clubes, `Content-Type: image/png`). Sin
+`robots.txt` en ese host (404) - es una API JSON, no una página scrapeada.
 """
 import os
-from typing import Any
+from typing import Any, Dict, List
+
+import requests
 
 
 def _lazy_import():
@@ -34,6 +51,7 @@ def _lazy_import():
 
 
 DEFAULT_COMPETITION_CODE = os.getenv("EUROLEAGUE_COMPETITION_CODE", "E")  # E=Euroliga, U=Eurocup
+CLUBS_BASE_URL = os.getenv("EUROLEAGUE_API_BASE_URL", "https://api-live.euroleague.net")
 
 
 class EuroleagueClient:
@@ -51,6 +69,18 @@ class EuroleagueClient:
     def fetch_season_game_codes(self, season: int) -> Any:
         """Calendario de la temporada (DataFrame); se filtran los partidos jugados en `pipeline.py`."""
         return self._schedule.get_schedule(season)
+
+    def fetch_clubs(self, season: int) -> List[Dict[str, Any]]:
+        """Clubes de la temporada (código/nombre/escudo) - ver hallazgo en el docstring del módulo.
+
+        No depende de `_lazy_import`/`euroleague_api` (es una llamada `requests`
+        directa), pero vive en este cliente para que `pipeline.py` no tenga que
+        conocer la URL del backend.
+        """
+        url = f"{CLUBS_BASE_URL}/v2/competitions/{self.competition_code}/seasons/{self.competition_code}{season}/clubs"
+        response = requests.get(url, headers={"Accept": "application/json"}, timeout=30)
+        response.raise_for_status()
+        return response.json()["data"]
 
     def fetch_game_metadata(self, season: int, game_code: int) -> Any:
         return self._metadata.get_game_metadata(season, game_code)

@@ -25,6 +25,11 @@ class GameAdvancedStat:
     blk_pct: Optional[float] = None
     ft_rate: Optional[float] = None
     ast_to_ratio: Optional[float] = None
+    # Tiros libres del equipo en bruto (convertidos/intentados). `ft_rate` es
+    # una tasa (FTM/FGA) y no deja reconstruir volumen ni acierto desde la
+    # línea. `None` = la fuente no dio el dato, distinto de 0.
+    ftm: Optional[int] = None
+    fta: Optional[int] = None
 
 
 @dataclass
@@ -35,6 +40,10 @@ class PlayerGameStat:
     reb: int
     ast: int
     efg_pct: float
+    # Tiros libres convertidos/intentados (`efg_pct` los excluye por
+    # definición). `None` = la fuente no dio el dato, distinto de 0.
+    ftm: Optional[int] = None
+    fta: Optional[int] = None
 
 
 @dataclass
@@ -42,6 +51,30 @@ class LineupRecord:
     player_ids: List[str]
     minutes: float
     plus_minus: int
+    # Equipo del quinteto. `None` = la fuente no lo dio y no se pudo
+    # reconstruir; aguas abajo se infiere por el equipo ACTUAL de sus
+    # jugadores (vista `lineup_team`), que es una aproximación que un traspaso
+    # estropea hacia atrás. Ver `lineups.team_id` en `schema.sql`.
+    team_id: Optional[str] = None
+
+
+@dataclass
+class StintRecord:
+    """Un quinteto continuo en pista, con reloj y marcador.
+
+    Es `LineupRecord` SIN agregar: lo que hace falta para poder recortar una
+    ventana de tiempo ("los últimos cinco minutos") y para saber si el partido
+    estaba abierto cuando ese quinteto entró (`margin_start`). Ver
+    `ingest/common/lineups.py` y la tabla `lineup_stints` de `schema.sql`.
+    """
+
+    team_id: str
+    player_ids: List[str]
+    start_seconds: float
+    end_seconds: float
+    points_for: int
+    points_against: int
+    margin_start: int
 
 
 @dataclass
@@ -52,6 +85,11 @@ class ShotRecord:
     pos_y: float
     made: bool
     zone_id: Optional[int] = None
+    # `False` si la fuente NO dio coordenadas para este tiro y `pos_x`/`pos_y`
+    # son una posición inferida del tipo de tiro (ver `shots.located` en
+    # `schema.sql`). Por defecto `True`: lo normal es que vengan medidas, y
+    # así una fuente que no tenga el caso no necesita decir nada.
+    located: bool = True
 
 
 @dataclass
@@ -94,6 +132,10 @@ class NormalizedGame:
     advanced: List[GameAdvancedStat] = field(default_factory=list)
     boxscore: List[PlayerGameStat] = field(default_factory=list)
     lineups: List[LineupRecord] = field(default_factory=list)
+    # Tramos con reloj y marcador (ver `StintRecord`). Vacío si la fuente no
+    # trae play-by-play: entonces `lineups` viene de la fuente ya agregado y
+    # no hay tramos que reconstruir.
+    stints: List[StintRecord] = field(default_factory=list)
     shots: List[ShotRecord] = field(default_factory=list)
     key_events: List[KeyEvent] = field(default_factory=list)
     score_progression: List[ScoreStep] = field(default_factory=list)

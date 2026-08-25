@@ -41,8 +41,21 @@ def run_all(season: int, database_url: str = None, skip: tuple = ()) -> dict:
         except Exception as exc:  # noqa: BLE001
             logger.exception("ACB falló")
             results["acb"] = {"ok": False, "error": str(exc)}
+
+        # Calendario futuro (no partidos jugados) — aparte del backfill de arriba a
+        # propósito: un fallo aquí (p.ej. ACB no ha publicado aún el calendario de
+        # `season`) no debe tumbar los partidos ya finalizados que sí se acaban de
+        # cargar. Ver `ingest/acb/pipeline.py::run_upcoming`.
+        try:
+            from ingest.acb.pipeline import run_upcoming as run_acb_upcoming
+
+            results["acb_upcoming"] = {"ok": True, "summary": run_acb_upcoming(engine, season)}
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("ACB (calendario futuro) falló")
+            results["acb_upcoming"] = {"ok": False, "error": str(exc)}
     else:
         results["acb"] = {"ok": None, "summary": "omitido"}
+        results["acb_upcoming"] = {"ok": None, "summary": "omitido"}
 
     if "euroleague" not in skip:
         try:
@@ -52,8 +65,20 @@ def run_all(season: int, database_url: str = None, skip: tuple = ()) -> dict:
         except Exception as exc:  # noqa: BLE001
             logger.exception("Euroliga falló")
             results["euroleague"] = {"ok": False, "error": str(exc)}
+
+        # Igual que `acb_upcoming` arriba: calendario futuro aparte del backfill de
+        # partidos jugados, para que un fallo aquí no tumbe lo que sí se acaba de
+        # cargar. Ver `ingest/euroleague/pipeline.py::run_upcoming`.
+        try:
+            from ingest.euroleague.pipeline import run_upcoming as run_euroleague_upcoming
+
+            results["euroleague_upcoming"] = {"ok": True, "summary": run_euroleague_upcoming(engine, season)}
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Euroliga (calendario futuro) falló")
+            results["euroleague_upcoming"] = {"ok": False, "error": str(exc)}
     else:
         results["euroleague"] = {"ok": None, "summary": "omitido"}
+        results["euroleague_upcoming"] = {"ok": None, "summary": "omitido"}
 
     return results
 
