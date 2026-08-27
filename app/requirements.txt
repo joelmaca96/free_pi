@@ -9,9 +9,14 @@ python-dotenv>=1.0.0
 # Cliente del dialecto OpenAI, para el asistente de scouting (`app/assistant/`).
 # Sirve para TODOS los proveedores compatibles — LLM local (Ollama/LM Studio),
 # Groq, Cerebras, Cloudflare Workers AI, OpenRouter — que es el camino del PoC
-# (`local/features/005-chatbot/01_design.md` §8.3). NO se instala `anthropic`:
-# el adaptador de Claude existe (`app/assistant/llm/anthropic.py`) pero es fase
-# futura y el PoC corre a coste cero. La interfaz arranca igual sin esta
-# dependencia: la pestaña del asistente lo explica y las otras cuatro no se
-# enteran.
+# (`local/features/005-chatbot/01_design.md` §8.3). La interfaz arranca igual
+# sin esta dependencia: la pestaña del asistente lo explica y las otras cuatro
+# no se enteran.
 openai>=1.0
+
+# Cliente de Claude, solo para ASSISTANT_LLM_PROVIDER=anthropic. Se instala
+# aunque el PoC no lo use por defecto: pesa poco y sin él el adaptador de
+# `app/assistant/llm/anthropic.py` no se puede ni probar contra la API real.
+# OJO: la API de Claude NO tiene capa gratuita — una clave sin saldo lista
+# modelos pero devuelve 400 al primer mensaje.
+anthropic>=1.0

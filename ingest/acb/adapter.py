@@ -195,6 +195,12 @@ def _advanced_stats_for_team(team_id: str, own: Dict[str, float], opponent: Dict
         "ortg": ortg, "drtg": drtg,
         "ast_pct": ast_pct, "stl_pct": stl_pct, "blk_pct": blk_pct,
         "ft_rate": ft_rate, "ast_to_ratio": ast_to_ratio,
+        # Tiros libres en BRUTO, además de `ft_rate`. La tasa (FTM/FGA) no deja
+        # reconstruir ni el volumen ni el acierto desde la línea: con solo
+        # `ft_rate` no se puede responder "¿cuántos libres concede este equipo?".
+        # El dato ya estaba en `own` (`_team_totals`) y se usaba únicamente para
+        # derivar `ft_rate`; aquí simplemente deja de tirarse.
+        "ftm": own["ftm"], "fta": own["fta"],
     }
 
 
@@ -216,6 +222,9 @@ def _advanced_stats_from_official(team_id: str, official: Dict[str, Any], own: D
         "ast_pct": ball["astPct"]["partido"], "stl_pct": ball["stlPct"]["partido"],
         "blk_pct": ball["blkPct"]["partido"], "ft_rate": four["fTr"]["partido"],
         "ast_to_ratio": ast_to_ratio,
+        # Igual que en el camino estimado: el recuento bruto sale del boxscore
+        # (`own`), no de este endpoint — `match-advanced-stats` solo da la tasa.
+        "ftm": own["ftm"], "fta": own["fta"],
     }
 
 
@@ -393,7 +402,24 @@ def build_raw_game(
                     "reb": row["totalRebounds"],
                     "ast": row["assists"],
                     "efg_pct": efg_pct,
+                    # `efg_pct` excluye los tiros libres por definición, así que
+                    # sin estas dos columnas no hay forma de leer el juego desde
+                    # la línea de ningún jugador. `.get()` y no indexado: si un
+                    # boxscore concreto no trae el campo, la columna queda en
+                    # NULL (= "sin dato") en vez de tumbar la carga del partido.
+                    "ftm": row.get("freeThrowsMade"),
+                    "fta": row.get("freeThrowsAttempted"),
                     "starter": bool(row.get("isStarted")),
+                    # Foto real de acb.com, de CUALQUIER jugador de la Liga
+                    # Endesa (rival incluido) — verificado en vivo, 2026-08-27:
+                    # el propio boxscore que ya se descarga por partido la
+                    # trae, solo hacía falta leerla. `parse_and_resolve` la
+                    # usa como HOTLINK (nunca se descarga a disco: el
+                    # `robots.txt` de `static.acb.com` es `Disallow: /`,
+                    # a diferencia de baskonia.com) y solo para rellenar un
+                    # hueco, nunca para pisar la foto oficial de la plantilla
+                    # propia (`ingest/baskonia_web`).
+                    "photo_url": player.get("headshotImageUrl"),
                 }
             )
 

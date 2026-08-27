@@ -106,6 +106,18 @@ _CREATE_VIEW_RE = re.compile(r"CREATE\s+VIEW\s+(\w+)\b.*?;", re.IGNORECASE | re.
 _CREATE_TABLE_RE = re.compile(r"CREATE\s+TABLE\s+(\w+)\b.*?;", re.IGNORECASE | re.DOTALL)
 _CREATE_INDEX_RE = re.compile(r"CREATE\s+INDEX\s+(\w+)\s+ON\s+(\w+)\b.*?;", re.IGNORECASE | re.DOTALL)
 
+# `court_zones` es una tabla de CATÁLOGO (geometría del mapa de tiros), no de
+# datos ingeridos, pero a diferencia de las columnas/tablas de arriba su seed
+# vive en un `INSERT` normal de `schema.sql` — que, igual que el resto del
+# script, solo se ejecuta una vez, al crear la BD desde cero. Sin esto, una
+# `data/baskonia.db` ya inicializada se queda para siempre con la geometría
+# de zonas de cuando se creó, aunque `schema.sql` gane filas nuevas o
+# reajuste las existentes (el reteselado de 2026-08-27, ver `schema.sql`,
+# es el primer caso real). Se extrae el `INSERT` literal igual que
+# `_create_missing_tables` hace con las tablas — una sola definición, no dos
+# que puedan desincronizarse — y se relanza como upsert por `id`.
+_INSERT_COURT_ZONES_RE = re.compile(r"INSERT\s+INTO\s+court_zones\b.*?;", re.IGNORECASE | re.DOTALL)
+
 
 # Milisegundos que un escritor espera a que se libere el lock de la BD antes de
 # fallar con "database is locked". Necesario desde que la API puede disparar una
@@ -186,6 +198,37 @@ def _create_missing_tables(engine: Engine) -> None:
                     conn.execute(text(ddl.rstrip().rstrip(";").replace("CREATE INDEX", "CREATE INDEX IF NOT EXISTS", 1)))
 
 
+def _sync_court_zones(engine: Engine) -> None:
+    """Upsert por `id` de las filas de `court_zones` contra las de `schema.sql`.
+
+    Añade las filas nuevas y REAJUSTA límites/etiqueta de las que cambian de
+    geometría (ver el reteselado de 2026-08-27 documentado en `schema.sql`) —
+    nunca borra una fila existente, así que ningún `shots.zone_id` que ya
+    apunte a un id antiguo se queda huérfano. Idempotente: sobre una BD ya al
+    día, el `UPDATE` de cada fila escribe los mismos valores que ya tenía.
+
+    OJO: esto NO reclasifica los tiros ya cargados (`shots.zone_id` se fija
+    una vez, al ingerir — ver `ingest/common/raw_game.py`) ni recalcula
+    `game_zone_stats` a partir de la geometría nueva. Para una BD con datos
+    reales ya ingeridos antes del reteselado, hace falta además
+    `tools/retile_court_zones.py --apply` (mismo patrón que
+    `tools/fix_shot_coords.py` para las coordenadas).
+    """
+    if not inspect(engine).has_table("court_zones"):
+        return  # BD "antigua" simulada en tests, sin ni siquiera la tabla — nada que sincronizar
+    script = SCHEMA_PATH.read_text(encoding="utf-8")
+    match = _INSERT_COURT_ZONES_RE.search(script)
+    if match is None:
+        return  # `schema.sql` sin seed de zonas (no debería pasar) — no se inventa geometría
+    upsert_sql = match.group(0).rstrip().rstrip(";") + (
+        " ON CONFLICT (id) DO UPDATE SET"
+        " label = excluded.label, x_min = excluded.x_min, x_max = excluded.x_max,"
+        " y_min = excluded.y_min, y_max = excluded.y_max"
+    )
+    with engine.begin() as conn:
+        conn.execute(text(upsert_sql))
+
+
 def _refresh_views(engine: Engine) -> None:
     """Recrea todas las vistas de `schema.sql` (DROP + CREATE), idempotente.
 
@@ -227,6 +270,7 @@ def init_scouting_db(engine: Engine, *, force: bool = False) -> None:
     if not force and is_initialized(engine):
         _apply_additive_migrations(engine)
         _create_missing_tables(engine)
+        _sync_court_zones(engine)
         _refresh_views(engine)
         return
 
@@ -247,4 +291,5 @@ def init_scouting_db(engine: Engine, *, force: bool = False) -> None:
         raw_conn.close()
     _apply_additive_migrations(engine)  # no-op justo después de crear desde schema.sql; misma ruta siempre
     _create_missing_tables(engine)      # ídem
+    _sync_court_zones(engine)           # ídem
     _refresh_views(engine)

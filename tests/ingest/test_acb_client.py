@@ -444,3 +444,81 @@ def test_build_raw_game_rejects_unfinished_match():
     match = _match(2002, 10, 20)
     with pytest.raises(ValueError):
         build_raw_game(match, {"matchFinished": False, "teamBoxscores": []}, season=2025)
+
+
+# ---- tiros libres en bruto (ftm/fta) ----
+# Las columnas existían en `schema.sql` desde el 2026-08-24, pero ningún
+# adapter las emitía: `_team_totals` calculaba `ftm`/`fta` solo para derivar
+# `ft_rate` y los descartaba, así que `player_game_stats.fta` seguía a NULL en
+# las 17.455 filas de la base de datos real por muchas reingestas que se
+# hicieran. Estos tests fijan que ya no se pierden.
+
+
+def test_build_raw_game_emits_raw_free_throws_for_team_and_player():
+    match = _match(5001, 10, 20)
+    boxscore = {
+        "matchFinished": True,
+        "teamBoxscores": [
+            _team_period0(10, "Home Team", [_player_row(501, "A Home", "7", "30:00", 20, 8, 15, 0, 2, 4, 5)],
+                          _totals(90, 35, 60, 6, 20, 14, 18, 10, 12, 33)),
+            _team_period0(20, "Away Team", [_player_row(601, "B Away", "9", "28:00", 18, 7, 12, 2, 6, 2, 3)],
+                          _totals(85, 32, 58, 5, 22, 16, 20, 13, 9, 30)),
+        ],
+    }
+
+    raw = build_raw_game(match, boxscore, season=2025)
+
+    home_stats = next(t for t in raw["team_stats"] if t["team_id"] == "10")
+    assert (home_stats["ftm"], home_stats["fta"]) == (14, 18)   # `_totals(..., ftm=14, fta=18, ...)`
+    # Y la tasa que ya existía sigue saliendo igual: son datos complementarios,
+    # no uno sustituyendo al otro.
+    assert home_stats["ft_rate"] == round(100 * 14 / 80, 1)
+
+    home_player = next(p for p in raw["players"] if p["player_id"] == "501")
+    assert (home_player["ftm"], home_player["fta"]) == (4, 5)   # `_player_row(..., ftm=4, fta=5)`
+
+
+def test_official_advanced_stats_still_carry_the_raw_free_throw_counts():
+    """`match-advanced-stats` solo da la TASA (`fTr`); el recuento bruto tiene
+    que seguir saliendo del boxscore aunque se prefiera el cálculo oficial."""
+    match = _match(5002, 10, 20)
+    boxscore = {
+        "matchFinished": True,
+        "teamBoxscores": [
+            _team_period0(10, "Home Team", [_player_row(501, "A Home", "7", "30:00", 20, 8, 15, 0, 2, 4, 5)],
+                          _totals(90, 35, 60, 6, 20, 14, 18, 10, 12, 33, ast=20, stl=5, blk=2)),
+            _team_period0(20, "Away Team", [_player_row(601, "B Away", "9", "28:00", 18, 7, 12, 2, 6, 2, 3)],
+                          _totals(85, 32, 58, 5, 22, 16, 20, 13, 9, 30, ast=15, stl=6, blk=3)),
+        ],
+    }
+    advanced_stats = {
+        "homeAdvancedStats": _official_side(57.5, 36.6, 13.5, 27.5, 125.7, 103.4, 22.3, 57.1, 9.6, 2.4, 59.7, 84.2),
+        "awayAdvancedStats": _official_side(45.7, 33.3, 17.9, 41.4, 103.4, 125.7, -22.3, 44.0, 7.2, 5.0, 51.0, 84.2),
+    }
+
+    raw = build_raw_game(match, boxscore, season=2025, advanced_stats=advanced_stats)
+
+    home_stats = next(t for t in raw["team_stats"] if t["team_id"] == "10")
+    assert home_stats["ft_rate"] == 27.5              # tasa oficial
+    assert (home_stats["ftm"], home_stats["fta"]) == (14, 18)  # recuento del boxscore
+
+
+def test_a_player_row_without_free_throws_leaves_them_null_not_zero():
+    """NULL = "la fuente no lo dio"; 0 = "no tiró ni uno". Confundirlos hace que
+    `gp_ft` de las vistas deje de servir para nada (ver `schema.sql`)."""
+    match = _match(5003, 10, 20)
+    player = _player_row(501, "A Home", "7", "30:00", 20, 8, 15, 0, 2, 4, 5)
+    del player["freeThrowsMade"], player["freeThrowsAttempted"]
+    boxscore = {
+        "matchFinished": True,
+        "teamBoxscores": [
+            _team_period0(10, "Home Team", [player], _totals(90, 35, 60, 6, 20, 14, 18, 10, 12, 33)),
+            _team_period0(20, "Away Team", [_player_row(601, "B Away", "9", "28:00", 18, 7, 12, 2, 6, 2, 3)],
+                          _totals(85, 32, 58, 5, 22, 16, 20, 13, 9, 30)),
+        ],
+    }
+
+    raw = build_raw_game(match, boxscore, season=2025)
+
+    home_player = next(p for p in raw["players"] if p["player_id"] == "501")
+    assert home_player["ftm"] is None and home_player["fta"] is None

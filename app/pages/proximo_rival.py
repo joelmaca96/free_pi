@@ -24,8 +24,9 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
+from components.ask_assistant import ask_assistant_button
 from components.avatar import player_avatar_html, team_crest_html
-from components.court import shot_chart, shot_chart_caption
+from components.court import shot_chart, shot_chart_caption, zone_breakdown
 from components.header import page_header
 from components.player_dialog import player_detail
 from data import queries
@@ -74,6 +75,26 @@ with info_col:
     st.caption(f"{fecha} · {matchup['competition']} · {condicion}")
     if matchup.get("key_player_note"):
         st.caption(matchup["key_player_note"])
+    # Entrada contextual al chat (ver `local/features/005-chatbot/01_design.md`
+    # §9.4), la misma que en "Partidos anteriores" pero mirando hacia adelante:
+    # se salta al asistente con la pregunta escrita y con el rival ya dicho,
+    # para no tener que repetirlo en la conversación.
+    #
+    # Va aquí, en la cabecera, y no más abajo: es lo único de la pantalla que
+    # depende solo de que HAYA próximo partido, no de que el rival tenga datos
+    # de scouting — cuando no los tiene, la página se corta con `st.stop()`
+    # antes de la primera sección y el botón seguiría teniendo sentido.
+    ask_assistant_button(
+        f"Prepara el partido contra {rival_name} del {fecha}: "
+        "cómo juegan, quién es su amenaza y qué hay que cuidar.",
+        key=f"ask_next_game_{rival_team_id}",
+        context=(
+            f"El usuario viene de la pantalla del próximo rival: {rival_name} "
+            f"({fecha}, {matchup['competition']}, Baskonia como {condicion.lower()})."
+        ),
+        label="Preguntar al asistente sobre este partido",
+        use_container_width=False,
+    )
 
 # De qué temporada salen los datos de scouting. NO tiene por qué ser la
 # seleccionada: al arrancar una temporada, el rival del primer partido aún no
@@ -93,8 +114,7 @@ elif scouting["is_fallback"]:
     st.warning(
         f"⚠ {rival_name} todavía no ha disputado partidos en la temporada seleccionada. "
         f"**Todo el scouting de abajo es de {scouting['label']}**, su última temporada con "
-        "datos — útil para preparar el partido, pero no refleja fichajes ni bajas de este año."
-    )
+        "datos")
 else:
     st.caption(f"Datos de scouting de la temporada {scouting['label']}.")
 
@@ -200,7 +220,7 @@ else:
     tabs = st.tabs(profile_df["competition"].tolist())
     for tab, row in zip(tabs, profile_df.itertuples()):
         with tab:
-            cols = st.columns(7)
+            cols = st.columns(8)
             cols[0].metric("PJ", int(row.gp))
             cols[1].metric("Ritmo", f"{row.pace:.1f}" if pd.notna(row.pace) else "—")
             cols[2].metric("ORtg", f"{row.ortg:.1f}" if pd.notna(row.ortg) else "—")
@@ -208,6 +228,10 @@ else:
             cols[4].metric("Net", f"{row.net_rating:+.1f}" if pd.notna(row.net_rating) else "—")
             cols[5].metric("eFG%", f"{row.efg_pct:.1f}" if pd.notna(row.efg_pct) else "—")
             cols[6].metric("TS%", f"{row.ts_pct:.1f}" if pd.notna(row.ts_pct) else "—")
+            # `ft_pct` puede ser NaN con `gp` > 0 (partidos sin `ftm`/`fta`
+            # cargados, ver el docstring de `team_advanced_profile`) — se
+            # distingue de "0%", no se disimula el hueco de cobertura.
+            cols[7].metric("FT%", f"{row.ft_pct:.1f}" if pd.notna(row.ft_pct) else "—")
             # La procedencia de ORtg/DRtg/ritmo NO es la misma en las dos fuentes y
             # eso cambia cómo hay que leer la cifra — se dice, no se disimula (ver
             # doc/features/ingestor/01_estado.md §2.2/§2.3).
@@ -371,39 +395,18 @@ else:
     # No se filtra por jugador: `game_zone_stats` está agregado por equipo en
     # origen, no guarda quién tiró.
     #
-    # COBERTURA PARCIAL, verificado en vivo (2026-08-24): `court_zones` son 6
-    # rectángulos que NO teselan la cancha, dejan la mayor parte fuera — entre el
-    # 52% (Euroliga) y el 79% (Supercopa) de los tiros de la BD tienen
-    # `zone_id = NULL` y no entran en `game_zone_stats`. Así que estos porcentajes
-    # NO son "el acierto del equipo desde el triple / la pintura": son el acierto
-    # en la franja concreta que cae dentro de cada rectángulo. La diferencia
-    # importa (p.ej. Olympiacos salía con "66% en Triple exterior", que leído como
-    # 3P% de equipo es sencillamente falso), así que se declara la cobertura y la
-    # tabla va plegada — no como titular de la sección. El mapa de arriba sí es
-    # fiable: usa las coordenadas, no las zonas.
+    # COBERTURA, verificado en vivo (2026-08-24, antes del reteselado): las 6
+    # zonas originales dejaban entre el 52% (Euroliga) y el 79% (Supercopa) de
+    # los tiros de la BD sin zona (`zone_id = NULL`, fuera de `game_zone_stats`).
+    # El reteselado de 2026-08-27 (ver el comentario sobre `court_zones` en
+    # `schema.sql`) cubre casi toda la cancha ofensiva real, pero SIGUE siendo
+    # una aproximación de rectángulos, no la línea de triple exacta: "Ala
+    # izq./der." mezclan tiros de 2 largos y triples de ala en la misma zona
+    # (la línea real es un arco). Así que estos porcentajes no son
+    # necesariamente "el acierto del equipo desde el triple / la pintura" en
+    # zonas de ala — sí lo son en Pintura, Triple esquina, Triple exterior y
+    # Mate, que no mezclan nada. Se declara la cobertura siempre, y el aviso se
+    # refuerza solo si de verdad queda un hueco apreciable. El mapa de arriba
+    # es fiable siempre: usa las coordenadas, no las zonas.
     zone_df = queries.team_zone_profile(engine, rival_team_id, scouting_season_id)
-    if not zone_df.empty:
-        covered = int(zone_df["volume"].sum())
-        coverage_pct = 100 * covered / len(shots_df)
-        with st.expander(f"Acierto por zona de cancha (cubre {coverage_pct:.0f}% de los tiros)"):
-            st.warning(
-                f"Solo {covered} de {len(shots_df)} tiros ({coverage_pct:.0f}%) caen dentro de "
-                "alguna de las 6 zonas definidas en `court_zones` — esas zonas no cubren la "
-                "cancha entera. **Estos porcentajes no son el acierto del equipo desde cada "
-                "área**, sino el acierto dentro de cada rectángulo concreto. Para la lectura "
-                "real de dónde y cómo tira el rival, usa el mapa de arriba."
-            )
-            st.dataframe(
-                zone_df,
-                hide_index=True,
-                use_container_width=True,
-                column_config={
-                    "zone_label": st.column_config.TextColumn("Zona"),
-                    "fg_pct": st.column_config.NumberColumn("% acierto", format="%.1f"),
-                    "volume": st.column_config.NumberColumn("Tiros"),
-                },
-            )
-            st.caption(
-                "% ponderado por volumen (no la media simple de los porcentajes de cada "
-                "partido). Agregado por equipo — no distingue jugador, a diferencia del mapa."
-            )
+    zone_breakdown(zone_df, len(shots_df), scope="team")

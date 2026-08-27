@@ -39,7 +39,18 @@ DEFAULT_MAX_ITERATIONS = 6
 #: Tokens por turno. No es un límite de coste hoy (el PoC no paga), es un
 #: límite de cuota: es lo que evita que una pregunta rara se coma la cuota de
 #: tokens/minuto del proveedor gratuito y deje al resto sin asistente.
-DEFAULT_MAX_TOKENS_PER_TURN = 20_000
+#:
+#: Se cuenta el `total_tokens` de cada vuelta, o sea incluyendo el prompt que
+#: se REENVÍA entero cada vez. Eso es lo correcto (el proveedor cobra la
+#: cuota de tokens/minuto igual), pero hace que el número se gaste mucho más
+#: rápido de lo que parece: medido con el catálogo real (§ medición 2026-08),
+#: el prefijo fijo son ~7.000 tokens (prompt de sistema ~1.6k + 28 esquemas de
+#: herramienta ~3.6k), así que CADA vuelta cuesta ~7.400 tokens y apenas
+#: crece. Con el valor viejo de 20.000 el tope saltaba en la tercera vuelta,
+#: contradiciendo a `DEFAULT_MAX_ITERATIONS`, que promete seis: la respuesta
+#: era un "no he podido" con las herramientas ya ejecutadas y pagadas.
+#: 60.000 es lo que hace falta para que las seis vueltas quepan de verdad.
+DEFAULT_MAX_TOKENS_PER_TURN = 60_000
 
 #: Hilos para ejecutar llamadas independientes a la vez. Pocas y muy cortas
 #: (SQLite local): más hilos no acelera nada y complica el rastreo.
@@ -74,6 +85,19 @@ def max_iterations_from_env() -> int:
         return DEFAULT_MAX_ITERATIONS
 
 
+def max_tokens_per_turn_from_env() -> int:
+    """Tope de tokens del turno, configurable como ya lo era el de vueltas.
+
+    Los dos topes tienen que poder moverse juntos: subir las vueltas sin subir
+    los tokens no da vueltas de más, solo cambia cuál de los dos frena.
+    """
+    raw = os.getenv("ASSISTANT_MAX_TOKENS_PER_TURN", "").strip()
+    try:
+        return max(1_000, int(raw)) if raw else DEFAULT_MAX_TOKENS_PER_TURN
+    except ValueError:
+        return DEFAULT_MAX_TOKENS_PER_TURN
+
+
 class Agent:
     """Ata un `LLMClient` cualquiera con el catálogo de herramientas.
 
@@ -89,13 +113,13 @@ class Agent:
         system_prompt: str,
         *,
         max_iterations: Optional[int] = None,
-        max_tokens_per_turn: int = DEFAULT_MAX_TOKENS_PER_TURN,
+        max_tokens_per_turn: Optional[int] = None,
     ):
         self.client = client
         self.catalog = catalog
         self.system_prompt = system_prompt
         self.max_iterations = max_iterations or max_iterations_from_env()
-        self.max_tokens_per_turn = max_tokens_per_turn
+        self.max_tokens_per_turn = max_tokens_per_turn or max_tokens_per_turn_from_env()
 
     def run(
         self,
@@ -152,9 +176,17 @@ class Agent:
                 messages.append({"role": "assistant", "content": response.text})
                 break
 
-            messages.append(
-                {"role": "assistant", "content": response.text, "tool_calls": response.tool_calls}
-            )
+            # `provider_state` viaja pegado al mensaje sin que el agente mire
+            # qué hay dentro: es el trozo opaco que algún proveedor necesita
+            # recibir intacto en la vuelta siguiente (ver `LLMResponse`).
+            assistant_message: Message = {
+                "role": "assistant",
+                "content": response.text,
+                "tool_calls": response.tool_calls,
+            }
+            if response.provider_state is not None:
+                assistant_message["provider_state"] = response.provider_state
+            messages.append(assistant_message)
             invocations = self._execute_all(response.tool_calls, on_tool_start, on_tool_end)
             turn.invocations.extend(invocations)
             # TODOS los resultados, en el mismo bloque y en el mismo orden en
@@ -176,10 +208,11 @@ class Agent:
             turn.stopped_reason = f"tope de {self.max_iterations} vueltas de herramienta"
 
         if turn.stopped_reason and not turn.text:
-            turn.text = (
-                "Me he quedado sin vueltas de herramienta antes de poder responder "
-                f"({turn.stopped_reason}). Prueba a preguntarlo de forma más concreta."
-            )
+            # Los dos topes se paran por motivos distintos y se arreglan de
+            # forma distinta: darles el mismo consejo ("pregúntalo más
+            # concreto") manda a reformular la pregunta cuando lo que hay que
+            # tocar es la configuración, y eso son diez intentos perdidos.
+            turn.text = _stopped_message(turn.stopped_reason)
             messages.append({"role": "assistant", "content": turn.text})
 
         turn.messages = messages
@@ -217,6 +250,20 @@ class Agent:
         return invocations
 
 
+def _stopped_message(reason: str) -> str:
+    """Qué contarle al usuario cuando el turno se corta por un tope."""
+    if "tokens" in reason:
+        return (
+            "La pregunta ha consumido el tope de tokens del turno antes de que pudiera "
+            "redactar la respuesta. Prueba a acotarla (menos jugadores, menos partidos), "
+            "o sube ASSISTANT_MAX_TOKENS_PER_TURN en el .env si tu proveedor te lo permite."
+        )
+    return (
+        f"Me he quedado sin vueltas de herramienta antes de poder responder ({reason}). "
+        "Prueba a preguntarlo de forma más concreta, o sube ASSISTANT_MAX_TOOL_ITERATIONS."
+    )
+
+
 def _accumulate_usage(total: Dict[str, int], usage: Dict[str, Any]) -> None:
     """Suma el consumo de cada vuelta. Claves distintas por proveedor: se suma lo que haya."""
     for key, value in (usage or {}).items():
@@ -242,4 +289,12 @@ def _log_sql_escapes(question: str, invocations: List[ToolInvocation]) -> None:
             )
 
 
-__all__ = ["Agent", "AgentTurn", "LLMError", "DEFAULT_MAX_ITERATIONS", "max_iterations_from_env"]
+__all__ = [
+    "Agent",
+    "AgentTurn",
+    "LLMError",
+    "DEFAULT_MAX_ITERATIONS",
+    "DEFAULT_MAX_TOKENS_PER_TURN",
+    "max_iterations_from_env",
+    "max_tokens_per_turn_from_env",
+]

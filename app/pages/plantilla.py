@@ -48,7 +48,15 @@ for row_df in rows:
                 )
                 st.markdown(f"**#{player.number} · {player.name}**")
                 st.caption(player.position or "—")
-                st.caption(f"{player.pts_avg:.1f} pts/partido" if pd.notna(player.pts_avg) else "Sin partidos todavía")
+                if pd.isna(player.pts_avg):
+                    st.caption("Sin partidos todavía")
+                elif int(player.stats_season_id) != season_id:
+                    # Fallback a la última temporada con datos de este jugador
+                    # (ver `queries.roster_cards`) — se avisa en vez de colar
+                    # el dato como si fuera de la temporada en curso.
+                    st.caption(f"{player.pts_avg:.1f} pts/partido · {player.stats_season_label}")
+                else:
+                    st.caption(f"{player.pts_avg:.1f} pts/partido")
                 if st.button("Ver estadísticas", key=f"detail_{player.id}", use_container_width=True):
                     st.session_state["selected_player_id"] = player.id
                     player_detail(player.id)

@@ -84,17 +84,92 @@ def test_player_game_warns_that_missing_free_throws_are_not_zero(catalog):
     assert any("tiros libres" in warning for warning in result["meta"]["warnings"])
 
 
-def test_player_game_in_a_season_without_data_fails_with_a_suggestion(catalog):
+def test_player_game_falls_back_to_the_last_season_with_data(catalog):
+    """Sin partidos TODAVÍA en la temporada pedida, cae a la última que sí tiene (§7.2)."""
     result = catalog.execute("1", "player_game", {"player_id": "howard", "season_id": 99}).result
+    line = result["data"]["line"]
+    assert (line["pts"], line["minutes"]) == (19, 31.2)  # g5 del seed, temporada 1
+    assert result["meta"]["scope"].startswith("g5")
+    assert any("temporada 99" in warning and "2025-2026" in warning for warning in result["meta"]["warnings"])
+
+
+def test_player_game_fails_when_there_is_no_data_in_any_season_up_to_the_one_asked(catalog):
+    """Pedir una temporada ANTERIOR a la única que tiene datos no cae hacia delante (§7.2)."""
+    result = catalog.execute("1", "player_game", {"player_id": "howard", "season_id": 0}).result
     assert result["error"] == "sin datos"
     assert "temporada" in result["suggestion"]
 
 
 def test_player_averages_cites_games_played(catalog):
     result = catalog.execute("1", "player_averages", {"player_id": "kotsar"}).result
-    combined = next(row for row in result["data"] if row["competition"] == "Combinado")
+    combined = next(row for row in result["data"]["averages"] if row["competition"] == "Combinado")
     assert combined["gp"] == 5
     assert result["meta"]["gp"] == 5
+
+
+def test_player_averages_says_it_has_no_free_throws_when_the_db_has_none(catalog):
+    """`efg_pct` excluye los libres por definición, así que sin ftm/fta no se
+    puede hablar del juego desde la línea — y hay que decirlo, no callarlo."""
+    result = catalog.execute("1", "player_averages", {"player_id": "howard"}).result
+
+    assert result["data"]["free_throws"] == []
+    assert any("no tiene tiros libres" in warning for warning in result["meta"]["warnings"])
+
+
+def test_player_averages_returns_free_throws_once_the_db_has_them(engine, ctx):
+    from sqlalchemy import text
+
+    from app.assistant.capabilities import probe
+
+    with engine.begin() as conn:
+        # 8/12 en un partido y 1/1 en otro: el acierto ponderado (9/13 = 69.2%)
+        # NO es la media de los porcentajes de cada partido (83.3%), que es la
+        # trampa que `ft_pct` evita a propósito.
+        conn.execute(text("UPDATE player_game_stats SET ftm = 8, fta = 12 WHERE game_id = 'g5' AND player_id = 'howard'"))
+        conn.execute(text("UPDATE player_game_stats SET ftm = 1, fta = 1 WHERE game_id = 'g4' AND player_id = 'howard'"))
+    ctx.capabilities = probe(engine)
+
+    result = ToolCatalog(ctx).execute("1", "player_averages", {"player_id": "howard"}).result
+
+    acb = next(row for row in result["data"]["free_throws"] if row["competition"] == "ACB")
+    assert (acb["ftm"], acb["fta"]) == (9, 13)
+    assert acb["ft_pct"] == pytest.approx(100 * 9 / 13, abs=0.01)
+    # Jugó 3 partidos de ACB pero solo 2 traen el dato: hay que avisarlo.
+    assert acb["gp_ft"] == 2 and acb["gp"] == 3
+    assert any("gp_ft" in warning for warning in result["meta"]["warnings"])
+
+
+def test_team_profile_separates_free_throws_taken_from_conceded(engine, ctx):
+    """Cuántos libres REGALA una defensa dice más de ella que cuántos lanza su
+    ataque; sin las columnas `opp_*` de la vista no se podía leer."""
+    from sqlalchemy import text
+
+    from app.assistant.capabilities import probe
+
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE player_game_stats SET ftm = 5, fta = 6 WHERE game_id = 'g5'"))
+        conn.execute(
+            text("INSERT INTO game_advanced_stats (game_id, team_id, efg_pct, ts_pct, tov_pct, orb_pct, ftm, fta)"
+                 " VALUES ('g5', 'val', 50.0, 53.0, 12.0, 22.0, 20, 25)")
+        )
+        conn.execute(text("UPDATE game_advanced_stats SET ftm = 14, fta = 18 WHERE game_id = 'g5' AND team_id = 'bas'"))
+    ctx.capabilities = probe(engine)
+
+    result = ToolCatalog(ctx).execute("1", "team_profile", {"team_id": "bas"}).result
+
+    acb = next(row for row in result["data"]["free_throws"] if row["competition"] == "ACB")
+    assert (acb["ftm"], acb["fta"]) == (14, 18)          # los que lanza
+    assert (acb["opp_ftm"], acb["opp_fta"]) == (20, 25)  # los que concede
+
+
+def test_team_profile_falls_back_to_the_last_season_with_data(catalog):
+    """Mismo criterio que ya usaba 'Próximo rival' (`queries.team_scouting_season`),
+    ahora también en la herramienta del asistente (§7.2)."""
+    result = catalog.execute("1", "team_profile", {"team_id": "bas", "season_id": 99}).result
+    # "bas" tiene partidos en la 1 (seed) y en la 2 (liga sintética, más reciente):
+    # cae a la MÁS RECIENTE con datos, no a la primera que encuentre.
+    assert result["meta"]["scope"] == "temporada 2"
+    assert any("temporada 99" in warning and "2026-2027" in warning for warning in result["meta"]["warnings"])
 
 
 def test_player_form_needs_at_least_two_games(catalog, engine):

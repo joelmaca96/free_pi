@@ -340,10 +340,17 @@ def game_quarter_stats(_engine: Engine, game_id: str) -> pd.DataFrame:
 
 @st.cache_data(ttl=_TTL, show_spinner=False)
 def game_advanced_stats(_engine: Engine, game_id: str) -> pd.DataFrame:
-    """Estadísticas avanzadas de un partido, una fila por equipo."""
+    """Estadísticas avanzadas de un partido, una fila por equipo.
+
+    `ftm`/`fta` (tiros libres convertidos/intentados, en bruto) van aparte de
+    un `ft_pct` ya calculado en SQL a propósito: la página necesita poder
+    decir "sin datos" cuando `fta` es `NULL` (partido cargado antes de que
+    existiera la columna, ver `game_advanced_stats.ftm` en `schema.sql`) en
+    vez de mostrar un 0% que sugeriría 0 de 0 intentos.
+    """
     sql = text("""
         SELECT gas.team_id, t.name AS team_name, gas.ortg, gas.drtg, gas.net_rating,
-               gas.efg_pct, gas.ts_pct, gas.tov_pct, gas.orb_pct
+               gas.efg_pct, gas.ts_pct, gas.tov_pct, gas.orb_pct, gas.ftm, gas.fta
         FROM game_advanced_stats gas
         JOIN teams t ON t.id = gas.team_id
         WHERE gas.game_id = :game_id
@@ -440,20 +447,41 @@ def team_name(_engine: Engine, team_id: str) -> Optional[str]:
 def roster_cards(_engine: Engine, team_id: str, season_id: int) -> pd.DataFrame:
     """Plantilla activa para la galería de tarjetas de "Plantilla".
 
+    Igual que `player_scouting_season`, pero resuelto por jugador dentro de
+    una sola consulta en vez de una llamada por tarjeta: cada jugador saca su
+    `pts_avg` de `season_id`, o si ahí no tiene partidos todavía (fichaje
+    reciente, o inicio de temporada antes de su debut) de su última temporada
+    con datos hasta `season_id` — nunca de una posterior. La tarjeta antes se
+    quedaba en "Sin partidos todavía" en ese caso aunque el jugador sí tuviera
+    historial; ver `player_scouting_season` para el caso real que motiva esta
+    caída, aquí aplicada también a la vista de galería.
+
     Returns:
         Una fila por jugador activo, orden por dorsal: `id, name, number,
-        position, photo_url, photo_local_path, pts_avg` (media combinada de
-        la temporada, `NaN` si el jugador aún no tiene partidos registrados —
-        se muestra igual, no se filtra — mismo criterio que el resto de
-        medias del esquema). `photo_local_path` es la copia descargada a
-        disco por `ingest/baskonia_web` — `components/avatar.py` la prefiere
-        sobre `photo_url` (hotlink remoto), ver su docstring.
+        position, photo_url, photo_local_path, pts_avg, stats_season_id,
+        stats_season_label`. `pts_avg`/`stats_season_id`/`stats_season_label`
+        son `NaN`/`None` si el jugador no tiene partidos registrados en
+        ninguna temporada hasta `season_id`. `stats_season_id != season_id`
+        indica que `pts_avg` es de una temporada anterior (fallback), para
+        que la tarjeta pueda avisarlo. `photo_local_path` es la copia
+        descargada a disco por `ingest/baskonia_web` —
+        `components/avatar.py` la prefiere sobre `photo_url` (hotlink
+        remoto), ver su docstring.
     """
     sql = text("""
-        SELECT p.id, p.name, p.number, p.position, p.photo_url, p.photo_local_path, s.pts_avg
+        SELECT p.id, p.name, p.number, p.position, p.photo_url, p.photo_local_path,
+               s.pts_avg, s.season_id AS stats_season_id, se.label AS stats_season_label
         FROM players p
-        LEFT JOIN player_stats_combined s
-               ON s.player_id = p.id AND s.season_id = :season_id
+        LEFT JOIN (
+            SELECT sc.player_id, sc.pts_avg, sc.season_id
+            FROM player_stats_combined sc
+            WHERE sc.season_id = (
+                SELECT MAX(sc2.season_id)
+                FROM player_stats_combined sc2
+                WHERE sc2.player_id = sc.player_id AND sc2.season_id <= :season_id
+            )
+        ) s ON s.player_id = p.id
+        LEFT JOIN seasons se ON se.id = s.season_id
         WHERE p.team_id = :team_id AND p.active = 1
         ORDER BY p.number
     """)
@@ -485,15 +513,20 @@ def player_averages_all(_engine: Engine, player_id: str, season_id: int) -> pd.D
     Returns:
         Una fila por competición jugada más la combinada (`competition =
         'Combinado'`, siempre primera si existe): `competition, gp, min_avg,
-        pts_avg, reb_avg, ast_avg, efg_pct`. Vacío si el jugador no tiene
-        partidos registrados todavía.
+        pts_avg, reb_avg, ast_avg, efg_pct, gp_ft, ft_pct`. `ft_pct` puede ser
+        `NaN` con `gp` > 0 — `gp_ft` cuenta solo los partidos con `ftm`/`fta`
+        cargados (columnas añadidas 2026-08-24, `NULL` en partidos ingeridos
+        antes; ver `player_game_stats.ftm` en `schema.sql`), así que `gp_ft <
+        gp` es cobertura parcial, no "no tira libres". Vacío si el jugador no
+        tiene partidos registrados todavía.
     """
     sql = text("""
-        SELECT 'Combinado' AS competition, gp, min_avg, pts_avg, reb_avg, ast_avg, efg_pct
+        SELECT 'Combinado' AS competition, gp, min_avg, pts_avg, reb_avg, ast_avg, efg_pct, gp_ft, ft_pct
         FROM player_stats_combined
         WHERE player_id = :player_id AND season_id = :season_id
         UNION ALL
-        SELECT c.name AS competition, s.gp, s.min_avg, s.pts_avg, s.reb_avg, s.ast_avg, s.efg_pct
+        SELECT c.name AS competition, s.gp, s.min_avg, s.pts_avg, s.reb_avg, s.ast_avg, s.efg_pct,
+               s.gp_ft, s.ft_pct
         FROM player_stats_by_competition s
         JOIN competitions c ON c.id = s.competition_id
         WHERE s.player_id = :player_id AND s.season_id = :season_id
@@ -638,6 +671,51 @@ def team_scouting_season(_engine: Engine, team_id: str, preferred_season_id: int
 
 
 @st.cache_data(ttl=_TTL, show_spinner=False)
+def player_scouting_season(_engine: Engine, player_id: str, preferred_season_id: int) -> Optional[dict]:
+    """Temporada de la que sacar el scouting de `player_id`: la pedida, o la última con datos.
+
+    Mismo caso que `team_scouting_season` pero a nivel de jugador: un fichaje
+    de esta pretemporada, o cualquiera al que se le pregunte por su temporada
+    en curso antes de que juegue su primer partido, tiene cero filas en
+    `player_game_stats` para `preferred_season_id` aunque sí las tenga en la
+    anterior (con su equipo de entonces). Sin este fallback, el asistente
+    respondía "sin datos" para un jugador que sí tiene historial — sonaba a
+    fallo de la base de datos, no a que la temporada aún no ha empezado para
+    él.
+
+    Args:
+        player_id: jugador del que se quiere el scouting.
+        preferred_season_id: temporada pedida. Nunca se cae hacia ADELANTE
+            (`season_id <= preferred`), mismo motivo que en `team_scouting_season`.
+
+    Returns:
+        `{"season_id": int, "label": str, "is_fallback": bool}`, o `None` si
+        el jugador no tiene partidos en ninguna temporada hasta la pedida.
+    """
+    sql = text("""
+        SELECT g.season_id, s.label
+        FROM player_game_stats pgs
+        JOIN games g ON g.id = pgs.game_id
+        JOIN seasons s ON s.id = g.season_id
+        WHERE pgs.player_id = :player_id
+          AND g.season_id <= :preferred_season_id
+        GROUP BY g.season_id, s.label
+        ORDER BY g.season_id DESC
+        LIMIT 1
+    """)
+    params = {"player_id": player_id, "preferred_season_id": preferred_season_id}
+    df = pd.read_sql(sql, _engine, params=params)
+    if df.empty:
+        return None
+    row = df.iloc[0]
+    return {
+        "season_id": int(row["season_id"]),
+        "label": row["label"],
+        "is_fallback": int(row["season_id"]) != preferred_season_id,
+    }
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
 def team_advanced_profile(_engine: Engine, team_id: str, season_id: int) -> pd.DataFrame:
     """Perfil avanzado de un equipo: combinado + una fila por competición jugada.
 
@@ -646,9 +724,15 @@ def team_advanced_profile(_engine: Engine, team_id: str, season_id: int) -> pd.D
     de SQLite con `ORDER BY` sobre el alias de una consulta compuesta).
 
     Returns:
-        `competition, gp, pace, net_rating, ortg, drtg, efg_pct, ts_pct`.
-        Vacío si el equipo no tiene ningún partido con `game_advanced_stats`
-        en esa temporada.
+        `competition, gp, pace, net_rating, ortg, drtg, efg_pct, ts_pct,
+        gp_ft, ft_pct`. `ft_pct` (acierto de tiro libre, ponderado por
+        volumen — `100*SUM(ftm)/SUM(fta)`, ver la vista) puede ser `NaN` con
+        `gp` > 0: `gp_ft` cuenta solo los partidos con `ftm`/`fta` cargados
+        (columnas añadidas 2026-08-24, `NULL` en partidos ingeridos antes;
+        ver `game_advanced_stats.ftm` en `schema.sql`), así que `gp_ft <
+        gp` es "cobertura parcial", no "el equipo no tira libres". Vacío si
+        el equipo no tiene ningún partido con `game_advanced_stats` en esa
+        temporada.
 
     OJO al comparar `ortg`/`drtg`/`pace` entre competiciones: en ACB son el
     dato OFICIAL de acb.com y en Euroliga una estimación propia (fórmula
@@ -657,11 +741,12 @@ def team_advanced_profile(_engine: Engine, team_id: str, season_id: int) -> pd.D
     pestaña; esta consulta devuelve ambos tal cual, sin normalizar nada.
     """
     sql = text("""
-        SELECT 'Combinado' AS competition, gp, pace, net_rating, ortg, drtg, efg_pct, ts_pct
+        SELECT 'Combinado' AS competition, gp, pace, net_rating, ortg, drtg, efg_pct, ts_pct, gp_ft, ft_pct
         FROM team_stats_combined
         WHERE team_id = :team_id AND season_id = :season_id
         UNION ALL
-        SELECT c.name AS competition, s.gp, s.pace, s.net_rating, s.ortg, s.drtg, s.efg_pct, s.ts_pct
+        SELECT c.name AS competition, s.gp, s.pace, s.net_rating, s.ortg, s.drtg, s.efg_pct, s.ts_pct,
+               s.gp_ft, s.ft_pct
         FROM team_stats_by_competition s
         JOIN competitions c ON c.id = s.competition_id
         WHERE s.team_id = :team_id AND s.season_id = :season_id
@@ -804,3 +889,34 @@ def team_zone_profile(_engine: Engine, team_id: str, season_id: int) -> pd.DataF
         ORDER BY volume DESC
     """)
     return pd.read_sql(sql, _engine, params={"team_id": team_id, "season_id": season_id})
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def player_zone_profile(_engine: Engine, player_id: str, season_id: int) -> pd.DataFrame:
+    """Acierto y volumen de tiro por zona de cancha de UN jugador en la temporada.
+
+    Equivalente de jugador a `team_zone_profile`, pero sin tabla origen
+    equivalente que ofrecer: `game_zone_stats` es un agregado por EQUIPO (la
+    fuente no lo desglosa por jugador), así que aquí se calcula directamente
+    de `shots.zone_id` — el mismo campo que ya resuelve `ingest/common/
+    zones.py` tiro a tiro y que `team_zone_profile` no usa por tener ya el
+    agregado oficial a mano. Al ser un `GROUP BY` sobre filas individuales,
+    `fg_pct` sale automáticamente ponderado por volumen, sin necesitar el
+    `SUM(fg_pct*volume)/SUM(volume)` de la versión de equipo.
+
+    Returns:
+        `zone_label, fg_pct, volume`, de más a menos volumen. Vacío si el
+        jugador no tiene tiros con zona registrados en esa temporada.
+    """
+    sql = text("""
+        SELECT cz.label                        AS zone_label,
+               100.0 * SUM(s.made) / COUNT(*)   AS fg_pct,
+               COUNT(*)                         AS volume
+        FROM shots s
+        JOIN court_zones cz ON cz.id = s.zone_id
+        JOIN games g ON g.id = s.game_id
+        WHERE s.player_id = :player_id AND g.season_id = :season_id
+        GROUP BY cz.label
+        ORDER BY volume DESC
+    """)
+    return pd.read_sql(sql, _engine, params={"player_id": player_id, "season_id": season_id})

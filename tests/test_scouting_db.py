@@ -127,6 +127,57 @@ def test_init_additive_migration_is_idempotent(engine):
     assert "photo_local_path" in columns
 
 
+def test_init_syncs_court_zone_geometry_on_an_existing_db():
+    """Reteselado de `court_zones` (2026-08-27): una BD ya inicializada con la geometría
+    VIEJA (6 zonas, ver historia en `schema.sql`) debe ganar las zonas nuevas y las
+    reajustadas al llamar `init_scouting_db()` SIN `--force`, sin perder ningún tiro
+    ya cargado que apunte a un `zone_id` existente (`_sync_court_zones` nunca borra
+    filas, solo añade/actualiza)."""
+    eng = create_scouting_engine("sqlite:///:memory:")
+    with eng.begin() as conn:
+        conn.execute(text("CREATE TABLE seasons (id INTEGER PRIMARY KEY, label TEXT)"))
+        conn.execute(
+            text(
+                "CREATE TABLE court_zones (id INTEGER PRIMARY KEY, label TEXT UNIQUE NOT NULL,"
+                " x_min REAL NOT NULL, x_max REAL NOT NULL, y_min REAL NOT NULL, y_max REAL NOT NULL)"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO court_zones (id, label, x_min, x_max, y_min, y_max) VALUES"
+                " (1, 'Pintura', 195, 305, 300, 455),"
+                " (2, 'Media dist. izq.', 60, 185, 210, 330)"
+            )
+        )
+        conn.execute(text("CREATE TABLE shots (id INTEGER PRIMARY KEY, zone_id INTEGER REFERENCES court_zones(id))"))
+        conn.execute(text("INSERT INTO shots (id, zone_id) VALUES (1, 2)"))
+
+    assert is_initialized(eng)  # `seasons` ya existe -> ruta sin recrear desde cero
+
+    init_scouting_db(eng)  # sin --force
+
+    with eng.connect() as conn:
+        zone_2 = conn.execute(text("SELECT label, x_min, x_max FROM court_zones WHERE id = 2")).first()
+        zone_10 = conn.execute(text("SELECT label FROM court_zones WHERE id = 10")).first()
+        # El tiro ya cargado, que apuntaba al id 2, sigue existiendo — el id no
+        # se borra ni se reasigna, solo cambian sus límites/etiqueta.
+        shot_zone = conn.execute(text("SELECT zone_id FROM shots WHERE id = 1")).scalar_one()
+    assert zone_2 == ("Ala izq.", 56, 194)  # reajustada, no borrada
+    assert zone_10 == ("Mate",)              # zona nueva, presente
+    assert shot_zone == 2
+    eng.dispose()
+
+
+def test_init_court_zone_sync_is_idempotent(engine):
+    """Una segunda llamada no falla ni duplica filas (upsert por `id`, no `INSERT` a secas)."""
+    init_scouting_db(engine)  # la fixture ya inicializó una vez; esta es la segunda
+    with engine.connect() as conn:
+        count = conn.execute(text("SELECT COUNT(*) FROM court_zones")).scalar_one()
+        pintura = conn.execute(text("SELECT x_min, x_max, y_min, y_max FROM court_zones WHERE id = 1")).first()
+    assert count == 10
+    assert pintura == (195, 305, 300, 455)
+
+
 def test_init_creates_tables_added_after_a_db_was_created():
     """Igual que el backfill de columnas, pero a nivel de TABLA.
 

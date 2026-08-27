@@ -437,3 +437,34 @@ def test_run_upcoming_descarta_partidos_sin_fecha_valida(engine):
     summary = run_upcoming(engine, season=2026, client=client)
 
     assert summary["upcoming"] == 0
+
+
+# ---- tiros libres en bruto (ftm/fta) ----
+# Mismo hueco que en ACB: `_team_totals` los sumaba solo para `ft_rate` y el
+# boxscore por jugador no los emitía. Ver `tests/ingest/test_acb_client.py`.
+
+
+def test_build_raw_game_emits_raw_free_throws_for_team_and_player():
+    raw = build_raw_game(METADATA, BOXSCORE_DF.to_dict("records"), SHOTS_DF.to_dict("records"))
+
+    home_stats = next(t for t in raw["team_stats"] if t["team_id"] == "BAS")
+    assert (home_stats["ftm"], home_stats["fta"]) == (3, 3)  # el único jugador de BAS en el fixture
+    assert home_stats["ft_rate"] == round(100 * 3 / 15, 1)   # la tasa sigue igual
+
+    howard = next(p for p in raw["players"] if p["player_id"] == "EL-HOWARD")
+    assert (howard["ftm"], howard["fta"]) == (3, 3)
+
+
+def test_missing_free_throws_stay_null_instead_of_becoming_zero():
+    """`euroleague_api` devuelve DataFrames, así que un hueco llega como NaN.
+    Convertirlo a 0 sería afirmar "no tiró ninguno" sobre un dato que no está —
+    y `gp_ft` de las vistas existe justamente para distinguir los dos casos."""
+    import numpy as np
+
+    records = BOXSCORE_DF.to_dict("records")
+    records[0] = {**records[0], "FreeThrowsMade": np.nan, "FreeThrowsAttempted": None}
+
+    raw = build_raw_game(METADATA, records, SHOTS_DF.to_dict("records"))
+
+    howard = next(p for p in raw["players"] if p["player_id"] == "EL-HOWARD")
+    assert howard["ftm"] is None and howard["fta"] is None

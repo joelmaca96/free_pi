@@ -10,6 +10,7 @@ import altair as alt
 import streamlit as st
 
 from components.avatar import team_crest_html
+from components.court import shot_chart, shot_chart_caption, zone_breakdown
 from components.header import page_header
 from data import queries
 from data.db import get_read_engine
@@ -185,3 +186,53 @@ else:
         "esta temporada, aunque vengan de partidos distintos. Tramos = en cuántos tramos "
         "reconstruidos ha aparecido (sustituciones incluidas)."
     )
+
+st.divider()
+
+# --------------------------------------------------------- tiros y zonas --
+# Al final de la página a propósito — es la sección más pesada de renderizar
+# (mapa + tabla de zonas) y la que menos hace falta mirar primero al entrar
+# a "Estado del equipo": récord/calendario/carga/quintetos son el vistazo
+# rápido, esto es para quien quiere profundizar.
+#
+# Mismo patrón que el mapa de tiros de "Próximo rival" (`queries.
+# team_shots_season`/`team_zone_profile` + `components/court.py`), aquí sobre
+# el propio Baskonia en vez del rival — ver `zone_breakdown` para por qué el
+# aviso de cobertura y la advertencia de geometría de zonas viven en un solo
+# sitio compartido entre las dos pantallas.
+#
+# Con fallback a la última temporada con tiros registrados si la
+# seleccionada todavía no tiene ninguno — mismo caso real que resuelve
+# `queries.team_scouting_season` para el resto del scouting del rival
+# (inicio de temporada, calendario cargado pero aún sin partidos jugados):
+# antes esta sección miraba `season_id` a pelo y se quedaba en blanco justo
+# en ese momento, en vez de caer a la temporada anterior avisando.
+st.subheader("Mapa de tiros de la temporada")
+shots_scouting = queries.team_scouting_season(engine, team_id, season_id)
+shots_season_id = shots_scouting["season_id"] if shots_scouting else season_id
+shots_df = queries.team_shots_season(engine, team_id, shots_season_id)
+
+if shots_df.empty:
+    st.info("Sin tiros con coordenadas registrados para el Baskonia, ni en esta temporada ni en anteriores.")
+else:
+    if shots_scouting and shots_scouting["is_fallback"]:
+        st.info(
+            f"⚠ El Baskonia todavía no tiene partidos en la temporada seleccionada. "
+            f"**Se muestran los tiros de {shots_scouting['label']}**, su última temporada con datos."
+        )
+    players = ["Todos"] + sorted(shots_df["player_name"].unique().tolist())
+    player_choice = st.selectbox("Jugador", options=players, key="own_shots_player_filter")
+    filtered_df = shots_df if player_choice == "Todos" else shots_df[shots_df["player_name"] == player_choice]
+
+    zones_df = queries.court_zones(engine)
+    # Sin `use_container_width`: `shot_chart` ya fija su propio ancho (dominio
+    # cuadrado) — estirarlo al contenedor aplana la cancha (ver `court.py`).
+    st.altair_chart(shot_chart(filtered_df, zones_df))
+    st.caption(shot_chart_caption(filtered_df))
+
+    # La tabla de zonas es del EQUIPO completo, no del filtro de jugador de
+    # arriba (`game_zone_stats` es un agregado por equipo, sin desglose por
+    # jugador — ver `queries.team_zone_profile`); el propio aviso de
+    # `zone_breakdown` lo aclara.
+    zone_df = queries.team_zone_profile(engine, team_id, shots_season_id)
+    zone_breakdown(zone_df, len(shots_df), scope="team")

@@ -43,6 +43,43 @@ CREATE TABLE team_external_ids (
 );
 CREATE INDEX idx_team_external_team ON team_external_ids(team_id);
 
+-- Fila = un rectángulo del mapa de tiros, en la escala 0-500 de
+-- `ingest/common/zones.py::to_court_coords`. Filas 1/4/5/6 (Pintura, las dos
+-- esquinas de triple, Triple exterior) son ANCLAS geométricas: sus límites
+-- exactos los reutiliza `app/components/court.py::_court_line_layers` para
+-- dibujar la pintura, el aro, el círculo de tiro libre y la línea de triple
+-- (arco elíptico incluido) — moverlas descuadra el dibujo de la cancha, no
+-- solo la clasificación. El resto de filas se pueden reajustar libremente.
+--
+-- RETESELADO (2026-08-27): hasta entonces solo había 6 rectángulos con
+-- huecos grandes entre ellos — verificado en vivo que dejaban entre el 21%
+-- (Euroliga) y el 48% (Supercopa) de los tiros de la BD sin zona
+-- (`zone_id = NULL`, fuera de `game_zone_stats`), ver
+-- `local/features/006-zonas-cancha/00_request.md`. Se añaden las filas 7-9
+-- para cubrir el resto de la zona ofensiva realista (x:15-485, y:50-460) casi
+-- sin huecos — se dejan sin cubrir a propósito las franjas pegadas a banda
+-- (x<15 o x>485 a media distancia de profundidad) y la línea de fondo detrás
+-- del aro (y>455 en la columna de la pintura): son zonas fuera de banda o
+-- pegadas al tablero, sin volumen real de tiro. Las filas nuevas siguen
+-- siendo una aproximación de rectángulo -igual que las 6 originales-: "Ala
+-- izq./der." mezclan tiros de 2 largos y triples de ala (la línea de triple
+-- real es un arco, no cabe en un único corte recto sin multiplicar zonas);
+-- se advierte igual que ya hacía `app/pages/proximo_rival.py` con las zonas
+-- originales.
+--
+-- Fila 10 ("Mate") es la excepción: no es geometría real, es una etiqueta
+-- para los tiros SIN coordenadas medidas (`shots.located = 0`, hoy solo los
+-- mates de ACB, que llegan con el centinela `posX=posY=0` reescalado
+-- exactamente al aro — ver `ingest/acb/adapter.py`). Su rectángulo es un
+-- único punto que cae DENTRO de "Pintura", así que nunca se le asigna por
+-- geometría (`classify_zone` no lo alcanzaría de forma fiable — sin
+-- `ORDER BY`, el rectángulo que "gana" en un solape no está garantizado):
+-- `ingest/common/raw_game.py` asigna este `zone_id` directamente para todo
+-- tiro `located=False`, sin pasar por `classify_zone`. Existe como fila real
+-- (no una constante suelta en Python) para que tenga volumen/acierto propios
+-- en `game_zone_stats`, en vez de seguir apilados dentro de "Pintura" e
+-- inflando su acierto con mates (~100%) mezclados con tiros de media/corta
+-- distancia de verdad.
 CREATE TABLE court_zones (
   id    INTEGER PRIMARY KEY,
   label TEXT UNIQUE NOT NULL,         -- 'Pintura', 'Triple exterior'...
@@ -59,8 +96,13 @@ CREATE TABLE players (
   number      INTEGER NOT NULL,
   position    TEXT NOT NULL,          -- 'Base', 'Alero', 'Ala-pívot', 'Pívot'
   active      INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0,1)),
-  -- Bio/foto: solo se rellena de forma fiable para la plantilla propia,
-  -- vía scraper de baskonia.com. Rivales pueden quedar NULL.
+  -- Bio/foto: de forma AUTORIZADA (bio completa + descarga a disco) solo
+  -- para la plantilla propia, vía scraper de baskonia.com
+  -- (`ingest/baskonia_web`). Para un rival, `ingest/acb` rellena `photo_url`
+  -- (nunca `photo_local_path`) como HOTLINK con la foto real del boxscore
+  -- de acb.com si el hueco está vacío — nunca pisa la de baskonia_web. Puede
+  -- seguir siendo NULL si el jugador no ha aparecido aún en ningún boxscore
+  -- de ACB, o si es de Euroliga (esa fuente no expone fotos todavía).
   photo_url   TEXT,
   -- Copia local del binario de `photo_url`, descargada por
   -- `ingest/baskonia_web/scraper.py::download_player_photos` (ruta relativa
@@ -521,13 +563,19 @@ INSERT INTO teams (id, name, is_own_team) VALUES
   ('gc',   'Gran Canaria',       0),
   ('uni',  'Unicaja Málaga',     0);
 
+-- Ver el comentario sobre `CREATE TABLE court_zones` para la geometría completa
+-- (anclas 1/4/5/6 fijas, resto reteselado 2026-08-27) y qué es la fila 10.
 INSERT INTO court_zones (id, label, x_min, x_max, y_min, y_max) VALUES
-  (1, 'Pintura',              195, 305, 300, 455),
-  (2, 'Media dist. izq.',      60, 185, 210, 330),
-  (3, 'Media dist. der.',     315, 440, 210, 330),
-  (4, 'Triple esquina izq.',   15,  55, 380, 460),
-  (5, 'Triple esquina der.',  445, 485, 380, 460),
-  (6, 'Triple exterior',      160, 340,  50, 170);
+  (1,  'Pintura',              195, 305, 300, 455),
+  (2,  'Ala izq.',              56, 194, 171, 459),
+  (3,  'Ala der.',             306, 444, 171, 459),
+  (4,  'Triple esquina izq.',   15,  55, 380, 460),
+  (5,  'Triple esquina der.',  445, 485, 380, 460),
+  (6,  'Triple exterior',      160, 340,  50, 170),
+  (7,  'Media dist. central',  195, 305, 171, 299),
+  (8,  'Triple ala izq.',       16, 159,  50, 170),
+  (9,  'Triple ala der.',      341, 484,  50, 170),
+  (10, 'Mate',                 250, 250, 455, 455);
 
 INSERT INTO players (id, team_id, name, number, position) VALUES
   ('howard',       'bas', 'Marcus Howard',           0,  'Base'),

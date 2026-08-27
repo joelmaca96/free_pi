@@ -6,7 +6,7 @@ la sitúa en el contexto del partido y la compara con su propia media — porque
 "21 puntos" solo significa algo comparado con lo suyo, y esa comparación la
 hace la herramienta y no el modelo a ojo.
 """
-from .base import ToolContext, artifact, clean_dict, fail, ok, records, register, schema
+from .base import ToolContext, artifact, clean_dict, fail, ok, records, register, schema, season_with_fallback
 
 try:  # pragma: no cover - ver nota en tools/context.py
     from app.data import queries, queries_assistant
@@ -17,6 +17,22 @@ except ImportError:  # pragma: no cover
 def _season(ctx: ToolContext, season_id) -> int:
     """Temporada pedida, o la seleccionada en la barra lateral (§5.2)."""
     return ctx.season_id if season_id is None else int(season_id)
+
+
+def _player_season(ctx: ToolContext, player_id: str, season_id):
+    """Como `_season`, cayendo a la última temporada con partidos de `player_id` si hace falta.
+
+    Devuelve `(season, warning)` — ver `season_with_fallback`. `warning` es
+    `None` salvo que se haya caído a una temporada anterior a la pedida.
+    """
+    preferred = _season(ctx, season_id)
+    return season_with_fallback(queries.player_scouting_season, ctx.engine, player_id, preferred)
+
+
+def _team_season(ctx: ToolContext, team_id: str, season_id):
+    """Igual que `_player_season`, pero para herramientas acotadas por equipo (roster, minutos)."""
+    preferred = _season(ctx, season_id)
+    return season_with_fallback(queries.team_scouting_season, ctx.engine, team_id, preferred)
 
 
 @register(
@@ -75,7 +91,7 @@ def player_game(
     """
     from .. import resolve
 
-    season = _season(ctx, season_id)
+    season, fallback_warning = _player_season(ctx, player_id, season_id)
     if game_id is None:
         game_id = resolve.resolve_player_game(ctx.engine, player_id, season_id=season, when=when)
     if game_id is None:
@@ -98,7 +114,7 @@ def player_game(
     combined = averages[averages["competition"] == "Combinado"]
     shots = queries_assistant.game_shots_for_player(ctx.engine, game_id, player_id)
 
-    warnings = []
+    warnings = [fallback_warning] if fallback_warning else []
     if line.get("fta") is None:
         warnings.append("Este partido no trae tiros libres (columna vacía en la base de datos), no es que no tirara.")
 
@@ -136,7 +152,7 @@ def player_game(
 )
 def player_game_log(ctx: ToolContext, player_id: str, season_id: int = None, limit: int = None) -> dict:
     """Log de partidos ya existente en `queries.py`, recortado a los últimos N."""
-    season = _season(ctx, season_id)
+    season, fallback_warning = _player_season(ctx, player_id, season_id)
     log = queries.player_game_log(ctx.engine, player_id, season)
     if log.empty:
         return fail("sin datos", detail=f"{player_id} no tiene partidos en la temporada {season}.",
@@ -150,6 +166,7 @@ def player_game_log(ctx: ToolContext, player_id: str, season_id: int = None, lim
         scope=f"temporada {season}",
         gp=total,
         truncated_from=total if len(rows) < total else None,
+        warnings=[fallback_warning] if fallback_warning else None,
         artifact=artifact("table", rows, title="Partido a partido"),
     )
 
@@ -158,8 +175,9 @@ def player_game_log(ctx: ToolContext, player_id: str, season_id: int = None, lim
     "player_averages",
     family="player",
     description=(
-        "Medias de un jugador por competición y combinadas, con partidos jugados (gp). "
-        "Cita siempre el gp: 'en 43 partidos', no 'esta temporada'."
+        "Medias de un jugador por competición y combinadas, con partidos jugados (gp) y, si esta "
+        "base de datos los tiene, sus tiros libres (volumen y acierto). Cita siempre el gp: "
+        "'en 43 partidos', no 'esta temporada'."
     ),
     parameters=schema(
         {"player_id": {"type": "string"}, "season_id": {"type": "integer"}}, required=["player_id"]
@@ -167,23 +185,49 @@ def player_game_log(ctx: ToolContext, player_id: str, season_id: int = None, lim
     artifact="table",
 )
 def player_averages(ctx: ToolContext, player_id: str, season_id: int = None) -> dict:
-    """Medias de `player_stats_*`, una fila por competición más la combinada."""
-    season = _season(ctx, season_id)
+    """Medias de `player_stats_*`, una fila por competición más la combinada.
+
+    Los tiros libres van en un bloque aparte (`free_throws`) y solo si esta
+    base de datos los tiene: `efg_pct` los excluye por definición, así que sin
+    ellos no hay forma de leer el juego desde la línea — y prometerlos cuando
+    no están es justo lo que evita el sondeo de capacidades (§7.3).
+    """
+    season, fallback_warning = _player_season(ctx, player_id, season_id)
     averages = queries.player_averages_all(ctx.engine, player_id, season)
     if averages.empty:
         return fail("sin datos", detail=f"{player_id} no tiene partidos en la temporada {season}.",
                     suggestion="Prueba con otra temporada, o comprueba el id con resolve_entity.")
     rows = records(averages)
     combined = next((r for r in rows if r["competition"] == "Combinado"), rows[0])
+
+    warnings = []
+    if fallback_warning:
+        warnings.append(fallback_warning)
+    warnings.append(
+        "Los ratings y el pace de Euroliga son estimaciones propias (Dean Oliver), no dato oficial: "
+        "dilo si comparas ACB con Euroliga."
+    )
+    free_throws = []
+    if ctx.capabilities.free_throws:
+        free_throws = records(queries_assistant.player_free_throws(ctx.engine, player_id, season))
+        # `gp_ft` por debajo de `gp` significa que parte de los partidos se
+        # ingirieron antes de que existieran las columnas: el porcentaje es
+        # correcto pero está calculado sobre menos partidos de los que jugó.
+        if any(row.get("gp_ft", 0) < row.get("gp", 0) for row in free_throws):
+            warnings.append(
+                "Algunos partidos no traen tiros libres: el acierto desde la línea está calculado "
+                "sobre los partidos de `gp_ft`, no sobre `gp`."
+            )
+    else:
+        warnings.append("Esta base de datos no tiene tiros libres: no hables del juego desde la línea.")
+
+    data = {"averages": rows, "free_throws": free_throws}
     return ok(
-        rows,
+        data,
         source="player_stats_by_competition / player_stats_combined",
         scope=f"temporada {season}",
         gp=combined.get("gp"),
-        warnings=[
-            "Los ratings y el pace de Euroliga son estimaciones propias (Dean Oliver), no dato oficial: "
-            "dilo si comparas ACB con Euroliga."
-        ],
+        warnings=warnings,
         artifact=artifact("table", rows, title="Medias por competición"),
     )
 
@@ -208,7 +252,13 @@ def player_averages(ctx: ToolContext, player_id: str, season_id: int = None) -> 
 )
 def player_shot_profile(ctx: ToolContext, player_id: str, season_id: int = None, game_id: str = None) -> dict:
     """Perfil de tiro por zona + los tiros crudos para pintar el mapa."""
-    season = _season(ctx, season_id)
+    # Sin fallback de temporada si se pide un partido concreto: `game_id` ya
+    # fija la temporada real, y cambiarla por debajo mandaría tiros de un
+    # partido distinto al pedido.
+    if game_id:
+        season, fallback_warning = _season(ctx, season_id), None
+    else:
+        season, fallback_warning = _player_season(ctx, player_id, season_id)
     zones = queries_assistant.player_zone_profile(ctx.engine, player_id, season, game_id=game_id)
     if zones.empty:
         return fail(
@@ -225,6 +275,7 @@ def player_shot_profile(ctx: ToolContext, player_id: str, season_id: int = None,
         records(zones),
         source="shots + court_zones",
         scope=f"partido {game_id}" if game_id else f"temporada {season}",
+        warnings=[fallback_warning] if fallback_warning else None,
         artifact=artifact("shot_chart", records(shots, limit=1200), title="Mapa de tiros"),
     )
 
@@ -247,7 +298,7 @@ def player_shot_profile(ctx: ToolContext, player_id: str, season_id: int = None,
 )
 def player_form(ctx: ToolContext, player_id: str, last_n: int = 5, season_id: int = None) -> dict:
     """El "está en racha" con un número detrás, no con un adjetivo."""
-    season = _season(ctx, season_id)
+    season, fallback_warning = _player_season(ctx, player_id, season_id)
     form = queries_assistant.player_form(ctx.engine, player_id, season, last_n)
     if form is None:
         return fail(
@@ -255,7 +306,13 @@ def player_form(ctx: ToolContext, player_id: str, last_n: int = 5, season_id: in
             detail=f"{player_id} tiene menos de 2 partidos en la temporada {season}: no hay tendencia que medir.",
             suggestion="Usa player_game para el partido suelto que sí exista.",
         )
-    return ok(form, source="player_game_stats", scope=f"temporada {season}", gp=form["gp"])
+    return ok(
+        form,
+        source="player_game_stats",
+        scope=f"temporada {season}",
+        gp=form["gp"],
+        warnings=[fallback_warning] if fallback_warning else None,
+    )
 
 
 @register(
@@ -278,7 +335,7 @@ def player_form(ctx: ToolContext, player_id: str, last_n: int = 5, season_id: in
 )
 def player_minutes_load(ctx: ToolContext, team_id: str, n_games: int = 5, season_id: int = None) -> dict:
     """Reparto de minutos (`queries.minutes_load`), en formato largo."""
-    season = _season(ctx, season_id)
+    season, fallback_warning = _team_season(ctx, team_id, season_id)
     load = queries.minutes_load(ctx.engine, team_id, season, n_games)
     if load.empty:
         return fail("sin datos", detail=f"No hay minutos registrados de {team_id} en la temporada {season}.")
@@ -292,5 +349,6 @@ def player_minutes_load(ctx: ToolContext, team_id: str, n_games: int = 5, season
         rows,
         source="player_game_stats",
         scope=f"últimos {n_games} partidos · temporada {season}",
+        warnings=[fallback_warning] if fallback_warning else None,
         artifact=artifact("table", rows, title="Carga de minutos"),
     )

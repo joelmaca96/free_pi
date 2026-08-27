@@ -20,6 +20,15 @@ from typing import Optional
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
+# `id` de la fila 'Mate' del seed de `court_zones` (`schema.sql`). NO se llega
+# a ella por geometría (`classify_zone`): su rectángulo es un único punto que
+# cae dentro de 'Pintura', así que el llamador debe asignarla directamente
+# para todo tiro `located=False` (ver `ingest/common/raw_game.py`) en vez de
+# pasar sus coordenadas por `classify_zone`. Constante y no una consulta a
+# `court_zones.label` en cada tiro: es un id estable del seed, no un dato que
+# pueda variar entre bases de datos.
+MATE_ZONE_ID = 10
+
 # Calibración de la cancha estilizada de `court_zones` (seed de `schema.sql`).
 # OJO: esa cancha NO está a escala real, está comprimida a lo ancho — el
 # vértice del arco de triple queda a 285 unidades del aro pero las rectas de

@@ -140,6 +140,25 @@ def _merge_stream_deltas(chunks: List[Dict[str, Any]], on_text: TextSink) -> Dic
     }
 
 
+def first_choice(data: Dict[str, Any]) -> Dict[str, Any]:
+    """La primera `choice` de la respuesta, o un `LLMError` con lo que diga el proveedor.
+
+    No todos los proveedores del dialecto devuelven los errores por el código
+    HTTP: OpenRouter, por ejemplo, contesta 200 con un cuerpo `{"error": ...}`
+    y sin `choices` cuando el modelo de turno está saturado o caído. Sin esto,
+    el `data["choices"][0]` de más abajo peta con "'NoneType' object is not
+    subscriptable" — un mensaje que no dice ni qué proveedor falló ni por qué,
+    y que parece un bug del asistente cuando es una respuesta del servidor.
+    """
+    choices = data.get("choices") or []
+    if choices:
+        return choices[0]
+    error = data.get("error")
+    if isinstance(error, dict) and error.get("message"):
+        raise LLMError(f"El proveedor ha devuelto un error: {error['message']}", retryable=True)
+    raise LLMError(f"El proveedor ha devuelto una respuesta sin contenido: {data}")
+
+
 def translate_error(exc: Optional[Exception]) -> LLMError:
     """Excepción del SDK -> `LLMError` con una frase que la interfaz pueda enseñar.
 
@@ -228,18 +247,27 @@ class OpenAICompatClient:
         for attempt in range(len(_RETRY_WAITS_SECONDS) + 1):
             try:
                 return self._request(payload, on_text)
+            except LLMError as exc:
+                # Ya viene traducido (error en el cuerpo, ver `first_choice`).
+                # Volver a pasarlo por `translate_error` solo lo envolvería en
+                # otra frase y escondería la del proveedor.
+                if not exc.retryable:
+                    raise
+                last_error = exc
             except Exception as exc:  # el SDK tiene su propia jerarquía; se clasifica por status
                 if getattr(exc, "status_code", None) not in _RETRYABLE_STATUS:
                     raise translate_error(exc) from exc
                 last_error = exc
                 if attempt < len(_RETRY_WAITS_SECONDS):
                     time.sleep(_RETRY_WAITS_SECONDS[attempt])
+        if isinstance(last_error, LLMError):
+            raise last_error
         raise translate_error(last_error)
 
     def _request(self, payload: Dict[str, Any], on_text: TextSink) -> tuple:
         if on_text is None:
             data = self._client.chat.completions.create(**payload).model_dump()
-            choice = data["choices"][0]
+            choice = first_choice(data)
             return choice["message"], data.get("usage") or {}, choice.get("finish_reason")
 
         stream = self._client.chat.completions.create(

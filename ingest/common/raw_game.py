@@ -19,9 +19,16 @@ las dos, así la resolución de identidad/carga se escribe una sola vez:
                  # entrada del OTRO equipo de este mismo partido).
   "players": [{"player_id":.., "team_id":.., "name":.., "number":.., "position":..,
                "minutes":.., "pts":.., "reb":.., "ast":.., "efg_pct":..,
-               "ftm":.., "fta":..}, ...],
+               "ftm":.., "fta":.., "photo_url":..}, ...],
            # "ftm"/"fta" opcionales (tiros libres convertidos/intentados): una
            # fuente que no los dé deja las columnas en NULL, no en 0.
+           # "photo_url" opcional (hotlink, nunca se descarga a disco desde
+           # aquí): RELLENA `players.photo_url` solo si está vacío, nunca lo
+           # pisa — la plantilla propia la fija `ingest/baskonia_web`, que es
+           # la fuente autorizada y siempre gana; esto es solo para que un
+           # RIVAL (sin scraper propio) deje de depender del badge de
+           # iniciales. Ver `ingest/acb/adapter.py` (`headshotImageUrl` del
+           # boxscore oficial) para la fuente real que lo puebla hoy.
   "lineups": [{"team_id":.., "player_ids":[...], "minutes":.., "plus_minus":..}, ...],
            # opcional: si no se da (lista vacía) pero sí hay "play_by_play" +
            # "starters", los quintetos se reconstruyen jugada a jugada (ver
@@ -48,6 +55,7 @@ las dos, así la resolución de identidad/carga se escribe una sola vez:
 """
 from typing import Any, Dict, List, Optional
 
+from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from ingest.common.game_clock import game_clock_to_seconds
@@ -69,7 +77,7 @@ from ingest.common.schema_types import (
     ShotRecord,
     StintRecord,
 )
-from ingest.common.zones import classify_zone
+from ingest.common.zones import MATE_ZONE_ID, classify_zone
 
 
 def parse_and_resolve(conn: Connection, raw: Dict[str, Any], source: str) -> NormalizedGame:
@@ -94,6 +102,15 @@ def parse_and_resolve(conn: Connection, raw: Dict[str, Any], source: str) -> Nor
             number=player.get("number"), position=player.get("position"),
         )
         player_lookup[player["player_id"]] = player_id
+        if player.get("photo_url"):
+            # Solo RELLENA el hueco (`COALESCE(photo_url, ...)`, no al revés):
+            # un boxscore de partido no es la fuente autorizada de la
+            # plantilla propia, así que nunca pisa lo que ya haya puesto
+            # `ingest/baskonia_web` — ver nota del contrato arriba.
+            conn.execute(
+                text("UPDATE players SET photo_url = COALESCE(photo_url, :photo_url) WHERE id = :id"),
+                {"photo_url": player["photo_url"], "id": player_id},
+            )
         boxscore.append(
             PlayerGameStat(
                 player_id=player_id, minutes=player["minutes"], pts=player["pts"],
@@ -143,11 +160,18 @@ def parse_and_resolve(conn: Connection, raw: Dict[str, Any], source: str) -> Nor
 
     # Los tiros de un jugador ausente del boxscore (inconsistencia real entre
     # endpoints de una misma fuente) se descartan en vez de fallar toda la carga.
+    #
+    # `located=False` (hoy solo mates de ACB, sin coordenadas medidas — ver
+    # `shots.located` en `schema.sql`) se asigna a `MATE_ZONE_ID` DIRECTAMENTE,
+    # sin pasar por `classify_zone`: su centinela reescalado cae exactamente
+    # dentro de 'Pintura', y sin `ORDER BY` en `classify_zone` qué zona "gana"
+    # el solape no está garantizado — ver el comentario de `court_zones` en
+    # `schema.sql`.
     shots = [
         ShotRecord(
             player_id=player_lookup[row["player_id"]], team_id=team_lookup[row["team_id"]],
             pos_x=row["x"], pos_y=row["y"], made=row["made"],
-            zone_id=classify_zone(conn, row["x"], row["y"]),
+            zone_id=MATE_ZONE_ID if not row.get("located", True) else classify_zone(conn, row["x"], row["y"]),
             located=row.get("located", True),
         )
         for row in raw.get("shots", [])

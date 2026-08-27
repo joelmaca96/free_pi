@@ -98,11 +98,11 @@ Implementado y poblando datos reales:
 | Tabla | Estado |
 |---|---|
 | `games` | ✅ calendario completo por temporada (recorrido de `weekId` hacia atrás desde la última semana disponible hasta el límite real de la edición) |
-| `game_advanced_stats` | ✅ **con los números OFICIALES de acb.com** (`AdvancedStats/match-advanced-stats`: posesiones/pace/ortg/drtg/net_rating/four factors/ast·stl·blk %), no una estimación propia — solo `ast_to_ratio` se calcula desde el boxscore (no viene en ese endpoint) |
+| `game_advanced_stats` | ✅ tiros libres en bruto (`ftm`/`fta`) además de `ft_rate` desde 2026-08-25, y **con los números OFICIALES de acb.com** (`AdvancedStats/match-advanced-stats`: posesiones/pace/ortg/drtg/net_rating/four factors/ast·stl·blk %), no una estimación propia — solo `ast_to_ratio` se calcula desde el boxscore (no viene en ese endpoint) |
 | `game_team_quarter_stats` | ✅ puntos anotados/encajados por cuarto (desde el boxscore por cuarto) |
-| `player_game_stats` | ✅ boxscore completo por jugador |
+| `player_game_stats` | ✅ boxscore completo por jugador, con `ftm`/`fta` desde 2026-08-25 |
 | `lineups` + `lineup_players` | ✅ reconstruidos desde play-by-play real (quinteto inicial + sustituciones, `playType` decodificado en vivo); desde 2026-08-24 con `lineups.team_id` explícito |
-| `lineup_stints` + `lineup_stint_players` | ✅ (2026-08-24) tramos con reloj y marcador, del mismo recorrido de eventos — **requieren reingesta** para poblarse |
+| `lineup_stints` + `lineup_stint_players` | ✅ (2026-08-24) tramos con reloj y marcador, del mismo recorrido de eventos. Reingesta de 2025-2026 hecha el 2026-08-25: **34.496 tramos** cargados y `lineups.team_id` poblado en las 27.900 filas |
 | `shots` | ✅ con coordenadas reales (`MatchShots/match-shots`), tiros libres excluidos (no traen coordenadas) |
 | `game_zone_stats` | ✅ agregado automáticamente desde `shots` por el loader |
 | `score_progression` | ✅ derivado del play-by-play (deduplicado por cambio de marcador) |
@@ -121,6 +121,23 @@ documentado pero sin integrar antes de hoy): catálogo real
 previo), no rompe la carga del partido.
 
 **Falta / limitaciones conocidas:**
+- **Boxscore incompleto pese a que la fuente da mucho más (hallazgo 2026-08-27, verificado en
+  vivo contra `api2.acb.com` con peticiones reales, no fixtures).** `Result/boxscores` trae por
+  jugador (y agregado a nivel de equipo en `stats.total`) `personalFouls`, `foulsDrawn`, `steals`,
+  `turnovers`, `blocks`, `receivedBlocks`, `offRebounds`/`defRebounds` por separado, `dunks`,
+  `plusMinus` y `rating` (PIR) — hoy `ingest/acb/adapter.py` solo mapea `pts`, `reb` (total),
+  `ast`, `ftm`/`fta`, `minutes` y `starter`. La misma respuesta trae además boxscore completo
+  **por cuarto** (`statsByPeriods`, quarters 1-4, no solo el total) y, a nivel de partido,
+  `arena`/`attendance`/`referees`/`headCoach`/`assistantCoaches` — nada de esto requiere una
+  llamada HTTP nueva, ya viaja en la respuesta que se descarga hoy. `AdvancedStats/
+  player-advanced-stats?matchId=...&playerLicense=...` (estadísticas avanzadas OFICIALES por
+  JUGADOR, con contexto partido/temporada/victorias/derrotas) tampoco se llama nunca — solo su
+  equivalente de equipo. El jugada-a-jugada (`PlayByPlay/play-by-play`) trae 37 códigos
+  `playType` distintos; solo 9 están decodificados (tiros + sustituciones/quinteto inicial) —
+  decodificados empíricamente el resto cruzando deltas de `playerStats` evento a evento: robo=103,
+  pérdida=106, tapón=102, rebote of/def=101/104, falta recibida=110, y **falta personal en 6
+  códigos distintos sin diferenciar (161/159/160/109/537/166)**. Plan completo de qué traer y
+  cómo integrarlo en la app/asistente: [02_plan_stats_completas.md](02_plan_stats_completas.md).
 - **Clutch stats** (últimos 5 min ± 5 puntos): **resuelto (2026-08-24)**. El dato de tiempo ya
   circulaba por el play-by-play y se descartaba al agregar; ahora `reconstruct_lineups` devuelve
   también los tramos y el loader los escribe en `lineup_stints`. Los partidos ya ingeridos
@@ -128,6 +145,17 @@ previo), no rompe la carga del partido.
   `clutch_lineups` mientras tanto, en vez de ofrecer una respuesta que no puede sostener.
 - **Segmentos de 2 minutos** / eficiencia post-tiempo-muerto: siguen sin implementarse, aunque
   con `lineup_stints` el trabajo restante es menor.
+- **Tiros libres (`ftm`/`fta`): resuelto (2026-08-25).** Las columnas existían desde el
+  2026-08-24 pero **ningún adapter las emitía**: `_team_totals` sumaba `ftm`/`fta` solo para
+  derivar `ft_rate` y los descartaba, y el boxscore por jugador ni los miraba — así que
+  `player_game_stats.fta` seguía en NULL en las 17.455 filas por muchas reingestas que se
+  hicieran. Corregido en los cuatro puntos: los dos caminos de equipo de ACB (estimado y
+  oficial — `match-advanced-stats` solo da la TASA, el recuento sigue saliendo del boxscore),
+  el jugador de ACB, y equipo + jugador de Euroliga.
+
+  Un matiz que los tests fijan: un campo AUSENTE en la fuente se carga como `NULL`, no como 0.
+  `0` significa "no tiró ni un libre" y `NULL` "esta fuente no lo dio para este partido"; son
+  cosas distintas y `gp_ft` de las vistas existe justamente para separarlas.
 - **On/off de quintetos** (impacto de combinaciones de jugadores más allá de minutos/±):
   cubierto parcialmente por `app/data/queries_assistant.py::player_pair_impact` (rendimiento con
   dos jugadores juntos frente a por separado), calculado sobre los quintetos ya reconstruidos.
@@ -217,17 +245,42 @@ competition_id)` igual que ACB — necesario desde que hay dos fuentes escribien
     backoff actual **no es suficiente** para completar un backfill de temporada entera de forma
     fiable. Pendiente: backoff más agresivo/exponencial, o una estrategia de reanudación
     (checkpoint de qué partidos ya se cargaron) en vez de reintentar toda la temporada.
-  - `stl_pct`/`blk_pct` en `game_advanced_stats` usan columnas (`Steals`/`BlocksFavour`)
-    **asumidas, no verificadas en vivo** (a diferencia de todo lo demás en este módulo) —
-    degradan a 0 en silencio si el nombre real difiere.
+  - `stl_pct`/`blk_pct` en `game_advanced_stats` usan columnas `Steals`/`BlocksFavour` —
+    **verificadas en vivo el 2026-08-27** (petición real a `live.euroleague.net/api/Boxscore`,
+    fuera de `euroleague_api`): son los nombres reales. Ya **no** están "asumidas, no
+    verificadas" como decía esta nota hasta ahora.
   - `quarter_stats` solo se rellena si se pasa `play_by_play_records` explícitamente (no hay
-    boxscore-por-cuarto como en ACB; se deriva sumando eventos de anotación por cuarto).
+    boxscore-por-cuarto como en ACB; se deriva sumando eventos de anotación por cuarto) — y a
+    diferencia de ACB, el propio `Boxscore` de Euroliga (`ByQuarter`/`EndOfQuarter`) tampoco da
+    boxscore por cuarto A NIVEL DE JUGADOR, solo puntos de equipo: asimetría real entre fuentes,
+    no un hueco de implementación.
   - `position` de jugador siempre `None` (no viene en el boxscore de `euroleague_api`).
-  - No hay endpoint de estadísticas avanzadas oficiales equivalente al de ACB — todo
-    (ortg/drtg/pace) es estimación propia (Dean Oliver), no dato oficial de Euroliga.
+  - No hay endpoint de estadísticas avanzadas oficiales equivalente al de ACB **por partido** —
+    todo (ortg/drtg/pace) es estimación propia (Dean Oliver), no dato oficial de Euroliga. Sí hay
+    (verificado en vivo 2026-08-27, módulos `player_stats.py`/`team_stats.py`/`game_stats.py` de
+    `euroleague_api`, nunca importados por `ingest/euroleague/client.py`) estadísticas oficiales
+    de LIGA agregadas por temporada (`traditional`/`advanced`/`misc`/`scoring`, con líderes) —
+    otra granularidad, no un boxscore de partido, ver [02_plan_stats_completas.md
+    §Fase 5](02_plan_stats_completas.md#fase-5--explícitamente-fuera-de-alcance-documentar-no-ingerir)
+    para por qué no se prioriza traerlo aparte.
+  - **Boxscore por jugador incompleto igual que en ACB (hallazgo 2026-08-27, verificado en vivo
+    contra `live.euroleague.net/api/Boxscore`).** El boxscore ya trae por jugador
+    `FoulsCommited`/`FoulsReceived` (sic, typo real de la API), `BlocksAgainst`,
+    `Valuation` (PIR), `Plusminus`, `OffensiveRebounds`/`DefensiveRebounds` por separado — hoy
+    `ingest/euroleague/adapter.py` solo mapea `pts`, `reb` (total), `ast`, `ftm`/`fta`,
+    `minutes`. El jugada-a-jugada ya trae `PLAYTYPE` legible (`CM`=falta cometida,
+    `RV`=falta recibida, `ST`/`TO`/`FV`/`AG`/`O`/`D`/`AS`) que el propio adapter descarta a
+    propósito hoy (`ingest/euroleague/adapter.py:236`). Plan de qué traer:
+    [02_plan_stats_completas.md](02_plan_stats_completas.md).
 
 ## 3. Qué falta en conjunto (independiente de la fuente)
 
+- **Boxscore ampliado (faltas, robos, tapones, pérdidas, rebote of/def, +/-, PIR) por jugador y
+  equipo, en las DOS fuentes por igual** (hallazgo 2026-08-27, ver §2.2/§2.3 arriba): es el hueco
+  de mayor volumen de todos los listados aquí — aproximadamente la mitad de cada boxscore por
+  jugador se descarta hoy, y ya viaja en las respuestas que se descargan, sin llamada HTTP
+  adicional. Plan de implementación completo, por fases, con la integración en la app y en el
+  asistente: [02_plan_stats_completas.md](02_plan_stats_completas.md).
 - **Equipos duplicados por cambio de patrocinador entre temporadas**: la normalización de
   nombres (`ingest/common/identity.py`, `_KNOWN_TEAM_ALIASES`) cubre los casos conocidos
   detectados hasta ahora (p.ej. "Kosner Baskonia"/"Bitci Baskonia"), pero es una lista
@@ -237,18 +290,30 @@ competition_id)` igual que ACB — necesario desde que hay dos fuentes escribien
   backfill fiable de ambas competiciones de una sentada.
 - **Clutch stats / on-off / segmentos de 2 min** (ver 2.2): con los datos ya disponibles de ACB
   es la ampliación más barata de construir si se necesita más adelante.
-- **`court_zones` no cubre la cancha entera → `game_zone_stats` es un subconjunto sesgado**
-  (hallazgo 2026-08-24, al construir la pantalla "Próximo rival"). Las 6 zonas semilla de
-  `schema.sql` son rectángulos sueltos que dejan fuera la mayor parte de la superficie, así
-  que el loader deja `shots.zone_id = NULL` en la mayoría de tiros y nunca llegan a
-  `game_zone_stats`: **52% de los tiros sin zona en Euroliga, 75% en Copa del Rey, 77% en ACB,
-  79% en Supercopa** (medido sobre los 95.263 tiros de `data/baskonia.db`). Consecuencia
-  práctica: un agregado por zona NO se puede leer como "acierto del equipo desde el triple/la
-  pintura" — es el acierto dentro de ese rectángulo concreto (verificado con Olympiacos
-  2025-2026: salía "66% en Triple exterior", que como 3P% de equipo es falso). Las
-  **coordenadas en sí están bien** (98% de los tiros caen dentro del cuadro 0-500 que asume
-  `app/components/court.py`), así que el mapa de tiros sí es fiable; lo que falla es la
-  discretización en zonas. `app/pages/proximo_rival.py` declara la cobertura y pliega esa
-  tabla en vez de presentarla como dato de scouting. Arreglarlo de verdad es redefinir
-  `court_zones` para que teselen media pista (y recalcular `game_zone_stats`), no un cambio de
-  la capa de interfaz.
+- ~~**`court_zones` no cubre la cancha entera → `game_zone_stats` es un subconjunto sesgado**~~
+  **RESUELTO 2026-08-27 (reteselado).** Las 6 zonas semilla originales de `schema.sql` eran
+  rectángulos sueltos con huecos grandes entre ellos (hallazgo 2026-08-24, ver historia arriba:
+  52-79% de los tiros de `data/baskonia.db` sin zona según la competición). Se añadieron 3 zonas
+  nuevas ("Media dist. central", "Triple ala izq./der.") y se ensancharon las dos de media
+  distancia ("Ala izq./der.") para cubrir casi toda la superficie ofensiva realista
+  (x:15-485, y:50-460) — ver el comentario sobre `court_zones` en `schema.sql` para la
+  geometría completa y qué zonas siguen siendo anclas del dibujo de
+  `app/components/court.py`. Sigue siendo una aproximación de rectángulos, no la línea de
+  triple real: "Ala izq./der." mezclan tiros de 2 largos y triples de ala en la misma zona
+  (`app/pages/proximo_rival.py` lo advierte junto a la tabla). Una BD ya inicializada gana la
+  geometría nueva sola (`init_scouting_db` → `_sync_court_zones`, mismo mecanismo que las
+  columnas aditivas), pero los tiros YA CARGADOS necesitan `tools/retile_court_zones.py
+  --apply` para reclasificarse contra ella y regenerar `game_zone_stats` — sin eso,
+  `shots.zone_id` se queda con la clasificación vieja indefinidamente (se fija una sola vez, al
+  ingerir).
+  - De paso, se separaron los mates (antes contados dentro de "Pintura", inflando su acierto
+    con ~100% de mates mezclado con tiros de media/corta distancia reales) en una zona propia
+    ("Mate", id 10): `ingest/common/raw_game.py` se la asigna directamente a todo tiro
+    `located=False`, sin pasar por `classify_zone` (su centinela cae exactamente dentro de
+    "Pintura" — sin `ORDER BY` en `classify_zone`, el solape no resolvía de forma fiable).
+  - Se expuso también `ft_pct`/`ftm`/`fta` (ya calculados en las vistas desde el 2026-08-24,
+    pero sin usar en `app/data/queries.py` ni en ninguna página) en el detalle de partido, el
+    perfil avanzado de equipo y las medias de jugador — tiro libre no es un dato de zona de
+    cancha (se tira siempre desde el mismo punto fijo) y forzarlo dentro de `shots`/
+    `court_zones` habría exigido ingerirlo con otro centinela sin coordenadas reales; la vía
+    correcta era esta, no una zona más.

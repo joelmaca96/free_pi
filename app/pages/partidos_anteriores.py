@@ -36,11 +36,23 @@ with list_col:
     if comp_choice != "Todas":
         competition_id = int(competitions.loc[competitions["name"] == comp_choice, "id"].iloc[0])
 
-    games_df = queries.list_past_games(engine, team_id, season_id, today, competition_id)
+    # Temporada de la que sacar los partidos: la seleccionada, o la última con
+    # partidos disputados si la seleccionada aún no tiene ninguno todavía (recién
+    # arrancada, ver `queries.team_scouting_season` — mismo caso real que resuelve
+    # para el rival en "Próximo rival", aquí aplicado al propio Baskonia).
+    season_info = queries.team_scouting_season(engine, team_id, season_id)
+    games_season_id = season_info["season_id"] if season_info else season_id
+    games_df = queries.list_past_games(engine, team_id, games_season_id, today, competition_id)
 
     if games_df.empty:
         st.info("No hay partidos ya disputados para este filtro todavía.")
         st.stop()
+
+    if season_info and season_info["is_fallback"]:
+        st.info(
+            f"La temporada seleccionada todavía no tiene partidos disputados — se muestran "
+            f"los de **{season_info['label']}**, la última temporada con partidos."
+        )
 
     display_df = games_df.copy()
     display_df["Resultado"] = display_df.apply(
@@ -132,9 +144,18 @@ with detail_col:
         if adv_df.empty:
             st.info("Sin estadísticas avanzadas para este partido.")
         else:
+            # `ft_pct` no viene calculado de la tabla (solo `ftm`/`fta` en bruto,
+            # ver `queries.game_advanced_stats`): `.where(fta > 0)` deja en NaN
+            # tanto el 0 tiros libres como el `NULL` de partidos cargados antes
+            # de que existiera la columna — mismo criterio que ya usa el resto
+            # de métricas de esta tabla para "sin dato" (`notna()` más abajo).
+            adv_df = adv_df.assign(ft_pct=(100 * adv_df["ftm"] / adv_df["fta"]).where(adv_df["fta"] > 0))
             us_row = adv_df[adv_df["team_id"] == team_id]
             them_row = adv_df[adv_df["team_id"] != team_id]
-            metrics = [("ortg", "ORtg"), ("efg_pct", "eFG%"), ("ts_pct", "TS%"), ("tov_pct", "TOV%"), ("orb_pct", "ORB%")]
+            metrics = [
+                ("ortg", "ORtg"), ("efg_pct", "eFG%"), ("ts_pct", "TS%"),
+                ("tov_pct", "TOV%"), ("orb_pct", "ORB%"), ("ft_pct", "FT%"),
+            ]
             st.markdown("**Avanzadas** (Baskonia · rival)")
             for key, label in metrics:
                 us_val = us_row[key].iloc[0] if not us_row.empty and us_row[key].notna().iloc[0] else None

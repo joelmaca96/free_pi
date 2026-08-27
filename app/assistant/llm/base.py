@@ -72,11 +72,23 @@ class LLMResponse:
     tool_calls: List[ToolCall] = field(default_factory=list)
     usage: Dict[str, int] = field(default_factory=dict)
     stop_reason: Optional[str] = None
+    #: Trozo opaco del proveedor que hay que devolverle intacto en la vuelta
+    #: siguiente. Nadie fuera de `llm/` mira dentro: el agente se limita a
+    #: guardarlo en el mensaje del asistente y a pasarlo de vuelta.
+    #:
+    #: Existe por un caso concreto que no se puede resolver de otra forma: con
+    #: pensamiento activado, Claude firma criptográficamente sus bloques
+    #: `thinking` y exige recibirlos intactos junto al `tool_use` al que
+    #: preceden. Reconstruir el mensaje desde `text` + `tool_calls` los pierde
+    #: y la siguiente petición se cae con un 400. El adaptador de dialecto
+    #: OpenAI lo deja a `None` y no se entera de que existe.
+    provider_state: Optional[Any] = None
 
 
 # Mensajes en forma interna (dialecto OpenAI, ver docstring del módulo):
 #   {"role": "user", "content": "..."}
-#   {"role": "assistant", "content": "...", "tool_calls": [...]}
+#   {"role": "assistant", "content": "...", "tool_calls": [...],
+#    "provider_state": <opaco, opcional — ver LLMResponse.provider_state>}
 #   {"role": "tool", "tool_call_id": "...", "name": "...", "content": "<json>"}
 Message = Dict[str, Any]
 

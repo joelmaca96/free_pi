@@ -9,7 +9,7 @@ a partir de eso; no inventa la etiqueta, la explica (§6.2).
 Es la diferencia entre "juega rápido" —una impresión— y "juega rápido (73.6
 posesiones, p71 de la Euroliga)" —una afirmación comprobable de un vistazo.
 """
-from .base import ToolContext, artifact, clean_dict, fail, ok, records, register, schema
+from .base import ToolContext, artifact, clean_dict, fail, ok, records, register, schema, season_with_fallback
 
 try:  # pragma: no cover - ver nota en tools/context.py
     from app.data import queries, queries_assistant
@@ -33,6 +33,19 @@ _EUROLEAGUE_WARNING = (
 
 def _season(ctx: ToolContext, season_id) -> int:
     return ctx.season_id if season_id is None else int(season_id)
+
+
+def _team_season(ctx: ToolContext, team_id: str, season_id):
+    """Como `_season`, cayendo a la última temporada con partidos de `team_id` si hace falta.
+
+    Mismo criterio que ya usaba la pantalla "Próximo rival"
+    (`queries.team_scouting_season`) para un rival sin partidos todavía en la
+    temporada en curso — aquí se aplica igual a cualquier equipo que pidan
+    las herramientas del asistente, no solo al próximo rival. Devuelve
+    `(season, warning)`, ver `season_with_fallback`.
+    """
+    preferred = _season(ctx, season_id)
+    return season_with_fallback(queries.team_scouting_season, ctx.engine, team_id, preferred)
 
 
 def _label(percentile) -> str:
@@ -68,14 +81,15 @@ def _metric(value, percentile, *, league_teams=None) -> dict:
     family="team",
     description=(
         "Récord y perfil avanzado de un equipo (pace, ORtg, DRtg, net rating, eFG%, TS%) por "
-        "competición. Para leerlo COMO ESTILO con contexto de liga usa team_style."
+        "competición, más los tiros libres que lanza y los que concede si están disponibles. "
+        "Para leerlo COMO ESTILO con contexto de liga usa team_style."
     ),
     parameters=schema({"team_id": {"type": "string"}, "season_id": {"type": "integer"}}, required=["team_id"]),
     artifact="table",
 )
 def team_profile(ctx: ToolContext, team_id: str, season_id: int = None) -> dict:
     """Récord + medias avanzadas, tal cual las devuelve `queries.py`."""
-    season = _season(ctx, season_id)
+    season, fallback_warning = _team_season(ctx, team_id, season_id)
     record = queries.team_record(ctx.engine, team_id, season, ctx.today)
     profile = queries.team_advanced_profile(ctx.engine, team_id, season)
     if profile.empty and record.empty:
@@ -85,12 +99,25 @@ def team_profile(ctx: ToolContext, team_id: str, season_id: int = None) -> dict:
             suggestion="Prueba con la temporada anterior: un rival de Euroliga puede no haber jugado todavía.",
         )
     rows = records(profile)
+    data = {"record": records(record), "profile": rows}
+    warnings = [_EUROLEAGUE_WARNING]
+    if fallback_warning:
+        warnings.append(fallback_warning)
+
+    if ctx.capabilities.free_throws:
+        # Lanzados Y concedidos: cuántos libres regala una defensa dice más de
+        # ella que cuántos lanza su ataque, y es una lectura que sin las
+        # columnas `opp_*` de la vista no se podía hacer.
+        data["free_throws"] = records(queries_assistant.team_free_throws(ctx.engine, team_id, season))
+    else:
+        warnings.append("Esta base de datos no tiene tiros libres: no hables del juego desde la línea.")
+
     return ok(
-        {"record": records(record), "profile": rows},
+        data,
         source="games + team_stats_by_competition",
         scope=f"temporada {season}",
         gp=int(profile["gp"].iloc[0]) if not profile.empty else None,
-        warnings=[_EUROLEAGUE_WARNING],
+        warnings=warnings,
         artifact=artifact("table", rows, title="Perfil avanzado"),
     )
 
@@ -125,8 +152,10 @@ def team_style(ctx: ToolContext, team_id: str, season_id: int = None, competitio
     con los números crudos y con un aviso de que van sin contexto de liga.
     Prometer un percentil que no existe sería peor que no darlo.
     """
-    season = _season(ctx, season_id)
+    season, fallback_warning = _team_season(ctx, team_id, season_id)
     warnings = [_EUROLEAGUE_WARNING]
+    if fallback_warning:
+        warnings.append(fallback_warning)
 
     styled = []
     if ctx.capabilities.league_percentiles:
@@ -197,7 +226,7 @@ def team_style(ctx: ToolContext, team_id: str, season_id: int = None, competitio
     artifact="bar",
 )
 def team_quarter_profile(ctx: ToolContext, team_id: str, season_id: int = None) -> dict:
-    season = _season(ctx, season_id)
+    season, fallback_warning = _team_season(ctx, team_id, season_id)
     quarters = queries.team_quarter_profile(ctx.engine, team_id, season)
     if quarters.empty:
         return fail(
@@ -211,6 +240,7 @@ def team_quarter_profile(ctx: ToolContext, team_id: str, season_id: int = None) 
         source="game_team_quarter_stats",
         scope=f"temporada {season}",
         gp=int(quarters["gp"].max()),
+        warnings=[fallback_warning] if fallback_warning else None,
         artifact=artifact("bar", rows, title="Perfil por cuartos"),
     )
 
@@ -223,7 +253,7 @@ def team_quarter_profile(ctx: ToolContext, team_id: str, season_id: int = None) 
     artifact="bar",
 )
 def team_zone_profile(ctx: ToolContext, team_id: str, season_id: int = None) -> dict:
-    season = _season(ctx, season_id)
+    season, fallback_warning = _team_season(ctx, team_id, season_id)
     zones = queries.team_zone_profile(ctx.engine, team_id, season)
     if zones.empty:
         return fail("sin datos", detail=f"No hay tiros por zona de {team_id} en la temporada {season}.")
@@ -232,6 +262,7 @@ def team_zone_profile(ctx: ToolContext, team_id: str, season_id: int = None) -> 
         rows,
         source="game_zone_stats + court_zones",
         scope=f"temporada {season}",
+        warnings=[fallback_warning] if fallback_warning else None,
         artifact=artifact("bar", rows, title="Tiro por zona"),
     )
 
@@ -244,18 +275,21 @@ def team_zone_profile(ctx: ToolContext, team_id: str, season_id: int = None) -> 
     artifact="shot_chart",
 )
 def team_shot_chart(ctx: ToolContext, team_id: str, season_id: int = None) -> dict:
-    season = _season(ctx, season_id)
+    season, fallback_warning = _team_season(ctx, team_id, season_id)
     shots = queries.team_shots_season(ctx.engine, team_id, season)
     if shots.empty:
         return fail("sin tiros", detail=f"No hay tiros con coordenadas de {team_id} en la temporada {season}.")
+    warnings = [
+        "Cada tiro se atribuye al equipo ACTUAL del jugador: un traspaso a mitad de temporada "
+        "arrastra sus tiros anteriores al equipo nuevo."
+    ]
+    if fallback_warning:
+        warnings.append(fallback_warning)
     return ok(
         {"attempts": int(len(shots)), "made": int(shots["made"].sum())},
         source="shots",
         scope=f"temporada {season}",
-        warnings=[
-            "Cada tiro se atribuye al equipo ACTUAL del jugador: un traspaso a mitad de temporada "
-            "arrastra sus tiros anteriores al equipo nuevo."
-        ],
+        warnings=warnings,
         artifact=artifact("shot_chart", records(shots, limit=2000), title="Mapa de tiros"),
     )
 
@@ -308,19 +342,22 @@ def head_to_head(ctx: ToolContext, team_id: str, opponent_id: str, limit: int = 
     artifact="table",
 )
 def team_roster(ctx: ToolContext, team_id: str, season_id: int = None) -> dict:
-    season = _season(ctx, season_id)
+    season, fallback_warning = _team_season(ctx, team_id, season_id)
     roster = queries_assistant.team_roster_production(ctx.engine, team_id, season)
     if roster.empty:
         return fail("sin plantilla", detail=f"No hay jugadores registrados en {team_id}.")
     rows = records(roster)
+    warnings = [
+        "`players.team_id` es el equipo ACTUAL del jugador, no el que tenía esa temporada: "
+        "en temporadas pasadas la plantilla es aproximada."
+    ]
+    if fallback_warning:
+        warnings.append(fallback_warning)
     return ok(
         rows,
         source="players + player_stats_combined",
         scope=f"temporada {season}",
-        warnings=[
-            "`players.team_id` es el equipo ACTUAL del jugador, no el que tenía esa temporada: "
-            "en temporadas pasadas la plantilla es aproximada."
-        ],
+        warnings=warnings,
         artifact=artifact("table", rows, title="Plantilla"),
     )
 

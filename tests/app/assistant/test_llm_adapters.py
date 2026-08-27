@@ -147,6 +147,33 @@ def test_anthropic_tools_use_input_schema():
     assert "input_schema" in wire[0] and "parameters" not in wire[0]
 
 
+def test_anthropic_marks_the_cache_after_the_stable_part_of_the_prompt():
+    """El punto de caché va ENTRE lo estable y lo volátil, no envolviéndolo todo.
+
+    Es la diferencia entre pagar el prefijo a 0.1x o entero: si el bloque
+    volátil (contexto de sesión, contexto de pantalla) queda dentro del
+    bloque marcado, cambiarlo invalida los ~7.000 tokens de prompt y
+    herramientas que no han cambiado. El fallo no se ve: solo se paga.
+    """
+    system = "PARTE ESTABLE, larga y siempre igual.\n\nCONTEXTO DE ESTA SESIÓN\nHoy es martes."
+    blocks = anthropic_adapter.to_wire_system(system)
+
+    assert len(blocks) == 2
+    assert blocks[0]["cache_control"] == {"type": "ephemeral"}
+    assert "PARTE ESTABLE" in blocks[0]["text"]
+    assert "CONTEXTO DE ESTA SESIÓN" not in blocks[0]["text"]
+    # El volátil viaja detrás y SIN marcar: es lo que cambia cada pregunta.
+    assert "Hoy es martes" in blocks[1]["text"]
+    assert "cache_control" not in blocks[1]
+
+
+def test_anthropic_system_without_volatile_block_stays_in_one_piece():
+    """Sin bloque de sesión no hay nada que separar: un solo bloque cacheado."""
+    blocks = anthropic_adapter.to_wire_system("Solo parte estable.")
+    assert len(blocks) == 1
+    assert blocks[0]["cache_control"] == {"type": "ephemeral"}
+
+
 def test_anthropic_groups_consecutive_tool_results_in_one_user_message():
     """Es el equivalente exacto de la regla del bucle: los resultados paralelos,
     juntos. Repartirlos enseña al modelo a dejar de paralizar (§3.3)."""

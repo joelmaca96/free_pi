@@ -131,6 +131,21 @@ def _parse_date(value: Any) -> str:
     return datetime.strptime(str(value), "%d/%m/%Y").strftime("%Y-%m-%d")
 
 
+def _int_or_none(value: Any) -> Optional[int]:
+    """`int` del valor, o `None` si la fuente no lo dio.
+
+    `euroleague_api` devuelve DataFrames de pandas, así que un hueco puede
+    llegar como `None` o como `NaN` — los dos tienen que acabar en `NULL`, no
+    en 0. Ver el uso en los tiros libres por jugador.
+    """
+    if value is None or value != value:  # NaN != NaN
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _team_totals(boxscore_records: list, team_code: str) -> Dict[str, float]:
     rows = [
         r for r in boxscore_records
@@ -195,6 +210,10 @@ def _advanced_stats_for_team(team_id: str, own: Dict[str, float], opponent: Dict
         "ortg": ortg, "drtg": drtg,
         "ast_pct": ast_pct, "stl_pct": stl_pct, "blk_pct": blk_pct,
         "ft_rate": ft_rate, "ast_to_ratio": ast_to_ratio,
+        # Recuento bruto de tiros libres, además de la tasa `ft_rate` (mismo
+        # motivo que en `ingest/acb/adapter.py`): sin volumen ni acierto no se
+        # puede leer el juego desde la línea. Ya estaba sumado en `own`.
+        "ftm": own["ftm"], "fta": own["fta"],
     }
 
 
@@ -311,6 +330,13 @@ def build_raw_game(
                 "reb": int(row.get("TotalRebounds", 0) or 0),
                 "ast": int(row.get("Assistances", 0) or 0),
                 "efg_pct": efg_pct,
+                # A diferencia del resto de campos de esta fila, los tiros
+                # libres NO se rellenan a 0 cuando faltan: 0 significaría "no
+                # tiró ninguno" y la ausencia del campo significa "esta fuente
+                # no lo dio para este partido". Son cosas distintas y la
+                # columna es nullable justamente para poder distinguirlas.
+                "ftm": _int_or_none(row.get("FreeThrowsMade")),
+                "fta": _int_or_none(row.get("FreeThrowsAttempted")),
                 "starter": bool(row.get("IsStarter", 0)),
             }
         )

@@ -210,6 +210,43 @@ def ok(
     return result
 
 
+def season_with_fallback(
+    lookup_fn: Callable[[Engine, str, int], Optional[Dict[str, Any]]],
+    engine: Engine,
+    entity_id: str,
+    preferred_season_id: int,
+) -> "tuple[int, Optional[str]]":
+    """Temporada a usar y, si toca, el aviso de que se ha caído a una anterior.
+
+    `lookup_fn` es `queries.player_scouting_season` o `queries.team_scouting_season`
+    (misma forma: `(engine, entity_id, preferred_season_id) -> {season_id,
+    label, is_fallback} | None`) — se pasa en vez de importarse aquí para que
+    este módulo no dependa de `queries` (ver docstring del fichero).
+
+    Caso real que lo motiva: un jugador o equipo sin partidos TODAVÍA en la
+    temporada pedida (pretemporada, fichaje reciente) no tiene por qué
+    quedarse sin scouting — tiene su temporada anterior, y usarla **avisando**
+    es mejor que responder "sin datos" cuando sí los hay (§7.2, mismo
+    criterio que ya aplicaba `queries.team_scouting_season` en "Próximo
+    rival").
+
+    Returns:
+        `(season_id, warning)`. `warning` es `None` cuando hay datos en la
+        temporada pedida, o cuando no hay datos en NINGUNA temporada hasta
+        ella (en ese caso se devuelve la pedida tal cual, para que el
+        mensaje de "sin datos" de siempre siga saliendo sin cambios).
+    """
+    scouting = lookup_fn(engine, entity_id, preferred_season_id)
+    if scouting is None or not scouting["is_fallback"]:
+        return preferred_season_id, None
+    warning = (
+        f"⚠ Sin datos de {entity_id} en la temporada {preferred_season_id}: lo de abajo es de "
+        f"la temporada {scouting['label']} ({scouting['season_id']}), la última en la que tiene "
+        "partidos. Dilo en la respuesta, no lo des por la temporada pedida."
+    )
+    return scouting["season_id"], warning
+
+
 def fail(error: str, *, detail: Optional[str] = None, suggestion: Optional[str] = None) -> Dict[str, Any]:
     """Fallo de una herramienta, redactado para que el modelo pueda reaccionar (§7.4)."""
     result: Dict[str, Any] = {"error": error}

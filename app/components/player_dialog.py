@@ -26,7 +26,7 @@ import streamlit as st
 
 from components.ask_assistant import ask_assistant_button
 from components.avatar import player_avatar_html
-from components.court import shot_chart, shot_chart_caption
+from components.court import shot_chart, shot_chart_caption, zone_breakdown
 from data import queries
 from data.db import get_read_engine
 
@@ -96,25 +96,44 @@ def player_detail(player_id: str) -> None:
 
     st.divider()
 
+    # Temporada de la que sacar medias/boxscore/tiros: la seleccionada, o la
+    # última con partidos de este jugador si la seleccionada aún no tiene
+    # ninguno (fichaje reciente, o inicio de temporada antes de su debut) —
+    # mismo caso real que resuelve `queries.team_scouting_season` para el
+    # scouting de rival en "Próximo rival", aquí a nivel de jugador.
+    scouting = queries.player_scouting_season(engine, player_id, season_id)
+    stats_season_id = scouting["season_id"] if scouting else season_id
+
     # ---------------------------------------------------------------- medias --
     st.markdown("**Medias**")
-    averages_df = queries.player_averages_all(engine, player_id, season_id)
+    if scouting is None:
+        st.info("Sin partidos registrados todavía, ni en esta temporada ni en anteriores.")
+        return
+    if scouting["is_fallback"]:
+        st.info(
+            f"⚠ {bio['name']} no tiene partidos registrados en la temporada seleccionada. "
+            f"**Se muestran los de {scouting['label']}**, su última temporada con datos."
+        )
+    averages_df = queries.player_averages_all(engine, player_id, stats_season_id)
     if averages_df.empty:
         st.info("Sin partidos registrados todavía para esta temporada.")
     else:
         tabs = st.tabs(averages_df["competition"].tolist())
         for tab, row in zip(tabs, averages_df.itertuples()):
             with tab:
-                cols = st.columns(6)
+                cols = st.columns(7)
                 cols[0].metric("PJ", int(row.gp))
                 cols[1].metric("Min", f"{row.min_avg:.1f}" if pd.notna(row.min_avg) else "—")
                 cols[2].metric("Pts", f"{row.pts_avg:.1f}" if pd.notna(row.pts_avg) else "—")
                 cols[3].metric("Reb", f"{row.reb_avg:.1f}" if pd.notna(row.reb_avg) else "—")
                 cols[4].metric("Ast", f"{row.ast_avg:.1f}" if pd.notna(row.ast_avg) else "—")
                 cols[5].metric("eFG%", f"{row.efg_pct:.1f}" if pd.notna(row.efg_pct) else "—")
+                # `ft_pct` puede ser NaN con `gp` > 0 (partidos sin `ftm`/`fta`
+                # cargados, ver el docstring de `queries.player_averages_all`).
+                cols[6].metric("FT%", f"{row.ft_pct:.1f}" if pd.notna(row.ft_pct) else "—")
 
     # ---------------------------------------------------------- partido a partido --
-    log_df = queries.player_game_log(engine, player_id, season_id)
+    log_df = queries.player_game_log(engine, player_id, stats_season_id)
 
     if log_df.empty:
         st.caption("Sin estadísticas registradas todavía — probablemente una alta reciente.")
@@ -178,7 +197,7 @@ def player_detail(player_id: str) -> None:
     )
 
     # -------------------------------------------------------------- mapa de tiros --
-    shots_df = queries.player_shots_season(engine, player_id, season_id)
+    shots_df = queries.player_shots_season(engine, player_id, stats_season_id)
     if shots_df.empty:
         st.caption("Sin tiros con coordenadas registrados esta temporada.")
     else:
@@ -189,3 +208,11 @@ def player_detail(player_id: str) -> None:
         # cuadrado) — estirarlo al contenedor aplana la cancha (ver `court.py`).
         st.altair_chart(shot_chart(shots_df, zones_df))
         st.caption(shot_chart_caption(shots_df))
+
+        # A diferencia del equipo (`team_zone_profile`, agregado en origen sin
+        # desglose por jugador), aquí sí hay una tabla equivalente por jugador
+        # — `player_zone_profile` la calcula de `shots.zone_id` porque no
+        # existe un agregado oficial por jugador que reutilizar (ver su
+        # docstring).
+        zone_df = queries.player_zone_profile(engine, player_id, stats_season_id)
+        zone_breakdown(zone_df, len(shots_df), scope="player")

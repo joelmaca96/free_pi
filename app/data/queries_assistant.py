@@ -50,6 +50,19 @@ def _has_view(_engine: Engine, view: str) -> bool:
     """`True` si la vista existe en esta base de datos (mismo motivo que `_table_columns`)."""
     return view in set(inspect(_engine).get_view_names())
 
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def _view_columns(_engine: Engine, view: str) -> frozenset:
+    """Columnas de una vista en ESTA base de datos.
+
+    SQLite congela la definición de una vista al crearla, así que una BD que no
+    haya pasado por `_refresh_views` se queda con la versión antigua —sin las
+    columnas de tiros libres, por ejemplo— aunque `schema.sql` ya las declare.
+    """
+    if not _has_view(_engine, view):
+        return frozenset()
+    return frozenset(col["name"] for col in inspect(_engine).get_columns(view))
+
 # Métricas que se pueden pedir en un ranking de liga, con la columna y la
 # vista de la que salen. Lista blanca a propósito: es lo que permite que
 # `league_leaders` reciba un nombre de métrica del modelo sin que eso sea
@@ -176,6 +189,64 @@ def player_zone_profile(
         return df
     total = df["attempts"].sum()
     return df.assign(share=100.0 * df["attempts"] / total)
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def player_free_throws(_engine: Engine, player_id: str, season_id: int) -> pd.DataFrame:
+    """Tiros libres de un jugador por competición: volumen y acierto ponderado.
+
+    Va aparte de `queries.player_averages_all` (que no los selecciona) y no
+    dentro, porque las columnas solo existen si las vistas de esta base de
+    datos son las nuevas — ver `_view_columns`. Una BD sin reingerir devuelve
+    vacío en vez de reventar.
+
+    `ft_pct` sale de la vista y es el acierto PONDERADO POR VOLUMEN
+    (SUM(ftm)/SUM(fta)), no la media de los porcentajes de cada partido: un
+    1/1 no puede pesar lo mismo que un 8/12.
+
+    Returns:
+        `competition, gp, gp_ft, ftm, fta, ftm_avg, fta_avg, ft_pct`.
+        `gp_ft` (partidos CON dato de tiros libres) va aparte de `gp` a
+        propósito: sin él no se distingue "no tiró un solo libre" de "ese
+        partido no trae el dato".
+    """
+    if not {"ft_pct", "gp_ft"} <= _view_columns(_engine, "player_stats_by_competition"):
+        return pd.DataFrame()
+
+    sql = text("""
+        SELECT c.name AS competition, s.gp, s.gp_ft, s.ftm, s.fta,
+               s.ftm_avg, s.fta_avg, s.ft_pct
+        FROM player_stats_by_competition s
+        JOIN competitions c ON c.id = s.competition_id
+        WHERE s.player_id = :player_id AND s.season_id = :season_id
+        ORDER BY s.gp DESC
+    """)
+    return pd.read_sql(sql, _engine, params={"player_id": player_id, "season_id": season_id})
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def team_free_throws(_engine: Engine, team_id: str, season_id: int) -> pd.DataFrame:
+    """Tiros libres que un equipo LANZA y los que CONCEDE, por competición.
+
+    Los del rival (`opp_*`) salen del self-join que ya hace la vista sobre
+    `game_advanced_stats`: no hay columnas "concedidas" duplicadas, son la fila
+    del otro equipo del mismo partido. Es la mitad que hace útil el dato para
+    scouting — cuántos libres regala una defensa dice más de ella que cuántos
+    lanza su ataque.
+    """
+    if not {"ft_pct", "opp_ft_pct"} <= _view_columns(_engine, "team_stats_by_competition"):
+        return pd.DataFrame()
+
+    sql = text("""
+        SELECT c.name AS competition, s.gp, s.gp_ft,
+               s.ftm, s.fta, s.ftm_avg, s.fta_avg, s.ft_pct,
+               s.opp_ftm, s.opp_fta, s.opp_ftm_avg, s.opp_fta_avg, s.opp_ft_pct
+        FROM team_stats_by_competition s
+        JOIN competitions c ON c.id = s.competition_id
+        WHERE s.team_id = :team_id AND s.season_id = :season_id
+        ORDER BY s.gp DESC
+    """)
+    return pd.read_sql(sql, _engine, params={"team_id": team_id, "season_id": season_id})
 
 
 @st.cache_data(ttl=_TTL, show_spinner=False)

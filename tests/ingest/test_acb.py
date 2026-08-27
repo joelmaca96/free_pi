@@ -1,4 +1,5 @@
 """Tests de la fuente ACB: transform-and-load con un partido de ejemplo (fixture)."""
+import copy
 from unittest import mock
 
 from sqlalchemy import text
@@ -6,6 +7,7 @@ from sqlalchemy import text
 from ingest.acb.parser import parse_and_resolve
 from ingest.acb.pipeline import discover_missing_games, run, run_single_game, run_upcoming
 from ingest.common.loader import load_game
+from ingest.common.zones import MATE_ZONE_ID
 
 RAW_GAME = {
     "game_id": "2025123401",
@@ -26,7 +28,8 @@ RAW_GAME = {
         {"player_id": "acb-p-howard", "team_id": "acb-bas", "name": "Marcus Howard", "number": 0, "position": "Base",
          "minutes": 30.0, "pts": 22, "reb": 3, "ast": 6, "efg_pct": 60.0},
         {"player_id": "acb-p-rival1", "team_id": "acb-uni", "name": "Jugador Rival", "number": 5, "position": "Alero",
-         "minutes": 28.0, "pts": 15, "reb": 4, "ast": 2, "efg_pct": 48.0},
+         "minutes": 28.0, "pts": 15, "reb": 4, "ast": 2, "efg_pct": 48.0,
+         "photo_url": "https://static.acb.com/media/rival1.jpg"},
     ],
     "lineups": [
         {"team_id": "acb-bas", "player_ids": ["acb-p-howard"], "minutes": 5.0, "plus_minus": 3},
@@ -89,6 +92,55 @@ def test_acb_transform_and_load_is_idempotent(engine):
         assert conn.execute(text("SELECT COUNT(*) FROM shots WHERE game_id='acb-2025123401'")).scalar_one() == 2
         # el rival ("Unicaja") no se duplica al re-ejecutar
         assert conn.execute(text("SELECT COUNT(*) FROM teams WHERE name='Unicaja'")).scalar_one() == 1
+
+
+def test_acb_boxscore_photo_fills_in_for_a_rival_without_one(engine):
+    """`headshotImageUrl` del boxscore rellena `photo_url` de un rival sin foto (§ fotos de rivales)."""
+    with engine.begin() as conn:
+        game = parse_and_resolve(conn, RAW_GAME)
+        load_game(conn, game)
+
+    with engine.connect() as conn:
+        rival_id = conn.execute(
+            text("SELECT player_id FROM player_external_ids WHERE source='acb' AND external_id='acb-p-rival1'")
+        ).scalar_one()
+        photo_url = conn.execute(text("SELECT photo_url FROM players WHERE id = :id"), {"id": rival_id}).scalar_one()
+        assert photo_url == "https://static.acb.com/media/rival1.jpg"
+
+
+def test_acb_boxscore_photo_never_overwrites_an_existing_one(engine):
+    """La foto de acb.com RELLENA, nunca pisa la ya puesta por `ingest/baskonia_web`."""
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE players SET photo_url = 'https://baskonia.com/howard-oficial.jpg' WHERE id = 'howard'"))
+
+    raw_game = copy.deepcopy(RAW_GAME)
+    raw_game["players"][0]["photo_url"] = "https://static.acb.com/media/howard-distinta.jpg"
+
+    with engine.begin() as conn:
+        game = parse_and_resolve(conn, raw_game)
+        load_game(conn, game)
+
+    with engine.connect() as conn:
+        photo_url = conn.execute(text("SELECT photo_url FROM players WHERE id = 'howard'")).scalar_one()
+        assert photo_url == "https://baskonia.com/howard-oficial.jpg"
+
+
+def test_dunks_get_the_mate_zone_directly_not_through_geometry(engine):
+    """Un tiro `located=False` (mate sin coordenadas medidas, ver `adapter.py`) recibe
+    `MATE_ZONE_ID` directamente, sin pasar por `classify_zone` — su centinela reescalado
+    (250, 455) cae DENTRO de 'Pintura', así que si pasara por geometría se clasificaría
+    ahí (zona 1), no como mate (ver `ingest/common/raw_game.py`)."""
+    raw_game = copy.deepcopy(RAW_GAME)
+    raw_game["shots"].append(
+        {"player_id": "acb-p-howard", "team_id": "acb-bas", "x": 250.0, "y": 455.0, "made": True, "located": False}
+    )
+
+    with engine.begin() as conn:
+        game = parse_and_resolve(conn, raw_game)
+
+    dunk = game.shots[-1]
+    assert dunk.located is False
+    assert dunk.zone_id == MATE_ZONE_ID
 
 
 RAW_GAME_WITH_PBP = {
@@ -349,3 +401,65 @@ def test_run_upcoming_descarta_partidos_sin_fecha_confirmada(engine):
     summary = run_upcoming(engine, season=2026, client=client)
 
     assert summary["upcoming"] == 0
+
+
+def test_free_throws_reach_the_database_and_the_average_views(engine):
+    """De la fuente a `ft_pct`, que es el recorrido que estaba roto.
+
+    Los adapters ya sumaban los tiros libres para derivar `ft_rate` y luego los
+    tiraban, así que `player_game_stats.fta` seguía en NULL por muchas veces
+    que se reingiriera. Este test recorre el camino entero: contrato común ->
+    `parse_and_resolve` -> `load_game` -> vistas de medias.
+
+    Se comprueba también que `ft_pct` es el acierto PONDERADO POR VOLUMEN
+    (SUM(ftm)/SUM(fta)) y no la media de los porcentajes de cada partido: un
+    1/1 no puede pesar lo mismo que un 8/12 (ver `schema.sql`).
+    """
+    raw = {
+        **RAW_GAME,
+        "game_id": "2025123499",
+        "team_stats": [
+            {**RAW_GAME["team_stats"][0], "ftm": 14, "fta": 18},
+            {**RAW_GAME["team_stats"][1], "ftm": 16, "fta": 20},
+        ],
+        "players": [
+            {**RAW_GAME["players"][0], "ftm": 8, "fta": 12},
+            # Sin tiros libres en la fuente: tiene que quedar NULL, no 0.
+            RAW_GAME["players"][1],
+        ],
+    }
+
+    with engine.begin() as conn:
+        load_game(conn, parse_and_resolve(conn, raw))
+
+    with engine.connect() as conn:
+        howard = conn.execute(
+            text("SELECT ftm, fta FROM player_game_stats WHERE player_id = 'howard' AND game_id = 'acb-2025123499'")
+        ).first()
+        assert (howard.ftm, howard.fta) == (8, 12)
+
+        rival = conn.execute(
+            text(
+                "SELECT ftm, fta FROM player_game_stats pgs JOIN players p ON p.id = pgs.player_id"
+                " WHERE p.name = 'Jugador Rival' AND pgs.game_id = 'acb-2025123499'"
+            )
+        ).first()
+        assert (rival.ftm, rival.fta) == (None, None)
+
+        team = conn.execute(
+            text("SELECT ftm, fta FROM game_advanced_stats WHERE game_id = 'acb-2025123499' AND team_id = 'bas'")
+        ).first()
+        assert (team.ftm, team.fta) == (14, 18)
+
+        # Vista de medias: `gp_ft` cuenta solo los partidos CON dato, y el
+        # rival del partido entra como `opp_*` por el self-join.
+        row = conn.execute(
+            text("SELECT gp, gp_ft, ftm, fta, ft_pct FROM player_stats_combined WHERE player_id = 'howard'")
+        ).first()
+        assert (row.gp_ft, row.ftm, row.fta) == (1, 8, 12)
+        assert row.ft_pct == round(100 * 8 / 12, 6) or abs(row.ft_pct - 100 * 8 / 12) < 1e-6
+
+        opp = conn.execute(
+            text("SELECT opp_ftm, opp_fta FROM team_stats_combined WHERE team_id = 'bas'")
+        ).first()
+        assert (opp.opp_ftm, opp.opp_fta) == (16, 20)

@@ -28,6 +28,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from packages.baskonia_core import config  # noqa: E402,F401  (carga el .env)
 from app.assistant.llm import LLMError, build_llm_client, provider_label  # noqa: E402
 from app.assistant.llm.base import ToolSpec  # noqa: E402
 
@@ -67,8 +68,9 @@ def main() -> int:
 
     if client is None:
         print(
-            "FALLO: no hay proveedor configurado. Define ASSISTANT_LLM_BASE_URL y "
-            "ASSISTANT_LLM_MODEL (ver .env.example)."
+            "FALLO: no hay proveedor configurado (ver .env.example). Hace falta "
+            "ASSISTANT_LLM_MODEL, más ASSISTANT_LLM_BASE_URL con el proveedor "
+            "openai_compat o ASSISTANT_LLM_API_KEY con el proveedor anthropic."
         )
         return 2
 
@@ -103,7 +105,13 @@ def main() -> int:
     print(f"OK (2/3): argumentos válidos -> {call.arguments}")
 
     # (3) ¿Redacta con el resultado en la mano?
-    messages.append({"role": "assistant", "content": first.text, "tool_calls": first.tool_calls})
+    # `provider_state` se reenvía igual que hace el agente: sin él, un modelo
+    # que piensa (Claude 4.6+) rechaza la segunda vuelta por perder sus
+    # bloques `thinking` firmados, y el fallo parecería del modelo.
+    assistant_message = {"role": "assistant", "content": first.text, "tool_calls": first.tool_calls}
+    if first.provider_state is not None:
+        assistant_message["provider_state"] = first.provider_state
+    messages.append(assistant_message)
     messages.append(
         {
             "role": "tool",
