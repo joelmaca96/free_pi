@@ -110,6 +110,25 @@ _STARTER_PLAYTYPE = 599
 _SUB_IN_PLAYTYPE = 112
 _SUB_OUT_PLAYTYPE = 115
 
+# Play-by-play TIPADO (Fase 2, 2026-08-27): decodificado empíricamente
+# cruzando cada `playType` con el delta de `playerStats` que trae ese mismo
+# evento — verificado en vivo contra `PlayByPlay/play-by-play` real
+# (partido 105370, temporada 2025-2026): el jugador de la jugada pasa de
+# `steals=0` a `steals=1` en 103, `turnovers` en 106, `offRebounds` en 101,
+# `defRebounds` en 104, `blocks` en 102, `foulsDrawn` en 110, y
+# `personalFouls` en los seis códigos de `_FOUL_PERSONAL_PLAYTYPES`. Ver
+# doc/features/ingestor/02_plan_stats_completas.md §Fase 2 para el detalle.
+_EVENT_TYPE_BY_PLAYTYPE = {
+    101: "oreb", 104: "dreb", 103: "steal", 106: "turnover", 102: "block",
+    107: "assist", 108: "assist", 119: "assist", 110: "foul_drawn",
+}
+# Seis códigos de falta personal SIN semántica distinguible entre sí (no hay
+# campo de descripción en el PBP que los separe) — se guarda el crudo en
+# `event_detail`. No bloquea el conteo agregado: el total de faltas sigue
+# viniendo de `personalFouls` del boxscore (`_team_totals`/`players` arriba),
+# no de contar estas filas.
+_FOUL_PERSONAL_PLAYTYPES = {161, 159, 160, 109, 537, 166}
+
 
 def _parse_minutes(value: Any) -> float:
     """Convierte `"MM:SS"` a minutos decimales; `0` si viene vacío/DNP."""
@@ -151,6 +170,16 @@ def _team_totals(stats: Dict[str, Any]) -> Dict[str, float]:
         "ast": total["assists"],
         "stl": total["steals"],
         "blk": total["blocks"],
+        # Boxscore ampliado de EQUIPO (Fase 1, verificado en vivo 2026-08-27
+        # contra `Result/boxscores` real: `stats.total` trae estos mismos
+        # campos, además de los ya usados arriba). `.get()` y no indexado:
+        # un `total` que no los traiga (fixture antiguo, o un hueco puntual
+        # de la fuente) deja la columna en NULL en vez de tumbar la carga.
+        "blk_against": total.get("receivedBlocks"),
+        "pf": total.get("personalFouls"),
+        "pf_drawn": total.get("foulsDrawn"),
+        "plus_minus": total.get("plusMinus"),
+        "pir": total.get("rating"),
     }
 
 
@@ -201,6 +230,18 @@ def _advanced_stats_for_team(team_id: str, own: Dict[str, float], opponent: Dict
         # El dato ya estaba en `own` (`_team_totals`) y se usaba únicamente para
         # derivar `ft_rate`; aquí simplemente deja de tirarse.
         "ftm": own["ftm"], "fta": own["fta"],
+        **_box_extras(own),
+    }
+
+
+# Boxscore ampliado de EQUIPO (Fase 1): común a los dos caminos (estimado y
+# oficial), ya que en ninguno de los dos sale de la parte "avanzada" de la
+# fuente — sale siempre de `_team_totals`, igual que `ftm`/`fta`.
+def _box_extras(own: Dict[str, float]) -> Dict[str, Any]:
+    return {
+        "stl": own["stl"], "tov": own["tov"], "blk": own["blk"], "blk_against": own["blk_against"],
+        "pf": own["pf"], "pf_drawn": own["pf_drawn"], "oreb": own["orb"], "dreb": own["drb"],
+        "plus_minus": own["plus_minus"], "pir": own["pir"],
     }
 
 
@@ -225,6 +266,7 @@ def _advanced_stats_from_official(team_id: str, official: Dict[str, Any], own: D
         # Igual que en el camino estimado: el recuento bruto sale del boxscore
         # (`own`), no de este endpoint — `match-advanced-stats` solo da la tasa.
         "ftm": own["ftm"], "fta": own["fta"],
+        **_box_extras(own),
     }
 
 
@@ -316,6 +358,111 @@ def _convert_play_by_play(plays: List[dict], home_id: str, away_id: str) -> List
     return events
 
 
+def _quarter_player_stats(team_box: Dict[str, Any]) -> List[dict]:
+    """Boxscore de jugador por cuarto (Fase 3, ACB-only): `statsByPeriods` trae
+    exactamente la misma forma por cuarto que `_full_game_stats` para el total
+    — verificado en vivo 2026-08-27 (`Result/boxscores`, mismo partido que el
+    resto de esta fase)."""
+    rows = []
+    for period in team_box["statsByPeriods"]:
+        quarter = period["quarter"]
+        if quarter not in (1, 2, 3, 4):
+            continue  # 0 = total del partido (ver `_full_game_stats`), 5+ = prórroga
+        for row in period["stats"]["players"]:
+            rows.append(
+                {
+                    "player_id": str(row["player"]["id"]),
+                    "quarter": quarter,
+                    "minutes": _parse_minutes(row.get("playTime")),
+                    "pts": row.get("points"),
+                    "reb": row.get("totalRebounds"),
+                    "ast": row.get("assists"),
+                    "stl": row.get("steals"),
+                    "tov": row.get("turnovers"),
+                    "blk": row.get("blocks"),
+                    "pf": row.get("personalFouls"),
+                    "oreb": row.get("offRebounds"),
+                    "dreb": row.get("defRebounds"),
+                    "ftm": row.get("freeThrowsMade"),
+                    "fta": row.get("freeThrowsAttempted"),
+                    "plus_minus": row.get("plusMinus"),
+                    "pir": row.get("rating"),
+                }
+            )
+    return rows
+
+
+def _convert_player_advanced_stats(raw_by_player: Dict[str, Any]) -> List[dict]:
+    """Convierte `{player_license: AdvancedStats/player-advanced-stats}` (Fase 4,
+    ACB-only) al bloque `"player_advanced"` del contrato común. `["partido"]`
+    porque esta fase mira el rendimiento EN ESE partido, no el acumulado de
+    temporada/victorias/derrotas que el mismo endpoint también da — verificado
+    en vivo 2026-08-27."""
+
+    def _partido(block: Dict[str, Any], key: str) -> Optional[float]:
+        value = (block or {}).get(key)
+        return value.get("partido") if isinstance(value, dict) else None
+
+    rows = []
+    for player_id, data in raw_by_player.items():
+        four_factors = data.get("fourFactors", {})
+        rhythm = data.get("gameRhythm", {})
+        ball = data.get("ballHandling", {})
+        shooting = data.get("shooting", {})
+        points = data.get("points", {})
+        rebounds = data.get("rebounds", {})
+        rows.append(
+            {
+                "player_id": player_id,
+                "ast_ratio": _partido(ball, "astRatio"),
+                "ast_pct": _partido(ball, "astPct"),
+                "stl_ratio": _partido(ball, "stlRatio"),
+                "stl_pct": _partido(ball, "stlPct"),
+                "blk_pct": _partido(ball, "blkPct"),
+                "tov_pct": _partido(ball, "tovPct") or _partido(four_factors, "tovPct"),
+                "orb_pct": _partido(rebounds, "orbPct") or _partido(four_factors, "orbPct"),
+                "drb_pct": _partido(rebounds, "drbPct"),
+                "trb_pct": _partido(rebounds, "trbPct"),
+                "ts_pct": _partido(shooting, "tsPct"),
+                "three_par": _partido(shooting, "threePAr"),
+                "ppt": _partido(shooting, "ppt"),
+                "pp2ps": _partido(points, "pp2ps"),
+                "pp3ps": _partido(points, "pp3ps"),
+                "ppft": _partido(points, "ppft"),
+                "possessions": _partido(rhythm, "possessions"),
+                "pace": _partido(rhythm, "pace"),
+            }
+        )
+    return rows
+
+
+def _convert_play_events(plays: List[dict], home_id: str, away_id: str) -> List[dict]:
+    """Eventos tipados (Fase 2): robos/pérdidas/tapones/rebotes ofensivo-defensivo/
+    asistencias/faltas recibidas/faltas personales, con reloj y marcador."""
+    events = []
+    for play in sorted(plays, key=lambda p: p["order"]):
+        play_type = play["playType"]
+        if play_type in _FOUL_PERSONAL_PLAYTYPES:
+            event_type, event_detail = "foul_personal", str(play_type)
+        elif play_type in _EVENT_TYPE_BY_PLAYTYPE:
+            event_type, event_detail = _EVENT_TYPE_BY_PLAYTYPE[play_type], None
+        else:
+            continue
+        events.append(
+            {
+                "team_id": home_id if play["local"] else away_id,
+                "player_id": str(play["playerLicenseId"]) if play.get("playerLicenseId") else None,
+                "quarter": _quarter_label(play["quarter"]),
+                "clock": f"{play['minute']:02d}:{play['second']:02d}",
+                "event_type": event_type,
+                "event_detail": event_detail,
+                "home_score": play["scoreHome"],
+                "away_score": play["scoreAway"],
+            }
+        )
+    return events
+
+
 def _score_progression(plays: List[dict]) -> List[dict]:
     """Marcador tras cada jugada que cambia el resultado, en orden cronológico (`order`)."""
     steps = []
@@ -332,7 +479,7 @@ def _score_progression(plays: List[dict]) -> List[dict]:
 def build_raw_game(
     match: Dict[str, Any], boxscore: Dict[str, Any], season: int,
     shots: Dict[str, Any] = None, play_by_play: Dict[str, Any] = None, advanced_stats: Dict[str, Any] = None,
-    competition_id: Optional[int] = None,
+    competition_id: Optional[int] = None, player_advanced_stats: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Ensambla el contrato común a partir de un partido del calendario + boxscore/tiros/play-by-play.
 
@@ -350,6 +497,10 @@ def build_raw_game(
         competition_id: `AcbClient.fetch_match_header(match["id"])["competitionId"]`, opcional -
             distingue Copa del Rey/Supercopa de "ACB" (ver `_competition_name`); sin él, cae
             en "ACB" por defecto (comportamiento previo a que existiera `fetch_match_header`).
+        player_advanced_stats: `{player_license: AdvancedStats/player-advanced-stats}` (Fase 4,
+            ACB-only), opcional - ya resuelto por el llamante (`AcbClient.fetch_game`, acotado
+            a un subconjunto de jugadores por coste, ver ese método) antes de llegar aquí; sin
+            él, `player_advanced` queda vacío.
     """
     if not boxscore.get("matchFinished"):
         raise ValueError(f"AcbClient: boxscore del partido {match['id']} no está finalizado todavía")
@@ -409,6 +560,21 @@ def build_raw_game(
                     # NULL (= "sin dato") en vez de tumbar la carga del partido.
                     "ftm": row.get("freeThrowsMade"),
                     "fta": row.get("freeThrowsAttempted"),
+                    # Boxscore ampliado de JUGADOR (Fase 1, verificado en vivo
+                    # 2026-08-27 contra `Result/boxscores` real). `dunks` es
+                    # ACB-only (el propio `.get()` deja `None` si algún día
+                    # faltara, no rompe la carga).
+                    "stl": row.get("steals"),
+                    "tov": row.get("turnovers"),
+                    "blk": row.get("blocks"),
+                    "blk_against": row.get("receivedBlocks"),
+                    "pf": row.get("personalFouls"),
+                    "pf_drawn": row.get("foulsDrawn"),
+                    "oreb": row.get("offRebounds"),
+                    "dreb": row.get("defRebounds"),
+                    "plus_minus": row.get("plusMinus"),
+                    "pir": row.get("rating"),
+                    "dunks": row.get("dunks"),
                     "starter": bool(row.get("isStarted")),
                     # Foto real de acb.com, de CUALQUIER jugador de la Liga
                     # Endesa (rival incluido) — verificado en vivo, 2026-08-27:
@@ -428,6 +594,17 @@ def build_raw_game(
     starters = _extract_starters(plays, home_team["id"], away_team["id"]) if plays else None
     converted_pbp = _convert_play_by_play(plays, home_team["id"], away_team["id"])
     score_progression = _score_progression(plays)
+    play_events = _convert_play_events(plays, home_team["id"], away_team["id"])
+
+    quarter_boxscore = _quarter_player_stats(home_box) + _quarter_player_stats(away_box)
+    player_advanced = _convert_player_advanced_stats(player_advanced_stats) if player_advanced_stats else []
+
+    # Metadata de partido (Fase 3): top-level de `Result/boxscores` (arena/
+    # asistencia/árbitros) + `headCoach` por equipo en `teamBoxscores` — ya
+    # viaja en la misma respuesta que se descarga hoy, verificado en vivo
+    # 2026-08-27. `referees` es una lista de nombres; se guarda unida por
+    # " · " (ver `games.referees` en `schema.sql`).
+    referees = boxscore.get("referees")
 
     return {
         "game_id": str(match["id"]),
@@ -449,6 +626,14 @@ def build_raw_game(
         "quarter_stats": quarter_stats,
         "starters": starters,
         "play_by_play": converted_pbp,
+        "play_events": play_events,
+        "arena": boxscore.get("arena"),
+        "attendance": boxscore.get("attendance"),
+        "referees": " · ".join(referees) if referees else None,
+        "home_coach": home_box.get("headCoach"),
+        "away_coach": away_box.get("headCoach"),
+        "quarter_boxscore": quarter_boxscore,
+        "player_advanced": player_advanced,
     }
 
 

@@ -10,7 +10,7 @@ import altair as alt
 import streamlit as st
 
 from components.avatar import team_crest_html
-from components.court import shot_chart, shot_chart_caption, zone_breakdown
+from components.court import shot_chart, shot_chart_caption, zone_breakdown, zone_heatmap, zone_heatmap_caption
 from components.header import page_header
 from data import queries
 from data.db import get_read_engine
@@ -72,7 +72,7 @@ if st.session_state.get("is_current_season", True):
         st.dataframe(
             calendar_df,
             hide_index=True,
-            # `width="stretch"` (el viejo `use_container_width=True`) reparte el
+            # `width="stretch"` reparte el
             # espacio sobrante EN PARTES IGUALES entre todas las columnas — con
             # solo 5 columnas eso inflaba la del escudo (`width="small"` = 75px)
             # hasta ~170px de espacio vacío alrededor de un icono diminuto.
@@ -146,7 +146,7 @@ else:
             color=alt.condition(alt.datum.minutes > 20, alt.value("white"), alt.value("#0b0b0b")),
         )
     )
-    st.altair_chart((heat + text).properties(height=28 * minutes_df["player_name"].nunique() + 40), use_container_width=True)
+    st.altair_chart((heat + text).properties(height=28 * minutes_df["player_name"].nunique() + 40), width="stretch")
     st.caption("Celda en blanco = el jugador no disputó ese partido (rotación, baja o convocatoria).")
 
 st.divider()
@@ -172,7 +172,7 @@ else:
     st.dataframe(
         lineups_df,
         hide_index=True,
-        use_container_width=True,
+        width="stretch",
         column_order=["jugadores", "minutes", "plus_minus", "stints"],
         column_config={
             "jugadores": st.column_config.TextColumn("Quinteto", width="large"),
@@ -225,14 +225,24 @@ else:
     filtered_df = shots_df if player_choice == "Todos" else shots_df[shots_df["player_name"] == player_choice]
 
     zones_df = queries.court_zones(engine)
-    # Sin `use_container_width`: `shot_chart` ya fija su propio ancho (dominio
-    # cuadrado) — estirarlo al contenedor aplana la cancha (ver `court.py`).
-    st.altair_chart(shot_chart(filtered_df, zones_df))
-    st.caption(shot_chart_caption(filtered_df))
-
-    # La tabla de zonas es del EQUIPO completo, no del filtro de jugador de
-    # arriba (`game_zone_stats` es un agregado por equipo, sin desglose por
-    # jugador — ver `queries.team_zone_profile`); el propio aviso de
-    # `zone_breakdown` lo aclara.
+    # La tabla/mapa de zonas son del EQUIPO completo, no del filtro de
+    # jugador de arriba (`game_zone_stats` es un agregado por equipo, sin
+    # desglose por jugador — ver `queries.team_zone_profile`); el propio
+    # aviso de `zone_breakdown` lo aclara.
     zone_df = queries.team_zone_profile(engine, team_id, shots_season_id)
+
+    # Uno al lado del otro, no apilados: son dos lecturas del mismo mapa
+    # (nube de tiros vs. acierto por zona) y se comparan mejor en paralelo.
+    # Cada gráfico conserva su ancho fijo (dominio cuadrado, sin
+    # `use_container_width`/`width="stretch"` — ver `court.py`) y ya trae de
+    # serie el icono de pantalla completa de Streamlit al pasar el ratón por
+    # encima, para verlo grande sin perder el layout de dos columnas.
+    col_shots, col_zones = st.columns(2)
+    with col_shots:
+        st.altair_chart(shot_chart(filtered_df, zones_df))
+        st.caption(shot_chart_caption(filtered_df))
+    with col_zones:
+        st.markdown("**Acierto por zona**")
+        st.altair_chart(zone_heatmap(zone_df, zones_df))
+        st.caption(zone_heatmap_caption(zone_df))
     zone_breakdown(zone_df, len(shots_df), scope="team")

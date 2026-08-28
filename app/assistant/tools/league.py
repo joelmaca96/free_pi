@@ -30,7 +30,8 @@ def _competition_name(ctx: ToolContext, competition_id: int) -> str:
     family="league",
     description=(
         "Top N de una competición por métrica ('¿quién anota más en la ACB?'). Métricas de "
-        "jugador: pts, reb, ast, min, efg. De equipo: pace, ortg, drtg, net_rating, team_efg, "
+        "jugador: pts, reb, ast, min, efg, stl, blk, tov, pf, oreb, dreb, pir (tov/pf: menos es "
+        "mejor, ya vienen ordenadas así). De equipo: pace, ortg, drtg, net_rating, team_efg, "
         "team_ts. Siempre dentro de UNA competición: mezclar ACB y Euroliga no da un ranking."
     ),
     parameters=schema(

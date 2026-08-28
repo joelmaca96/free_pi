@@ -121,23 +121,49 @@ documentado pero sin integrar antes de hoy): catálogo real
 previo), no rompe la carga del partido.
 
 **Falta / limitaciones conocidas:**
-- **Boxscore incompleto pese a que la fuente da mucho más (hallazgo 2026-08-27, verificado en
-  vivo contra `api2.acb.com` con peticiones reales, no fixtures).** `Result/boxscores` trae por
-  jugador (y agregado a nivel de equipo en `stats.total`) `personalFouls`, `foulsDrawn`, `steals`,
-  `turnovers`, `blocks`, `receivedBlocks`, `offRebounds`/`defRebounds` por separado, `dunks`,
-  `plusMinus` y `rating` (PIR) — hoy `ingest/acb/adapter.py` solo mapea `pts`, `reb` (total),
-  `ast`, `ftm`/`fta`, `minutes` y `starter`. La misma respuesta trae además boxscore completo
-  **por cuarto** (`statsByPeriods`, quarters 1-4, no solo el total) y, a nivel de partido,
-  `arena`/`attendance`/`referees`/`headCoach`/`assistantCoaches` — nada de esto requiere una
-  llamada HTTP nueva, ya viaja en la respuesta que se descarga hoy. `AdvancedStats/
-  player-advanced-stats?matchId=...&playerLicense=...` (estadísticas avanzadas OFICIALES por
-  JUGADOR, con contexto partido/temporada/victorias/derrotas) tampoco se llama nunca — solo su
-  equivalente de equipo. El jugada-a-jugada (`PlayByPlay/play-by-play`) trae 37 códigos
-  `playType` distintos; solo 9 están decodificados (tiros + sustituciones/quinteto inicial) —
-  decodificados empíricamente el resto cruzando deltas de `playerStats` evento a evento: robo=103,
-  pérdida=106, tapón=102, rebote of/def=101/104, falta recibida=110, y **falta personal en 6
-  códigos distintos sin diferenciar (161/159/160/109/537/166)**. Plan completo de qué traer y
-  cómo integrarlo en la app/asistente: [02_plan_stats_completas.md](02_plan_stats_completas.md).
+- ~~**Boxscore incompleto pese a que la fuente da mucho más**~~ **RESUELTO (2026-08-27),
+  Fases 0-4 completas de [02_plan_stats_completas.md](02_plan_stats_completas.md).**
+  `ingest/acb/adapter.py` mapea ahora `personalFouls`/`foulsDrawn`/`steals`/`turnovers`/`blocks`/
+  `receivedBlocks`/`offRebounds`/`defRebounds`/`dunks`/`plusMinus`/`rating` por jugador Y por
+  equipo (`player_game_stats`/`game_advanced_stats`, columnas nuevas nullable), boxscore **por
+  cuarto** (`statsByPeriods` → `player_game_quarter_stats`, ACB-only) y metadata de partido
+  (`arena`/`attendance`/`referees`/`headCoach` por equipo → `games.arena`/etc). `AdvancedStats/
+  player-advanced-stats` se llama ahora, acotado a Baskonia + próximo rival por coste
+  (`AcbClient.fetch_player_advanced_stats`, `pipeline.py::_advanced_stats_scope`) →
+  `player_advanced_stats`. El play-by-play tipado vive en la tabla nueva `play_events`
+  (`game_id, team_id, player_id, quarter, game_clock, seconds, event_type, event_detail`):
+  decodificados y verificados en vivo (partido real 105370, cruzando deltas de `playerStats`
+  evento a evento) robo=103, pérdida=106, tapón=102, rebote of/def=101/104, asistencia=107/108/119,
+  falta recibida=110, y **falta personal en 6 códigos sin diferenciar entre sí
+  (161/159/160/109/537/166, guardados en `event_detail`, el total sigue viniendo de
+  `personalFouls` del boxscore)**. `game_team_quarter_stats.fouls_for/fouls_against` se derivan
+  de `play_events` en el loader (`ingest/common/loader.py::_quarter_foul_stats`), no del adapter.
+  Todo esto integrado en la app (fichas de jugador/equipo, boxscore de partido, faltas por cuarto,
+  cabecera de árbitros/asistencia) y en el asistente (bloques nuevos en `player_averages`/
+  `player_game`/`team_profile`/`team_style`, tools nuevas `team_foul_quarter_profile`/
+  `game_play_events`/`player_advanced_profile`), con sondeo de capacidad (`box_extras`/
+  `play_events`/`game_metadata`/`quarter_player_stats`/`player_advanced_stats` en
+  `app/assistant/capabilities.py`) para que el asistente nunca prometa un bloque que esta BD
+  concreta no tiene todavía. **Cierre del hueco que quedaba abierto en el asistente
+  (2026-08-27):** `game_metadata`/`quarter_player_stats` se sondeaban desde el principio de esta
+  fase pero ninguna tool los exponía todavía — `game_boxscore` incluye ahora un bloque
+  `metadata` (árbitros/asistencia/pabellón/entrenadores) cuando el partido concreto lo tiene, y
+  la tool nueva `player_quarter_profile` da el rendimiento medio de un jugador por cuarto a lo
+  largo de la temporada (¿arranca fuerte y decae, o al revés?), ambas con su aviso de "esta BD/
+  este partido no lo tiene" cuando corresponde en vez de fallar en silencio.
+  **Segundo hallazgo, en el prompt de sistema (`app/assistant/prompt.py`):** la tarjeta de
+  esquema autogenerada (§8.6) truncaba cada tabla/vista a sus primeras 12 columnas SIN
+  marcarlo — `game_advanced_stats` (26 columnas) cortaba justo antes del boxscore ampliado
+  completo, `games` antes de `referees`/`home_coach`/`away_coach`, y
+  `team_stats_by_competition`/`team_stats_combined` (38 columnas, la vista más ancha del
+  esquema) antes de los `opp_*` — exactamente las columnas que motivaron estas fases, invisibles
+  para `run_sql` (§4.6) pese a estar cargadas. Subido el tope a 40 (el prompt sigue en ~9k
+  caracteres, muy por debajo del techo de 20k de `test_the_prompt_stays_small_enough_for_a_32k_window`)
+  y el corte, si algún día vuelve a producirse, se marca ahora con `… (+N más)` en vez de
+  desaparecer en silencio. `_TRAPS`/`_GLOSSARY` también ampliados con las trampas reales de
+  estas fases (falta personal sin subtipo diferenciable, `fouls_for/fouls_against` derivado de
+  `play_events` con cobertura distinta a los puntos por cuarto, alcance ACB-only + solo
+  Baskonia/próximo rival de `player_advanced_stats`, y la distinción `ast_ratio` vs `ast_pct`).
 - **Clutch stats** (últimos 5 min ± 5 puntos): **resuelto (2026-08-24)**. El dato de tiempo ya
   circulaba por el play-by-play y se descartaba al agregar; ahora `reconstruct_lineups` devuelve
   también los tramos y el loader los escribe en `lineup_stints`. Los partidos ya ingeridos
@@ -263,24 +289,29 @@ competition_id)` igual que ACB — necesario desde que hay dos fuentes escribien
     otra granularidad, no un boxscore de partido, ver [02_plan_stats_completas.md
     §Fase 5](02_plan_stats_completas.md#fase-5--explícitamente-fuera-de-alcance-documentar-no-ingerir)
     para por qué no se prioriza traerlo aparte.
-  - **Boxscore por jugador incompleto igual que en ACB (hallazgo 2026-08-27, verificado en vivo
-    contra `live.euroleague.net/api/Boxscore`).** El boxscore ya trae por jugador
-    `FoulsCommited`/`FoulsReceived` (sic, typo real de la API), `BlocksAgainst`,
-    `Valuation` (PIR), `Plusminus`, `OffensiveRebounds`/`DefensiveRebounds` por separado — hoy
-    `ingest/euroleague/adapter.py` solo mapea `pts`, `reb` (total), `ast`, `ftm`/`fta`,
-    `minutes`. El jugada-a-jugada ya trae `PLAYTYPE` legible (`CM`=falta cometida,
-    `RV`=falta recibida, `ST`/`TO`/`FV`/`AG`/`O`/`D`/`AS`) que el propio adapter descarta a
-    propósito hoy (`ingest/euroleague/adapter.py:236`). Plan de qué traer:
-    [02_plan_stats_completas.md](02_plan_stats_completas.md).
+  - ~~**Boxscore por jugador incompleto igual que en ACB**~~ **RESUELTO (2026-08-27), mismas
+    Fases 0-4 que ACB.** `ingest/euroleague/adapter.py` mapea ahora `FoulsCommited`/
+    `FoulsReceived` (sic, typo real de la API confirmado en vivo), `BlocksAgainst`, `Valuation`
+    (PIR), `Plusminus`, `OffensiveRebounds`/`DefensiveRebounds` por jugador y por equipo. El
+    jugada-a-jugada (`PLAYTYPE`) ya no se descarta: `CM`/`RV`/`ST`/`TO`/`FV`/`O`/`D`/`AS` se
+    decodifican a `play_events` (`AG`, el lado "espejo" de `FV`, se omite a propósito para no
+    duplicar el tapón; `CCH` no es estadística de caja). Metadata de partido (árbitros/
+    aforo/entrenadores) sale de `GameMetadata.get_game_metadata` (endpoint `Header`), que **ya
+    se llamaba** antes de esta fase — confirmado en vivo que no hacía falta ninguna llamada
+    nueva: `Referee1/2/3`, `Stadium`, `Capacity`, `CoachA/B` estaban en la respuesta sin leerse.
+    Boxscore de jugador por cuarto (Fase 3) y avanzadas oficiales por partido (Fase 4) siguen
+    siendo ACB-only — Euroliga no los publica (asimetría real de fuente, no un hueco de
+    implementación). Detalle completo: [02_plan_stats_completas.md](02_plan_stats_completas.md).
 
 ## 3. Qué falta en conjunto (independiente de la fuente)
 
-- **Boxscore ampliado (faltas, robos, tapones, pérdidas, rebote of/def, +/-, PIR) por jugador y
-  equipo, en las DOS fuentes por igual** (hallazgo 2026-08-27, ver §2.2/§2.3 arriba): es el hueco
-  de mayor volumen de todos los listados aquí — aproximadamente la mitad de cada boxscore por
-  jugador se descarta hoy, y ya viaja en las respuestas que se descargan, sin llamada HTTP
-  adicional. Plan de implementación completo, por fases, con la integración en la app y en el
-  asistente: [02_plan_stats_completas.md](02_plan_stats_completas.md).
+- ~~**Boxscore ampliado (faltas, robos, tapones, pérdidas, rebote of/def, +/-, PIR) por jugador y
+  equipo, en las DOS fuentes por igual**~~ **RESUELTO 2026-08-27, Fases 0-4 completas de
+  [02_plan_stats_completas.md](02_plan_stats_completas.md) — ver §2.2/§2.3 arriba para el detalle
+  por fuente.** Quedan explícitamente fuera de alcance por diseño (Fase 5 del plan, no huecos):
+  `lead-tracker`/`match-leaders`/`match-team-comparison`/`lineup` de ACB (formato de presentación
+  que duplica datos ya traídos en bruto) y los líderes de liga oficiales de Euroliga (segunda
+  fuente de verdad para números que `league_leaders` ya calcula sobre datos propios).
 - **Equipos duplicados por cambio de patrocinador entre temporadas**: la normalización de
   nombres (`ingest/common/identity.py`, `_KNOWN_TEAM_ALIASES`) cubre los casos conocidos
   detectados hasta ahora (p.ej. "Kosner Baskonia"/"Bitci Baskonia"), pero es una lista

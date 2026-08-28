@@ -24,7 +24,7 @@ def ask_assistant_button(
     key: str,
     context: Optional[str] = None,
     label: str = "Preguntar al asistente",
-    use_container_width: bool = True,
+    width: str = "stretch",
 ) -> None:
     """Botón que abre el asistente con `question` ya lanzada.
 
@@ -36,7 +36,7 @@ def ask_assistant_button(
             interpretar un "y en el segundo cuarto?" posterior sin que el
             usuario tenga que repetir de qué partido habla.
     """
-    if st.button(label, key=key, use_container_width=use_container_width):
+    if st.button(label, key=key, width=width):
         st.session_state["assistant_pending"] = question
         if context:
             st.session_state["assistant_context"] = context

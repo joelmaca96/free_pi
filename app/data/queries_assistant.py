@@ -79,11 +79,22 @@ LEADER_METRICS = {
     "net_rating": ("team", "net_rating", "net rating"),
     "team_efg": ("team", "efg_pct", "eFG% de equipo"),
     "team_ts": ("team", "ts_pct", "TS% de equipo"),
+    # Fase 1 (boxscore ampliado): entran solas en league_leaders/
+    # league_percentiles sin tools adicionales, sumando la clave a esta lista
+    # blanca — ver doc/features/ingestor/02_plan_stats_completas.md §Fase 1.
+    "stl": ("player", "stl_avg", "robos por partido"),
+    "blk": ("player", "blk_avg", "tapones por partido"),
+    "tov": ("player", "tov_avg", "pérdidas por partido"),
+    "pf": ("player", "pf_avg", "faltas cometidas por partido"),
+    "oreb": ("player", "oreb_avg", "rebotes ofensivos por partido"),
+    "dreb": ("player", "dreb_avg", "rebotes defensivos por partido"),
+    "pir": ("player", "pir_avg", "valoración (PIR) por partido"),
 }
 
 # Métricas donde MENOS es mejor: ordenar todas descendente pondría al peor
-# defensor del campeonato en lo alto de "mejor defensa".
-_LOWER_IS_BETTER = {"drtg"}
+# defensor del campeonato en lo alto de "mejor defensa", o al que más pierde
+# el balón en lo alto de "mejor manejador".
+_LOWER_IS_BETTER = {"drtg", "tov", "pf"}
 
 
 @st.cache_data(ttl=_TTL, show_spinner=False)
@@ -119,14 +130,21 @@ def player_game_line(_engine: Engine, game_id: str, player_id: str) -> Optional[
     libres" (ver `schema.sql`). Quien pinte esto tiene que distinguirlo — de
     ahí que se devuelvan crudos y no rellenados a 0.
     """
-    # Los tiros libres se piden solo si la columna existe aquí (ver
-    # `_table_columns`); si no, se devuelven como NULL, que es exactamente lo
-    # que significan: "este dato no está", no "cero tiros libres".
-    has_ft = {"ftm", "fta"} <= _table_columns(_engine, "player_game_stats")
+    # Los tiros libres/boxscore ampliado se piden solo si la columna existe
+    # aquí (ver `_table_columns`); si no, se devuelven como NULL, que es
+    # exactamente lo que significan: "este dato no está", no "cero".
+    columns = _table_columns(_engine, "player_game_stats")
+    has_ft = {"ftm", "fta"} <= columns
     ft_select = "pgs.ftm, pgs.fta" if has_ft else "NULL AS ftm, NULL AS fta"
+    box_extras_cols = ["stl", "tov", "blk", "blk_against", "pf", "pf_drawn", "oreb", "dreb", "plus_minus", "pir", "dunks"]
+    has_box_extras = set(box_extras_cols) <= columns
+    box_extras_select = (
+        ", ".join(f"pgs.{col}" for col in box_extras_cols) if has_box_extras
+        else ", ".join(f"NULL AS {col}" for col in box_extras_cols)
+    )
     sql = text(f"""
         SELECT pgs.player_id, p.name AS player_name, p.team_id, t.name AS team_name,
-               pgs.minutes, pgs.pts, pgs.reb, pgs.ast, pgs.efg_pct, {ft_select}
+               pgs.minutes, pgs.pts, pgs.reb, pgs.ast, pgs.efg_pct, {ft_select}, {box_extras_select}
         FROM player_game_stats pgs
         JOIN players p ON p.id = pgs.player_id
         JOIN teams t ON t.id = p.team_id
@@ -247,6 +265,163 @@ def team_free_throws(_engine: Engine, team_id: str, season_id: int) -> pd.DataFr
         ORDER BY s.gp DESC
     """)
     return pd.read_sql(sql, _engine, params={"team_id": team_id, "season_id": season_id})
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def player_box_extras(_engine: Engine, player_id: str, season_id: int) -> pd.DataFrame:
+    """Boxscore ampliado de un jugador por competición (Fase 1).
+
+    Mismo patrón que `player_free_throws`: va aparte de
+    `queries.player_averages_all` porque solo existe si esta base de datos
+    tiene el bloque nuevo — `_view_columns` protege una BD sin reingerir.
+
+    Returns:
+        `competition, gp, gp_box_extras, stl_avg, tov_avg, blk_avg,
+        blk_against_avg, pf_avg, pf_drawn_avg, oreb_avg, dreb_avg,
+        plus_minus_avg, pir_avg, gp_dunks, dunks`. Vacío si la BD no tiene
+        el boxscore ampliado todavía.
+    """
+    if not {"gp_box_extras", "stl_avg", "pir_avg"} <= _view_columns(_engine, "player_stats_by_competition"):
+        return pd.DataFrame()
+
+    sql = text("""
+        SELECT c.name AS competition, s.gp, s.gp_box_extras,
+               s.stl_avg, s.tov_avg, s.blk_avg, s.blk_against_avg, s.pf_avg, s.pf_drawn_avg,
+               s.oreb_avg, s.dreb_avg, s.plus_minus_avg, s.pir_avg, s.gp_dunks, s.dunks
+        FROM player_stats_by_competition s
+        JOIN competitions c ON c.id = s.competition_id
+        WHERE s.player_id = :player_id AND s.season_id = :season_id
+        ORDER BY s.gp DESC
+    """)
+    return pd.read_sql(sql, _engine, params={"player_id": player_id, "season_id": season_id})
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def team_box_extras(_engine: Engine, team_id: str, season_id: int) -> pd.DataFrame:
+    """Boxscore ampliado de un equipo por competición, propio y CONCEDIDO (Fase 1).
+
+    Mismo patrón que `team_free_throws`. `opp_*` sale del self-join que ya
+    hace la vista sobre `game_advanced_stats` (rival del mismo `game_id`).
+    """
+    if not {"gp_box_extras", "opp_stl_avg"} <= _view_columns(_engine, "team_stats_by_competition"):
+        return pd.DataFrame()
+
+    sql = text("""
+        SELECT c.name AS competition, s.gp, s.gp_box_extras,
+               s.stl_avg, s.tov_avg, s.blk_avg, s.blk_against_avg, s.pf_avg, s.pf_drawn_avg,
+               s.oreb_avg, s.dreb_avg, s.pir_avg,
+               s.opp_stl_avg, s.opp_tov_avg, s.opp_blk_avg, s.opp_pf_avg
+        FROM team_stats_by_competition s
+        JOIN competitions c ON c.id = s.competition_id
+        WHERE s.team_id = :team_id AND s.season_id = :season_id
+        ORDER BY s.gp DESC
+    """)
+    return pd.read_sql(sql, _engine, params={"team_id": team_id, "season_id": season_id})
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def game_play_events(_engine: Engine, game_id: str, event_type: Optional[str] = None) -> pd.DataFrame:
+    """Play-by-play tipado de un partido (Fase 2), con reloj y marcador.
+
+    Args:
+        event_type: acota a un tipo ('steal', 'turnover', 'block', 'oreb',
+            'dreb', 'assist', 'foul_drawn', 'foul_personal'), o `None` para
+            todos.
+
+    Returns:
+        `quarter, game_clock, event_type, event_detail, team_name,
+        player_name, home_score, away_score`, en orden cronológico
+        aproximado (por cuarto; `game_clock` cuenta hacia atrás dentro de
+        cada cuarto, igual que `game_key_events`). Vacío si el partido no
+        tiene play-by-play tipado (Fase 2 sin reingerir para ese partido).
+    """
+    sql = text("""
+        SELECT pe.quarter, pe.game_clock, pe.event_type, pe.event_detail,
+               t.name AS team_name, p.name AS player_name,
+               pe.home_score, pe.away_score
+        FROM play_events pe
+        JOIN teams t ON t.id = pe.team_id
+        LEFT JOIN players p ON p.id = pe.player_id
+        WHERE pe.game_id = :game_id
+          AND (:event_type IS NULL OR pe.event_type = :event_type)
+        ORDER BY pe.quarter, pe.game_clock DESC
+    """)
+    return pd.read_sql(sql, _engine, params={"game_id": game_id, "event_type": event_type})
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def player_advanced_profile(_engine: Engine, player_id: str, season_id: int) -> pd.DataFrame:
+    """Avanzadas oficiales por partido de un jugador (Fase 4, ACB-only).
+
+    Contexto W/L APROXIMADO: se deriva de si el equipo ACTUAL del jugador
+    (`players.team_id`) ganó ese partido concreto — misma aproximación ya
+    documentada en `queries.team_shots_season`/`team_roster_production`
+    (el esquema no guarda a qué equipo pertenecía el jugador EN CADA
+    partido, así que un traspaso a mitad de temporada la ensucia hacia
+    atrás).
+
+    Returns:
+        `game_date, competition, win` + todas las columnas de
+        `player_advanced_stats` (`ast_ratio`..`pace`), un partido por fila.
+        Vacío si el jugador no tiene avanzadas oficiales en esa temporada
+        (siempre vacío para un jugador de Euroliga: fuente ACB-only).
+    """
+    if not inspect(_engine).has_table("player_advanced_stats"):
+        return pd.DataFrame()
+
+    sql = text("""
+        SELECT g.game_date, c.name AS competition,
+               CASE WHEN (g.home_team_id = p.team_id AND g.home_score > g.away_score)
+                      OR (g.away_team_id = p.team_id AND g.away_score > g.home_score)
+                    THEN 1 ELSE 0 END AS win,
+               pas.ast_ratio, pas.ast_pct, pas.stl_ratio, pas.stl_pct, pas.blk_pct, pas.tov_pct,
+               pas.orb_pct, pas.drb_pct, pas.trb_pct, pas.ts_pct, pas.three_par, pas.ppt,
+               pas.pp2ps, pas.pp3ps, pas.ppft, pas.possessions, pas.pace
+        FROM player_advanced_stats pas
+        JOIN games g ON g.id = pas.game_id
+        JOIN players p ON p.id = pas.player_id
+        JOIN competitions c ON c.id = g.competition_id
+        WHERE pas.player_id = :player_id AND g.season_id = :season_id
+        ORDER BY g.game_date
+    """)
+    return pd.read_sql(sql, _engine, params={"player_id": player_id, "season_id": season_id})
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def player_quarter_profile(_engine: Engine, player_id: str, season_id: int) -> pd.DataFrame:
+    """Rendimiento medio de un jugador por cuarto, a lo largo de una temporada (Fase 3, ACB-only).
+
+    Es la mitad "jugador" de `team_quarter_profile`: en vez de puntos de
+    equipo por cuarto, aquí se agregan las filas de `player_game_quarter_stats`
+    (boxscore de jugador por cuarto, solo existe para partidos de ACB — ver
+    `Capabilities.quarter_player_stats`) sobre TODOS los partidos de la
+    temporada, para leer si el jugador arranca fuerte y decae o al revés.
+
+    Returns:
+        `quarter, gp, min_avg, pts_avg, reb_avg, ast_avg, plus_minus_avg,
+        pir_avg`, una fila por cuarto (1-4). Vacío si esta base de datos no
+        tiene boxscore por cuarto o el jugador no tiene ninguno en esa
+        temporada (siempre vacío para un jugador que solo jugó en Euroliga).
+    """
+    if not inspect(_engine).has_table("player_game_quarter_stats"):
+        return pd.DataFrame()
+
+    sql = text("""
+        SELECT pgqs.quarter,
+               COUNT(DISTINCT pgqs.game_id) AS gp,
+               AVG(pgqs.minutes) AS min_avg,
+               AVG(pgqs.pts) AS pts_avg,
+               AVG(pgqs.reb) AS reb_avg,
+               AVG(pgqs.ast) AS ast_avg,
+               AVG(pgqs.plus_minus) AS plus_minus_avg,
+               AVG(pgqs.pir) AS pir_avg
+        FROM player_game_quarter_stats pgqs
+        JOIN games g ON g.id = pgqs.game_id
+        WHERE pgqs.player_id = :player_id AND g.season_id = :season_id
+        GROUP BY pgqs.quarter
+        ORDER BY pgqs.quarter
+    """)
+    return pd.read_sql(sql, _engine, params={"player_id": player_id, "season_id": season_id})
 
 
 @st.cache_data(ttl=_TTL, show_spinner=False)

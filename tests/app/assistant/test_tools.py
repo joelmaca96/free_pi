@@ -139,6 +139,75 @@ def test_player_averages_returns_free_throws_once_the_db_has_them(engine, ctx):
     assert any("gp_ft" in warning for warning in result["meta"]["warnings"])
 
 
+def test_player_averages_says_it_has_no_box_extras_when_the_db_has_none(catalog):
+    """Boxscore ampliado (Fase 1): mismo criterio de degradación que free_throws."""
+    result = catalog.execute("1", "player_averages", {"player_id": "howard"}).result
+
+    assert result["data"]["box_extras"] == []
+    assert any("no tiene boxscore ampliado" in warning for warning in result["meta"]["warnings"])
+
+
+def test_player_averages_returns_box_extras_once_the_db_has_them(engine, ctx):
+    from sqlalchemy import text
+
+    from app.assistant.capabilities import probe
+
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "UPDATE player_game_stats SET stl = 2, tov = 1, blk = 1, pf = 3, oreb = 1, dreb = 3,"
+                " plus_minus = 8, pir = 22 WHERE game_id = 'g5' AND player_id = 'howard'"
+            )
+        )
+    ctx.capabilities = probe(engine)
+
+    result = ToolCatalog(ctx).execute("1", "player_averages", {"player_id": "howard"}).result
+
+    acb = next(row for row in result["data"]["box_extras"] if row["competition"] == "ACB")
+    assert acb["gp_box_extras"] == 1 and acb["gp"] == 3
+    # `AVG()` ignora los NULL: con un único partido con dato, la media es
+    # ese valor tal cual, no el total repartido entre los 3 partidos jugados.
+    assert acb["pir_avg"] == pytest.approx(22, abs=0.01)
+    assert any("gp_box_extras" in warning for warning in result["meta"]["warnings"])
+
+
+def test_player_game_warns_that_missing_box_extras_are_not_zero(catalog):
+    result = catalog.execute("1", "player_game", {"player_id": "howard"}).result
+    assert any("boxscore ampliado" in warning for warning in result["meta"]["warnings"])
+
+
+def test_team_profile_separates_box_extras_taken_from_conceded(engine, ctx):
+    """Cuántos robos/tapones/pérdidas/faltas REGISTRA el rival en ese partido
+    es lo que hace falta para leer qué concede una defensa, no solo lo propio."""
+    from sqlalchemy import text
+
+    from app.assistant.capabilities import probe
+
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "UPDATE game_advanced_stats SET stl = 6, tov = 10, blk = 2, pf = 15"
+                " WHERE game_id = 'g5' AND team_id = 'bas'"
+            )
+        )
+        conn.execute(
+            text("INSERT INTO game_advanced_stats (game_id, team_id, efg_pct, ts_pct, tov_pct, orb_pct,"
+                 " stl, tov, blk, pf) VALUES ('g5', 'val', 50.0, 53.0, 12.0, 22.0, 9, 14, 4, 18)")
+        )
+        # `Capabilities.box_extras` sonda `player_game_stats.stl` (columna
+        # compartida por jugador y equipo, ver `capabilities.py`) — sin esto
+        # la capacidad seguiría apagada aunque `game_advanced_stats` ya tenga
+        # el dato de equipo.
+        conn.execute(text("UPDATE player_game_stats SET stl = 2 WHERE game_id = 'g5' AND player_id = 'howard'"))
+    ctx.capabilities = probe(engine)
+
+    result = ToolCatalog(ctx).execute("1", "team_profile", {"team_id": "bas"}).result
+
+    acb = next(row for row in result["data"]["box_extras"] if row["competition"] == "ACB")
+    assert (acb["stl_avg"], acb["tov_avg"], acb["blk_avg"], acb["pf_avg"]) == (6, 10, 2, 15)          # lo propio
+    assert (acb["opp_stl_avg"], acb["opp_tov_avg"], acb["opp_blk_avg"], acb["opp_pf_avg"]) == (9, 14, 4, 18)  # lo que concede
+
+
 def test_team_profile_separates_free_throws_taken_from_conceded(engine, ctx):
     """Cuántos libres REGALA una defensa dice más de ella que cuántos lanza su
     ataque; sin las columnas `opp_*` de la vista no se podía leer."""
@@ -386,6 +455,149 @@ def test_clutch_lineups_clips_a_stint_to_the_window(engine, ctx):
 
     # Ventana = últimos 300 s (2100..2400): solo cuentan 300, no 600.
     assert result["data"][0]["seconds"] == 300.0
+
+
+def test_team_foul_quarter_profile_is_not_registered_without_play_events(ctx):
+    assert "team_foul_quarter_profile" not in ToolCatalog(ctx).tools
+
+
+def test_team_foul_quarter_profile_answers_once_there_are_play_events(engine, ctx):
+    from sqlalchemy import text
+
+    from app.assistant.capabilities import probe
+
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO game_team_quarter_stats"
+                " (game_id, team_id, quarter, points_for, points_against, fouls_for, fouls_against)"
+                " VALUES ('g5', 'bas', 1, 20, 18, 2, 1)"
+            )
+        )
+        # Al menos un evento tipado real para que la capacidad `play_events` se encienda.
+        conn.execute(
+            text(
+                "INSERT INTO play_events (game_id, team_id, player_id, quarter, game_clock, seconds,"
+                " event_type, home_score, away_score)"
+                " VALUES ('g5', 'bas', 'howard', 'Q1', '08:00', 2320, 'foul_personal', 2, 0)"
+            )
+        )
+    ctx.capabilities = probe(engine)
+    catalog = ToolCatalog(ctx)
+    assert "team_foul_quarter_profile" in catalog.tools
+
+    result = catalog.execute("1", "team_foul_quarter_profile", {"team_id": "bas"}).result
+    row = next(r for r in result["data"] if r["quarter"] == 1)
+    assert (row["avg_fouls_for"], row["avg_fouls_against"]) == (2, 1)
+
+
+def test_game_play_events_is_not_registered_without_play_events(ctx):
+    assert "game_play_events" not in ToolCatalog(ctx).tools
+
+
+def test_game_play_events_lists_typed_events_for_a_game(engine, ctx):
+    from sqlalchemy import text
+
+    from app.assistant.capabilities import probe
+
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO play_events (game_id, team_id, player_id, quarter, game_clock, seconds,"
+                " event_type, home_score, away_score) VALUES"
+                " ('g5', 'bas', 'howard', 'Q1', '08:00', 2320, 'steal', 2, 0),"
+                " ('g5', 'bas', 'kotsar', 'Q1', '05:00', 2500, 'foul_personal', 4, 2)"
+            )
+        )
+    ctx.capabilities = probe(engine)
+    catalog = ToolCatalog(ctx)
+    assert "game_play_events" in catalog.tools
+
+    result = catalog.execute("1", "game_play_events", {"game_id": "g5", "event_type": "steal"}).result
+    assert len(result["data"]) == 1
+    assert result["data"][0]["player_name"] == "Marcus Howard"
+    assert result["data"][0]["event_type"] == "steal"
+
+
+def test_player_advanced_profile_is_not_registered_without_data(ctx):
+    assert "player_advanced_profile" not in ToolCatalog(ctx).tools
+
+
+def test_player_advanced_profile_answers_with_win_loss_context(engine, ctx):
+    from sqlalchemy import text
+
+    from app.assistant.capabilities import probe
+
+    with engine.begin() as conn:
+        conn.execute(
+            text("INSERT INTO player_advanced_stats (game_id, player_id, ts_pct, ppt) VALUES ('g5', 'howard', 61.2, 1.3)")
+        )
+    ctx.capabilities = probe(engine)
+    catalog = ToolCatalog(ctx)
+    assert "player_advanced_profile" in catalog.tools
+
+    result = catalog.execute("1", "player_advanced_profile", {"player_id": "howard"}).result
+    assert result["data"][0]["ts_pct"] == 61.2
+    # g5 (seed): Baskonia local 84-79 vs Valencia -> victoria del Baskonia.
+    assert result["data"][0]["win"] == 1
+
+
+def test_player_quarter_profile_is_not_registered_without_quarter_stats(ctx):
+    assert "player_quarter_profile" not in ToolCatalog(ctx).tools
+
+
+def test_player_quarter_profile_answers_once_there_are_quarter_stats(engine, ctx):
+    from sqlalchemy import text
+
+    from app.assistant.capabilities import probe
+
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO player_game_quarter_stats (game_id, player_id, quarter, pts, pir)"
+                " VALUES ('g5', 'howard', 1, 8, 6), ('g5', 'howard', 4, 2, -1)"
+            )
+        )
+    ctx.capabilities = probe(engine)
+    catalog = ToolCatalog(ctx)
+    assert "player_quarter_profile" in catalog.tools
+
+    result = catalog.execute("1", "player_quarter_profile", {"player_id": "howard"}).result
+    by_quarter = {row["quarter"]: row for row in result["data"]}
+    assert by_quarter[1]["pts_avg"] == 8
+    assert by_quarter[4]["pts_avg"] == 2
+    assert result["meta"]["source"] == "player_game_quarter_stats"
+
+
+# ---------------------------------------------------------------------- partido --
+
+
+def test_game_boxscore_warns_when_there_is_no_metadata(catalog):
+    """Sin árbitros/asistencia/pabellón (capacidad apagada), dilo en vez de callarlo (§7.1)."""
+    result = catalog.execute("1", "game_boxscore", {"game_id": "g5"}).result
+    assert "metadata" not in result["data"]
+    assert any("metadata de partido" in warning for warning in result["meta"]["warnings"])
+
+
+def test_game_boxscore_includes_metadata_once_the_db_has_it(engine, ctx):
+    from sqlalchemy import text
+
+    from app.assistant.capabilities import probe
+
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "UPDATE games SET arena = 'Fernando Buesa Arena', attendance = 10000,"
+                " referees = 'Árbitro Uno · Árbitro Dos' WHERE id = 'g5'"
+            )
+        )
+    ctx.capabilities = probe(engine)
+    catalog = ToolCatalog(ctx)
+
+    result = catalog.execute("1", "game_boxscore", {"game_id": "g5"}).result
+    assert result["data"]["metadata"]["arena"] == "Fernando Buesa Arena"
+    assert result["data"]["metadata"]["attendance"] == 10000
+    assert not result["meta"].get("warnings")
 
 
 # ----------------------------------------------------- catálogo y ejecución --

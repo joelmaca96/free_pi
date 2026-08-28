@@ -162,11 +162,19 @@ def _team_totals(boxscore_records: list, team_code: str) -> Dict[str, float]:
         "orb": sum(r.get("OffensiveRebounds", 0) or 0 for r in rows),
         "drb": sum(r.get("DefensiveRebounds", 0) or 0 for r in rows),
         "ast": sum(r.get("Assistances", 0) or 0 for r in rows),
-        # Steals/BlocksFavour: nombres de columna ASUMIDOS (no verificados en
-        # vivo, a diferencia del resto de esta función) - si difieren, esto
-        # degrada en silencio a 0 en vez de romper la carga del partido.
+        # `Steals`/`BlocksFavour` — verificadas en vivo el 2026-08-27 (petición
+        # real a `live.euroleague.net/api/Boxscore`, fuera de `euroleague_api`):
+        # son los nombres reales, ya no "asumidos, sin verificar" como decía
+        # esta nota antes.
         "stl": sum(r.get("Steals", 0) or 0 for r in rows),
         "blk": sum(r.get("BlocksFavour", 0) or 0 for r in rows),
+        # Boxscore ampliado de EQUIPO (Fase 1), mismos nombres verificados en
+        # vivo el mismo día: `FoulsCommited` (sic, typo real de la API).
+        "blk_against": sum(r.get("BlocksAgainst", 0) or 0 for r in rows),
+        "pf": sum(r.get("FoulsCommited", 0) or 0 for r in rows),
+        "pf_drawn": sum(r.get("FoulsReceived", 0) or 0 for r in rows),
+        "plus_minus": sum(r.get("Plusminus", 0) or 0 for r in rows),
+        "pir": sum(r.get("Valuation", 0) or 0 for r in rows),
     }
 
 
@@ -214,6 +222,10 @@ def _advanced_stats_for_team(team_id: str, own: Dict[str, float], opponent: Dict
         # motivo que en `ingest/acb/adapter.py`): sin volumen ni acierto no se
         # puede leer el juego desde la línea. Ya estaba sumado en `own`.
         "ftm": own["ftm"], "fta": own["fta"],
+        # Boxscore ampliado de EQUIPO (Fase 1) — ya sumado en `own`/`_team_totals`.
+        "stl": own["stl"], "tov": own["tov"], "blk": own["blk"], "blk_against": own["blk_against"],
+        "pf": own["pf"], "pf_drawn": own["pf_drawn"], "oreb": own["orb"], "dreb": own["drb"],
+        "plus_minus": own["plus_minus"], "pir": own["pir"],
     }
 
 
@@ -261,6 +273,61 @@ def _convert_play_by_play(records: List[dict], team_ids_by_code: Dict[str, str])
                     "points": _POINTS_BY_PLAYTYPE[playtype],
                 }
             )
+    return events
+
+
+# Play-by-play TIPADO (Fase 2, 2026-08-27): `PLAYTYPE` ya es texto legible
+# (a diferencia de ACB) — verificado en vivo contra
+# `live.euroleague.net/api/PlayByPlay` real (gamecode 1, temporada 2025-26).
+# `AG` (tapón recibido, el lado "espejo" de `FV`) y `CCH` (challenge del
+# entrenador) se dejan fuera a propósito: `AG` duplicaría el tapón que `FV`
+# ya cuenta desde el lado del bloqueador (mismo criterio de un único evento
+# por tapón que usa ACB, código 102) y `CCH` no es una estadística de caja.
+_EVENT_TYPE_BY_PLAYTYPE = {
+    "CM": "foul_personal", "RV": "foul_drawn", "ST": "steal", "TO": "turnover",
+    "FV": "block", "O": "oreb", "D": "dreb", "AS": "assist",
+}
+
+
+def _convert_play_events(records: List[dict], team_ids_by_code: Dict[str, str]) -> List[dict]:
+    """Eventos tipados con reloj y marcador — mismo recorrido que `_convert_play_by_play`.
+
+    `POINTS_A`/`POINTS_B` solo vienen rellenos en las jugadas que anotan (el
+    resto los trae `None`/NaN): se arrastra el último marcador conocido fila
+    a fila (los registros ya llegan en orden cronológico, mismo criterio que
+    `_convert_play_by_play`) para que cada evento lleve el marcador real del
+    momento, no solo el de la última canasta.
+    """
+    events = []
+    home_score, away_score = 0, 0
+    for row in records:
+        points_a, points_b = row.get("POINTS_A"), row.get("POINTS_B")
+        if points_a is not None and points_a == points_a:  # descarta NaN (NaN != NaN)
+            home_score = int(points_a)
+        if points_b is not None and points_b == points_b:
+            away_score = int(points_b)
+
+        event_type = _EVENT_TYPE_BY_PLAYTYPE.get(str(row.get("PLAYTYPE", "")).strip())
+        if event_type is None:
+            continue
+        code = row.get("CODETEAM")
+        code = _clean_id(code) if code else None
+        if not code or code not in team_ids_by_code:
+            continue
+        player_id = row.get("PLAYER_ID")
+        player_id = _clean_id(player_id) if player_id else None
+
+        events.append(
+            {
+                "team_id": team_ids_by_code[code],
+                "player_id": player_id or None,
+                "quarter": _period_to_quarter(int(row["PERIOD"])),
+                "clock": str(row["MARKERTIME"]),
+                "event_type": event_type,
+                "home_score": home_score,
+                "away_score": away_score,
+            }
+        )
     return events
 
 
@@ -337,6 +404,20 @@ def build_raw_game(
                 # columna es nullable justamente para poder distinguirlas.
                 "ftm": _int_or_none(row.get("FreeThrowsMade")),
                 "fta": _int_or_none(row.get("FreeThrowsAttempted")),
+                # Boxscore ampliado de JUGADOR (Fase 1, verificado en vivo
+                # 2026-08-27 contra `live.euroleague.net/api/Boxscore` real).
+                # `dunks` no existe en esta fuente — queda fuera del dict,
+                # `.get()` en `raw_game.py` lo deja en `None`.
+                "stl": _int_or_none(row.get("Steals")),
+                "tov": _int_or_none(row.get("Turnovers")),
+                "blk": _int_or_none(row.get("BlocksFavour")),
+                "blk_against": _int_or_none(row.get("BlocksAgainst")),
+                "pf": _int_or_none(row.get("FoulsCommited")),
+                "pf_drawn": _int_or_none(row.get("FoulsReceived")),
+                "oreb": _int_or_none(row.get("OffensiveRebounds")),
+                "dreb": _int_or_none(row.get("DefensiveRebounds")),
+                "plus_minus": _int_or_none(row.get("Plusminus")),
+                "pir": _int_or_none(row.get("Valuation")),
                 "starter": bool(row.get("IsStarter", 0)),
             }
         )
@@ -350,6 +431,7 @@ def build_raw_game(
     pace = round((_estimate_possessions(home_totals) + _estimate_possessions(away_totals)) / 2, 1)
     converted_pbp = _convert_play_by_play(play_by_play_records or [], team_ids_by_code)
     quarter_stats = _quarter_stats_from_events(converted_pbp, home_team["id"], away_team["id"])
+    play_events = _convert_play_events(play_by_play_records or [], team_ids_by_code)
 
     shots = []
     for row in shot_records:
@@ -388,6 +470,22 @@ def build_raw_game(
         "score_progression": [],
         "quarter_stats": quarter_stats,
         "play_by_play": converted_pbp,
+        "play_events": play_events,
+        # Metadata de partido (Fase 3): `GameMetadata.get_game_metadata`
+        # (endpoint `Header`) YA se llama hoy (`ingest/euroleague/client.py::
+        # fetch_game_metadata`) — sin llamada HTTP nueva, verificado en vivo
+        # 2026-08-27 (`Stadium`, `Capacity`, `Referee1/2/3`, `CoachA/B`).
+        # `referees`/coaches reutilizan `_format_player_name`: llegan en el
+        # mismo formato "APELLIDO, Nombre" que los nombres de jugador.
+        "arena": metadata.get("Stadium"),
+        "attendance": _int_or_none(metadata.get("Capacity")),
+        "referees": " · ".join(
+            _format_player_name(name) for name in
+            (metadata.get("Referee1"), metadata.get("Referee2"), metadata.get("Referee3"))
+            if name
+        ) or None,
+        "home_coach": _format_player_name(metadata["CoachA"]) if metadata.get("CoachA") else None,
+        "away_coach": _format_player_name(metadata["CoachB"]) if metadata.get("CoachB") else None,
     }
 
 

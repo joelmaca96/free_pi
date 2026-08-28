@@ -9,11 +9,21 @@ arrancar, que el esquema de scouting existe — si no, para con un mensaje
 claro en vez de dejar que cada página falle por su cuenta (criterio de
 aceptación #4 de `local/features/001-interfaz-baskonia/01_design.md`).
 """
+import logging
+
 import streamlit as st
 
 from components.branding import CREST_PATH
 from data import queries
 from data.db import get_read_engine
+
+# Streamlit solo configura SUS propios loggers (`streamlit.logger.get_logger`,
+# ver el paquete instalado) — el logger raíz de Python se queda sin handler,
+# así que cualquier `logging.getLogger(__name__).info(...)` de este proyecto
+# (p.ej. `assistant.agent`, el cronometraje del asistente) no aparece en la
+# consola sin esto. `basicConfig` es un no-op si el raíz ya tiene handler, así
+# que repetirlo en cada rerun de Streamlit es inofensivo.
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-7s %(name)s: %(message)s")
 
 st.set_page_config(page_title="Baskonia · Scouting", page_icon=CREST_PATH, layout="wide")
 # Escudo persistente arriba a la izquierda del sidebar en TODAS las páginas —

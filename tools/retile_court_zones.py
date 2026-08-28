@@ -24,6 +24,14 @@ Mismo criterio que aplica `ingest/common/raw_game.py` en la carga: un tiro
 nunca por geometría — su centinela cae exactamente dentro de "Pintura", y sin
 `ORDER BY` en `classify_zone` qué zona "gana" el solape no está garantizado.
 
+También recoge el split de ala por triple (2026-08-27, ver el comentario
+sobre `court_zones` en `schema.sql`): `classify_zone` ahora resuelve "Ala
+izq."/"Ala der." un paso más, contra la elipse real de
+`packages.baskonia_core.court_geometry`, hacia sus sub-zonas "(2)"/"(3)"
+(filas 14-17) — así que en una BD con tiros cargados ANTES de ese cambio,
+`shots.zone_id` sigue apuntando a la fila mezclada vieja hasta que se
+ejecuta esta herramienta con `--apply`.
+
 No hace falta red ni volver a descargar ningún partido: opera solo sobre lo
 que ya hay en la BD, igual que `tools/fix_shot_coords.py` (incluso se puede
 ejecutar después de él, o en cualquier orden — no comparten filas).

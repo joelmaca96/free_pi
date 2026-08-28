@@ -81,8 +81,8 @@ def _metric(value, percentile, *, league_teams=None) -> dict:
     family="team",
     description=(
         "Récord y perfil avanzado de un equipo (pace, ORtg, DRtg, net rating, eFG%, TS%) por "
-        "competición, más los tiros libres que lanza y los que concede si están disponibles. "
-        "Para leerlo COMO ESTILO con contexto de liga usa team_style."
+        "competición, más tiros libres y boxscore ampliado (robos/tapones/pérdidas/faltas, propios "
+        "y concedidos) si están disponibles. Para leerlo COMO ESTILO con contexto de liga usa team_style."
     ),
     parameters=schema({"team_id": {"type": "string"}, "season_id": {"type": "integer"}}, required=["team_id"]),
     artifact="table",
@@ -111,6 +111,15 @@ def team_profile(ctx: ToolContext, team_id: str, season_id: int = None) -> dict:
         data["free_throws"] = records(queries_assistant.team_free_throws(ctx.engine, team_id, season))
     else:
         warnings.append("Esta base de datos no tiene tiros libres: no hables del juego desde la línea.")
+
+    if ctx.capabilities.box_extras:
+        # Mismo criterio que `free_throws`: propio Y concedido (`opp_*`).
+        data["box_extras"] = records(queries_assistant.team_box_extras(ctx.engine, team_id, season))
+    else:
+        warnings.append(
+            "Esta base de datos no tiene boxscore ampliado de equipo: no hables de robos, tapones, "
+            "pérdidas o faltas (propias ni concedidas)."
+        )
 
     return ok(
         data,
@@ -246,6 +255,38 @@ def team_quarter_profile(ctx: ToolContext, team_id: str, season_id: int = None) 
 
 
 @register(
+    "team_foul_quarter_profile",
+    family="team",
+    description=(
+        "Faltas medias cometidas y recibidas por cuarto de un equipo — la pregunta de en qué "
+        "momento del partido se mete en problemas de faltas (bonus temprano, titular que sale). "
+        "Necesita play-by-play tipado (Fase 2): puede tener menos partidos que team_quarter_profile."
+    ),
+    parameters=schema({"team_id": {"type": "string"}, "season_id": {"type": "integer"}}, required=["team_id"]),
+    artifact="bar",
+    requires="play_events",
+)
+def team_foul_quarter_profile(ctx: ToolContext, team_id: str, season_id: int = None) -> dict:
+    season, fallback_warning = _team_season(ctx, team_id, season_id)
+    quarters = queries.team_foul_quarter_profile(ctx.engine, team_id, season)
+    if quarters.empty:
+        return fail(
+            "sin datos",
+            detail=f"No hay faltas por cuarto derivadas de {team_id} en la temporada {season}.",
+            suggestion="Hace falta play-by-play tipado (Fase 2); no todos los partidos lo tienen todavía.",
+        )
+    rows = records(quarters)
+    return ok(
+        rows,
+        source="game_team_quarter_stats (derivado de play_events)",
+        scope=f"temporada {season}",
+        gp=int(quarters["gp"].max()),
+        warnings=[fallback_warning] if fallback_warning else None,
+        artifact=artifact("bar", rows, title="Faltas por cuarto"),
+    )
+
+
+@register(
     "team_zone_profile",
     family="team",
     description="Acierto y volumen de tiro por zona de cancha de un equipo, de más a menos volumen.",
@@ -365,7 +406,11 @@ def team_roster(ctx: ToolContext, team_id: str, season_id: int = None) -> dict:
 @register(
     "game_boxscore",
     family="team",
-    description="Boxscore completo de un partido (opcionalmente solo de un equipo). Necesita game_id: sácalo antes con resolve_game.",
+    description=(
+        "Boxscore completo de un partido (opcionalmente solo de un equipo), con parciales por "
+        "cuarto y, si esta base de datos los tiene, árbitros/asistencia/pabellón/entrenadores. "
+        "Necesita game_id: sácalo antes con resolve_game."
+    ),
     parameters=schema(
         {"game_id": {"type": "string"}, "team_id": {"type": "string"}}, required=["game_id"]
     ),
@@ -381,9 +426,76 @@ def game_boxscore(ctx: ToolContext, game_id: str, team_id: str = None) -> dict:
         return fail("sin boxscore", detail=f"El partido {game_id} no tiene boxscore cargado.")
     rows = records(box)
     quarters = queries.game_quarter_stats(ctx.engine, game_id)
+    data = {"game": clean_dict(header), "boxscore": rows, "quarters": records(quarters)}
+
+    # Metadata de partido (Fase 3): árbitros/asistencia/pabellón/entrenadores.
+    # Sondeada a nivel de BASE DE DATOS por `Capabilities.game_metadata`, pero
+    # un partido concreto puede seguir sin ella (se ingirió antes de esta fase,
+    # o la fuente no la dio para ese partido) — de ahí el segundo aviso.
+    warnings = []
+    if ctx.capabilities.game_metadata:
+        metadata = clean_dict(queries.game_metadata(ctx.engine, game_id))
+        if metadata and any(value is not None for value in metadata.values()):
+            data["metadata"] = metadata
+        else:
+            warnings.append(
+                "Este partido concreto no trae árbitros/asistencia/pabellón/entrenadores: no todos "
+                "los partidos ingeridos los tienen."
+            )
+    else:
+        warnings.append(
+            "Esta base de datos no tiene metadata de partido: no hables de árbitros, asistencia, "
+            "pabellón ni entrenadores."
+        )
+
     return ok(
-        {"game": clean_dict(header), "boxscore": rows, "quarters": records(quarters)},
+        data,
         source="player_game_stats + game_team_quarter_stats",
         scope=f"{game_id} · {header['game_date']} · {header['competition']}",
+        warnings=warnings or None,
         artifact=artifact("table", rows, title="Boxscore"),
+    )
+
+
+@register(
+    "game_play_events",
+    family="team",
+    description=(
+        "Play-by-play tipado de un partido: robos, pérdidas, tapones, rebote ofensivo/defensivo, "
+        "asistencias, faltas recibidas y faltas personales, con reloj y marcador exactos. Para "
+        "'¿en qué momento del partido pasó X?' — no todos los partidos lo tienen todavía (Fase 2)."
+    ),
+    parameters=schema(
+        {
+            "game_id": {"type": "string"},
+            "event_type": {
+                "type": "string",
+                "enum": ["steal", "turnover", "block", "oreb", "dreb", "assist", "foul_drawn", "foul_personal"],
+                "description": "Acota a un tipo de evento; omite para traerlos todos.",
+            },
+        },
+        required=["game_id"],
+    ),
+    artifact="table",
+    requires="play_events",
+)
+def game_play_events(ctx: ToolContext, game_id: str, event_type: str = None) -> dict:
+    header = queries_assistant.game_header(ctx.engine, game_id)
+    if header is None:
+        return fail("partido desconocido", detail=f"No existe el partido {game_id!r}.",
+                    suggestion="Usa resolve_game para obtener un game_id válido.")
+    events = queries_assistant.game_play_events(ctx.engine, game_id, event_type)
+    if events.empty:
+        return fail(
+            "sin eventos",
+            detail=f"El partido {game_id} no tiene play-by-play tipado todavía (Fase 2).",
+            suggestion="Prueba con game_boxscore para el resumen agregado de ese partido.",
+        )
+    rows = records(events)
+    return ok(
+        rows,
+        source="play_events",
+        scope=f"{game_id} · {header['game_date']} · {header['competition']}",
+        gp=len(rows),
+        artifact=artifact("table", rows, title="Play-by-play"),
     )

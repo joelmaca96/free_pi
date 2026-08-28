@@ -10,14 +10,17 @@ import datetime as dt
 import altair as alt
 import streamlit as st
 
+from assistant.llm import LLMError, build_llm_client
 from components.ask_assistant import ask_assistant_button
 from components.court import shot_chart, shot_chart_caption
 from components.header import page_header
-from data import queries
+from data import queries, queries_assistant
 from data.db import get_read_engine
+from reports import postgame_ppt
 
 _ACCENT = "#008300"
 _MUTED = "#898781"
+_PPT_MIME = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
 
 engine = get_read_engine()
 team_id = queries.get_own_team_id(engine)
@@ -63,7 +66,7 @@ with list_col:
     event = st.dataframe(
         display_df[["game_date", "competition", "condicion", "rival_logo_url", "Resultado"]],
         hide_index=True,
-        use_container_width=True,
+        width="stretch",
         on_select="rerun",
         selection_mode="single-row",
         column_config={
@@ -96,6 +99,24 @@ with detail_col:
         st.metric(selected_game["rival"], int(selected_game["pts_contra"]))
     st.caption(f"{selected_game['competition']} · {selected_game['game_date']} · {selected_game['condicion']}")
 
+    # Cabecera de metadata (Fase 3): árbitro(s)/asistencia/pabellón — ya
+    # viaja en las respuestas que se descargan hoy en las dos fuentes (ver
+    # doc/features/ingestor/02_plan_stats_completas.md §Fase 3). `None` en
+    # cualquier campo = partido ingerido antes de esta fase, o la fuente no
+    # lo dio para ese partido concreto (no se pinta nada en ese caso, no un
+    # hueco vacío).
+    meta = queries.game_metadata(engine, game_id)
+    if meta:
+        meta_bits = []
+        if meta.get("arena"):
+            meta_bits.append(f"🏟️ {meta['arena']}")
+        if meta.get("attendance"):
+            meta_bits.append(f"👥 {int(meta['attendance']):,} espectadores".replace(",", "."))
+        if meta.get("referees"):
+            meta_bits.append(f"🧑‍⚖️ {meta['referees']}")
+        if meta_bits:
+            st.caption(" · ".join(meta_bits))
+
     # Entrada contextual al chat (ver `local/features/005-chatbot/01_design.md`
     # §9.4): se salta al asistente con la pregunta escrita y con el partido ya
     # dicho, para no tener que repetirlo en la conversación.
@@ -110,6 +131,52 @@ with detail_col:
         ),
         label="Preguntar al asistente sobre este partido",
     )
+
+    # "PPT para Paolo" (encargo directo del cuerpo técnico): una diapositiva
+    # por jugador del Baskonia con lo más destacado — para bien o para mal —
+    # de ESTE partido. Genera los bytes al pulsar y los deja en
+    # `session_state` para que el `download_button` (que en Streamlit hace su
+    # propio rerun) siga teniendo el fichero listo sin regenerarlo dos veces.
+    # Clave por `game_id`: cambiar de partido no debe ofrecer para descargar
+    # la PPT de otro.
+    ppt_state_key = f"ppt_bytes_{game_id}"
+    if st.button("Generar PPT para Paolo", key=f"ppt_btn_{game_id}", width="stretch"):
+        with st.spinner("Generando la PPT con los puntos destacados de cada jugador..."):
+            game_context = {
+                "rival": rival_name,
+                "resultado": f"Baskonia {int(selected_game['pts_favor'])}-{int(selected_game['pts_contra'])} {rival_name}",
+                "competicion": selected_game["competition"],
+                "fecha": selected_game["game_date"],
+                "subtitle": (
+                    f"{'vs' if selected_game['condicion'] == 'Local' else '@'} {rival_name} · "
+                    f"{int(selected_game['pts_favor'])}–{int(selected_game['pts_contra'])} · "
+                    f"{selected_game['game_date']}"
+                ),
+            }
+            try:
+                llm_client = build_llm_client()
+            except LLMError:
+                # Proveedor configurado pero inutilizable (SDK que falta, clave
+                # rechazada): la PPT sale igual, con el fallback por reglas de
+                # `postgame_ppt.select_highlights` — este botón no depende del chat.
+                llm_client = None
+            try:
+                st.session_state[ppt_state_key] = postgame_ppt.generate_postgame_ppt(
+                    engine, game_id, team_id, game_context, llm_client=llm_client
+                )
+            except ValueError as exc:
+                st.session_state.pop(ppt_state_key, None)
+                st.warning(str(exc))
+
+    if st.session_state.get(ppt_state_key):
+        st.download_button(
+            "Descargar PPT",
+            data=st.session_state[ppt_state_key],
+            file_name=f"baskonia_vs_{rival_name}_{selected_game['game_date']}.pptx".replace(" ", "_"),
+            mime=_PPT_MIME,
+            key=f"ppt_dl_{game_id}",
+            width="stretch",
+        )
 
     tab_resumen, tab_box, tab_tiros, tab_quintetos = st.tabs(
         ["Resumen", "Boxscore", "Tiros", "Quintetos"]
@@ -137,8 +204,32 @@ with detail_col:
                 )
                 .properties(height=220)
             )
-            st.altair_chart(chart, use_container_width=True)
+            st.altair_chart(chart, width="stretch")
             st.caption(f"🟢 Baskonia · ⚪ {selected_game['rival']}")
+
+            # Faltas por cuarto (Fase 2), derivadas de play_events — puede
+            # faltar aunque los puntos por cuarto sí estén (no todos los
+            # partidos tienen play-by-play tipado todavía).
+            fouls_df = quarters_df.dropna(subset=["fouls_for"])
+            if not fouls_df.empty:
+                fouls_chart = (
+                    alt.Chart(fouls_df)
+                    .mark_bar()
+                    .encode(
+                        x=alt.X("quarter:O", title="Cuarto"),
+                        y=alt.Y("fouls_for:Q", title="Faltas"),
+                        color=alt.Color(
+                            "is_us:N",
+                            scale=alt.Scale(domain=[True, False], range=[_ACCENT, _MUTED]),
+                            legend=None,
+                        ),
+                        xOffset="team_name:N",
+                        tooltip=[alt.Tooltip("team_name:N", title="Equipo"), alt.Tooltip("fouls_for:Q", title="Faltas")],
+                    )
+                    .properties(height=180)
+                )
+                st.caption("Faltas cometidas por cuarto")
+                st.altair_chart(fouls_chart, width="stretch")
 
         adv_df = queries.game_advanced_stats(engine, game_id)
         if adv_df.empty:
@@ -155,6 +246,9 @@ with detail_col:
             metrics = [
                 ("ortg", "ORtg"), ("efg_pct", "eFG%"), ("ts_pct", "TS%"),
                 ("tov_pct", "TOV%"), ("orb_pct", "ORB%"), ("ft_pct", "FT%"),
+                # Boxscore ampliado de equipo (Fase 1): NaN = partido ingerido
+                # antes de esa fase, mismo criterio de "sin dato" que arriba.
+                ("stl", "Robos"), ("blk", "Tapones"), ("pf", "Faltas"), ("pir", "PIR"),
             ]
             st.markdown("**Avanzadas** (Baskonia · rival)")
             for key, label in metrics:
@@ -176,8 +270,11 @@ with detail_col:
             st.dataframe(
                 box_df,
                 hide_index=True,
-                use_container_width=True,
-                column_order=["player_name", "minutes", "pts", "reb", "ast", "efg_pct"],
+                width="stretch",
+                column_order=[
+                    "player_name", "minutes", "pts", "reb", "ast", "efg_pct",
+                    "stl", "blk", "tov", "pf", "plus_minus", "pir",
+                ],
                 column_config={
                     "player_name": st.column_config.TextColumn("Jugador"),
                     "minutes": st.column_config.NumberColumn("Min", format="%.1f"),
@@ -185,8 +282,21 @@ with detail_col:
                     "reb": st.column_config.NumberColumn("Reb"),
                     "ast": st.column_config.NumberColumn("Ast"),
                     "efg_pct": st.column_config.NumberColumn("eFG%", format="%.1f"),
+                    # Boxscore ampliado (Fase 1) — columnas vacías en vez de
+                    # ausentes si el partido no lo trae (NULL real en la BD).
+                    "stl": st.column_config.NumberColumn("Rob"),
+                    "blk": st.column_config.NumberColumn("Tap"),
+                    "tov": st.column_config.NumberColumn("PP"),
+                    "pf": st.column_config.NumberColumn("Faltas"),
+                    "plus_minus": st.column_config.NumberColumn("+/-"),
+                    "pir": st.column_config.NumberColumn("PIR"),
                     "player_id": None,
                     "team_id": None,
+                    "blk_against": None,
+                    "pf_drawn": None,
+                    "oreb": None,
+                    "dreb": None,
+                    "dunks": None,
                 },
             )
 
@@ -222,7 +332,7 @@ with detail_col:
             st.dataframe(
                 lineups_df,
                 hide_index=True,
-                use_container_width=True,
+                width="stretch",
                 column_order=["jugadores", "minutes", "plus_minus"],
                 column_config={
                     "jugadores": st.column_config.TextColumn("Quinteto", width="large"),
@@ -244,3 +354,14 @@ with detail_col:
             st.markdown("**Eventos clave**")
             for row in events_df.itertuples():
                 st.caption(f"{row.quarter} · {row.game_clock} — {row.label} ({row.team_name})")
+
+        # Faltas con reloj exacto (Fase 2), mismo formato que "Eventos clave"
+        # de arriba — es lo que permite leer el momento de acumulación de
+        # faltas ("foul trouble"), no solo el total del boxscore.
+        fouls_df = queries_assistant.game_play_events(engine, game_id, event_type="foul_personal")
+        if not fouls_df.empty:
+            st.divider()
+            st.markdown("**Faltas personales**")
+            for row in fouls_df.itertuples():
+                who = f" — {row.player_name}" if row.player_name else ""
+                st.caption(f"{row.quarter} · {row.game_clock} — {row.team_name}{who}")

@@ -17,8 +17,10 @@ cambio en un sitio.
 """
 from typing import Optional
 
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 from sqlalchemy.engine import Connection
+
+from packages.baskonia_core import court_geometry
 
 # `id` de la fila 'Mate' del seed de `court_zones` (`schema.sql`). NO se llega
 # a ella por geometría (`classify_zone`): su rectángulo es un único punto que
@@ -64,14 +66,71 @@ def to_court_coords(lateral_cm: float, depth_cm: float) -> tuple:
     return _HOOP_X + lateral_cm * _LATERAL_SCALE, _HOOP_Y - depth_cm * _DEPTH_SCALE
 
 
+# "Ala izq."/"Ala der." (ver `schema.sql`) mezclaban tiros de 2 largos y
+# triples de ala en el mismo rectángulo — `classify_zone` las resuelve con un
+# segundo paso, ver ahí. Las 4 zonas de referencia con las que arma la elipse
+# son las mismas que usa `app/components/court.py::_three_point_ellipse`.
+_WING_BASE_LABELS = {"Ala izq.", "Ala der."}
+_ELLIPSE_ZONE_LABELS = ("Pintura", "Triple esquina izq.", "Triple esquina der.", "Triple exterior")
+
+
+def _three_point_ellipse_from_db(conn: Connection):
+    """La elipse de `court_geometry.three_point_ellipse`, leída de `court_zones`.
+
+    Mismos 4 nombres de zona que `_ELLIPSE_ZONE_LABELS` — si a alguno le
+    falta la fila (BD sin ese seed todavía) devuelve `None` en vez de
+    inventar geometría, igual que la función a la que delega.
+    """
+    rows = {
+        r["label"]: r
+        for r in conn.execute(
+            text("SELECT label, x_min, x_max, y_min, y_max FROM court_zones WHERE label IN :labels").bindparams(
+                bindparam("labels", expanding=True)
+            ),
+            {"labels": list(_ELLIPSE_ZONE_LABELS)},
+        ).mappings()
+    }
+    if not set(_ELLIPSE_ZONE_LABELS) <= rows.keys():
+        return None
+    return court_geometry.three_point_ellipse(
+        rows["Pintura"], rows["Triple esquina izq."], rows["Triple esquina der."], rows["Triple exterior"]
+    )
+
+
 def classify_zone(conn: Connection, pos_x: float, pos_y: float) -> Optional[int]:
-    """Devuelve el `zone_id` cuyo rectángulo contiene `(pos_x, pos_y)`, o `None`."""
+    """Devuelve el `zone_id` cuyo rectángulo contiene `(pos_x, pos_y)`, o `None`.
+
+    "Ala izq."/"Ala der." reciben un segundo paso: en cuanto el primer
+    `SELECT` (el rectángulo de siempre) cae en una de las dos, se resuelve el
+    lado real con la elipse de triple (`court_geometry`, la MISMA que dibuja
+    `app/components/court.py::_court_line_layers`) y se devuelve la sub-zona
+    "(2)"/"(3)" que toque (filas 14-17 del seed de `schema.sql`) en vez del
+    rectángulo mezclado. Sin esa geometría, o sin esas filas todavía en la BD
+    (una que aún no ha pasado por `init_scouting_db()` con este seed), se cae
+    al `zone_id` del primer paso — nunca se rompe por falta de las filas
+    nuevas.
+    """
     row = conn.execute(
         text(
-            "SELECT id FROM court_zones"
+            "SELECT id, label FROM court_zones"
             " WHERE :x BETWEEN x_min AND x_max AND :y BETWEEN y_min AND y_max"
             " LIMIT 1"
         ),
         {"x": pos_x, "y": pos_y},
     ).first()
-    return row[0] if row is not None else None
+    if row is None:
+        return None
+    zone_id, label = row
+    if label not in _WING_BASE_LABELS:
+        return zone_id
+
+    geom = _three_point_ellipse_from_db(conn)
+    if geom is None:
+        return zone_id
+    boundary = court_geometry.wing_boundary_y(pos_x, geom)
+    kind = "2" if boundary is not None and pos_y > boundary else "3"
+    sub_row = conn.execute(
+        text("SELECT id FROM court_zones WHERE label = :label"),
+        {"label": f"{label} ({kind})"},
+    ).first()
+    return sub_row[0] if sub_row is not None else zone_id

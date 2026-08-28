@@ -62,8 +62,13 @@ def load_game(conn: Connection, game: NormalizedGame) -> None:
     _upsert_game(conn, game)
     for advanced in game.advanced:
         _upsert_game_advanced_stats(conn, game.id, advanced)
+    _replace_play_events(conn, game.id, game.play_events)
+    # `fouls_for`/`fouls_against` de `game_team_quarter_stats` se DERIVAN de
+    # `play_events` (Fase 2), no vienen del adapter — por eso se calculan
+    # aquí, después de cargar los eventos, y no en `raw_game.parse_and_resolve`.
+    foul_stats = _quarter_foul_stats(game.play_events, game.quarter_stats)
     for quarter_stat in game.quarter_stats:
-        _upsert_quarter_stats(conn, game.id, quarter_stat)
+        _upsert_quarter_stats(conn, game.id, quarter_stat, foul_stats)
     for stat in game.boxscore:
         _upsert_player_game_stats(conn, game.id, stat)
     _replace_lineups(conn, game.id, game.lineups)
@@ -72,10 +77,12 @@ def load_game(conn: Connection, game: NormalizedGame) -> None:
     _replace_zone_stats_from_shots(conn, game.id, game.shots)
     _replace_key_events(conn, game.id, game.key_events)
     _replace_score_progression(conn, game.id, game.score_progression)
+    _replace_player_quarter_stats(conn, game.id, game.quarter_boxscore)
+    _replace_player_advanced_stats(conn, game.id, game.player_advanced)
     logger.info(
-        "game %s cargado (%d boxscore, %d lineups, %d tramos, %d shots, %d eventos)",
+        "game %s cargado (%d boxscore, %d lineups, %d tramos, %d shots, %d eventos, %d play_events)",
         game.id, len(game.boxscore), len(game.lineups), len(game.stints),
-        len(game.shots), len(game.key_events),
+        len(game.shots), len(game.key_events), len(game.play_events),
     )
 
 
@@ -85,10 +92,12 @@ def _upsert_game(conn: Connection, game: NormalizedGame) -> None:
             """
             INSERT INTO games
                 (id, season_id, competition_id, home_team_id, away_team_id,
-                 game_date, home_score, away_score, pace, narrative)
+                 game_date, home_score, away_score, pace, narrative,
+                 arena, attendance, referees, home_coach, away_coach)
             VALUES
                 (:id, :season_id, :competition_id, :home_team_id, :away_team_id,
-                 :game_date, :home_score, :away_score, :pace, :narrative)
+                 :game_date, :home_score, :away_score, :pace, :narrative,
+                 :arena, :attendance, :referees, :home_coach, :away_coach)
             ON CONFLICT (id) DO UPDATE SET
                 season_id = excluded.season_id,
                 competition_id = excluded.competition_id,
@@ -98,7 +107,12 @@ def _upsert_game(conn: Connection, game: NormalizedGame) -> None:
                 home_score = excluded.home_score,
                 away_score = excluded.away_score,
                 pace = excluded.pace,
-                narrative = excluded.narrative
+                narrative = excluded.narrative,
+                arena = excluded.arena,
+                attendance = excluded.attendance,
+                referees = excluded.referees,
+                home_coach = excluded.home_coach,
+                away_coach = excluded.away_coach
             """
         ),
         {
@@ -112,6 +126,11 @@ def _upsert_game(conn: Connection, game: NormalizedGame) -> None:
             "away_score": game.away_score,
             "pace": game.pace,
             "narrative": game.narrative,
+            "arena": game.arena,
+            "attendance": game.attendance,
+            "referees": game.referees,
+            "home_coach": game.home_coach,
+            "away_coach": game.away_coach,
         },
     )
 
@@ -122,10 +141,12 @@ def _upsert_game_advanced_stats(conn: Connection, game_id: str, advanced) -> Non
             """
             INSERT INTO game_advanced_stats
                 (game_id, team_id, ortg, drtg, net_rating, efg_pct, ts_pct, tov_pct, orb_pct,
-                 ast_pct, stl_pct, blk_pct, ft_rate, ast_to_ratio, ftm, fta)
+                 ast_pct, stl_pct, blk_pct, ft_rate, ast_to_ratio, ftm, fta,
+                 stl, tov, blk, blk_against, pf, pf_drawn, oreb, dreb, plus_minus, pir)
             VALUES
                 (:game_id, :team_id, :ortg, :drtg, :net_rating, :efg_pct, :ts_pct, :tov_pct, :orb_pct,
-                 :ast_pct, :stl_pct, :blk_pct, :ft_rate, :ast_to_ratio, :ftm, :fta)
+                 :ast_pct, :stl_pct, :blk_pct, :ft_rate, :ast_to_ratio, :ftm, :fta,
+                 :stl, :tov, :blk, :blk_against, :pf, :pf_drawn, :oreb, :dreb, :plus_minus, :pir)
             ON CONFLICT (game_id, team_id) DO UPDATE SET
                 ortg = excluded.ortg,
                 drtg = excluded.drtg,
@@ -140,7 +161,17 @@ def _upsert_game_advanced_stats(conn: Connection, game_id: str, advanced) -> Non
                 ft_rate = excluded.ft_rate,
                 ast_to_ratio = excluded.ast_to_ratio,
                 ftm = excluded.ftm,
-                fta = excluded.fta
+                fta = excluded.fta,
+                stl = excluded.stl,
+                tov = excluded.tov,
+                blk = excluded.blk,
+                blk_against = excluded.blk_against,
+                pf = excluded.pf,
+                pf_drawn = excluded.pf_drawn,
+                oreb = excluded.oreb,
+                dreb = excluded.dreb,
+                plus_minus = excluded.plus_minus,
+                pir = excluded.pir
             """
         ),
         {
@@ -160,19 +191,83 @@ def _upsert_game_advanced_stats(conn: Connection, game_id: str, advanced) -> Non
             "ast_to_ratio": advanced.ast_to_ratio,
             "ftm": advanced.ftm,
             "fta": advanced.fta,
+            "stl": advanced.stl,
+            "tov": advanced.tov,
+            "blk": advanced.blk,
+            "blk_against": advanced.blk_against,
+            "pf": advanced.pf,
+            "pf_drawn": advanced.pf_drawn,
+            "oreb": advanced.oreb,
+            "dreb": advanced.dreb,
+            "plus_minus": advanced.plus_minus,
+            "pir": advanced.pir,
         },
     )
 
 
-def _upsert_quarter_stats(conn: Connection, game_id: str, quarter_stat) -> None:
+def _quarter_label_to_int(label: str):
+    """`'Q1'..'Q4'` -> `1..4`; `None` para prórroga (`'OTn'`) u otro formato.
+
+    `game_team_quarter_stats.quarter` exige `BETWEEN 1 AND 4` (ver
+    `schema.sql`) — una prórroga no tiene columna donde agregarse ahí, igual
+    que ya pasaba con `points_for`/`points_against` antes de esta fase.
+    """
+    if not label.startswith("Q"):
+        return None
+    try:
+        quarter = int(label[1:])
+    except ValueError:
+        return None
+    return quarter if 1 <= quarter <= 4 else None
+
+
+def _quarter_foul_stats(events: List, quarter_stats: List) -> Dict[tuple, tuple]:
+    """Faltas por cuarto derivadas de `play_events` (Fase 2): `{(team_id, quarter): (for, against)}`.
+
+    Vacío si el partido no tiene `play_events` (sin play-by-play tipado
+    todavía) — `_upsert_quarter_stats` deja `fouls_for`/`fouls_against` en
+    NULL en ese caso, no en 0. Con eventos sí disponibles, un cuarto sin
+    ninguna falta de un equipo cuenta como 0 real (cobertura completa del
+    evento, no ausencia de dato) — la única aproximación es que solo hay dos
+    equipos por partido, así que "las del contrario" es sencillamente la
+    otra entrada del mismo cuarto.
+    """
+    if not events:
+        return {}
+    counts: Dict[tuple, int] = {}
+    for event in events:
+        if event.event_type != "foul_personal":
+            continue
+        quarter = _quarter_label_to_int(event.quarter)
+        if quarter is None:
+            continue
+        key = (event.team_id, quarter)
+        counts[key] = counts.get(key, 0) + 1
+
+    team_ids = sorted({qs.team_id for qs in quarter_stats})
+    result: Dict[tuple, tuple] = {}
+    for quarter in range(1, 5):
+        for team_id in team_ids:
+            fouls_for = counts.get((team_id, quarter), 0)
+            opponents = [counts.get((t, quarter), 0) for t in team_ids if t != team_id]
+            fouls_against = opponents[0] if opponents else None
+            result[(team_id, quarter)] = (fouls_for, fouls_against)
+    return result
+
+
+def _upsert_quarter_stats(conn: Connection, game_id: str, quarter_stat, foul_stats: Dict[tuple, tuple]) -> None:
+    fouls_for, fouls_against = foul_stats.get((quarter_stat.team_id, quarter_stat.quarter), (None, None))
     conn.execute(
         text(
             """
-            INSERT INTO game_team_quarter_stats (game_id, team_id, quarter, points_for, points_against)
-            VALUES (:game_id, :team_id, :quarter, :points_for, :points_against)
+            INSERT INTO game_team_quarter_stats
+                (game_id, team_id, quarter, points_for, points_against, fouls_for, fouls_against)
+            VALUES (:game_id, :team_id, :quarter, :points_for, :points_against, :fouls_for, :fouls_against)
             ON CONFLICT (game_id, team_id, quarter) DO UPDATE SET
                 points_for = excluded.points_for,
-                points_against = excluded.points_against
+                points_against = excluded.points_against,
+                fouls_for = excluded.fouls_for,
+                fouls_against = excluded.fouls_against
             """
         ),
         {
@@ -181,6 +276,8 @@ def _upsert_quarter_stats(conn: Connection, game_id: str, quarter_stat) -> None:
             "quarter": quarter_stat.quarter,
             "points_for": quarter_stat.points_for,
             "points_against": quarter_stat.points_against,
+            "fouls_for": fouls_for,
+            "fouls_against": fouls_against,
         },
     )
 
@@ -190,8 +287,10 @@ def _upsert_player_game_stats(conn: Connection, game_id: str, stat) -> None:
         text(
             """
             INSERT INTO player_game_stats
-                (game_id, player_id, minutes, pts, reb, ast, efg_pct, ftm, fta)
-            VALUES (:game_id, :player_id, :minutes, :pts, :reb, :ast, :efg_pct, :ftm, :fta)
+                (game_id, player_id, minutes, pts, reb, ast, efg_pct, ftm, fta,
+                 stl, tov, blk, blk_against, pf, pf_drawn, oreb, dreb, plus_minus, pir, dunks)
+            VALUES (:game_id, :player_id, :minutes, :pts, :reb, :ast, :efg_pct, :ftm, :fta,
+                    :stl, :tov, :blk, :blk_against, :pf, :pf_drawn, :oreb, :dreb, :plus_minus, :pir, :dunks)
             ON CONFLICT (game_id, player_id) DO UPDATE SET
                 minutes = excluded.minutes,
                 pts = excluded.pts,
@@ -199,7 +298,18 @@ def _upsert_player_game_stats(conn: Connection, game_id: str, stat) -> None:
                 ast = excluded.ast,
                 efg_pct = excluded.efg_pct,
                 ftm = excluded.ftm,
-                fta = excluded.fta
+                fta = excluded.fta,
+                stl = excluded.stl,
+                tov = excluded.tov,
+                blk = excluded.blk,
+                blk_against = excluded.blk_against,
+                pf = excluded.pf,
+                pf_drawn = excluded.pf_drawn,
+                oreb = excluded.oreb,
+                dreb = excluded.dreb,
+                plus_minus = excluded.plus_minus,
+                pir = excluded.pir,
+                dunks = excluded.dunks
             """
         ),
         {
@@ -212,6 +322,17 @@ def _upsert_player_game_stats(conn: Connection, game_id: str, stat) -> None:
             "efg_pct": stat.efg_pct,
             "ftm": stat.ftm,
             "fta": stat.fta,
+            "stl": stat.stl,
+            "tov": stat.tov,
+            "blk": stat.blk,
+            "blk_against": stat.blk_against,
+            "pf": stat.pf,
+            "pf_drawn": stat.pf_drawn,
+            "oreb": stat.oreb,
+            "dreb": stat.dreb,
+            "plus_minus": stat.plus_minus,
+            "pir": stat.pir,
+            "dunks": stat.dunks,
         },
     )
 
@@ -374,4 +495,111 @@ def _replace_score_progression(conn: Connection, game_id: str, steps: List) -> N
                 " VALUES (:g, :idx, :home, :away)"
             ),
             {"g": game_id, "idx": step.step_index, "home": step.home_score, "away": step.away_score},
+        )
+
+
+def _replace_play_events(conn: Connection, game_id: str, events: List) -> None:
+    """Play-by-play tipado (Fase 2): mismo patrón "borrar por `game_id` y reinsertar" que `key_events`."""
+    conn.execute(text("DELETE FROM play_events WHERE game_id = :g"), {"g": game_id})
+    for event in events:
+        conn.execute(
+            text(
+                "INSERT INTO play_events"
+                " (game_id, team_id, player_id, quarter, game_clock, seconds, event_type, event_detail,"
+                "  home_score, away_score)"
+                " VALUES (:g, :team_id, :player_id, :quarter, :clock, :seconds, :event_type, :detail,"
+                "  :home, :away)"
+            ),
+            {
+                "g": game_id,
+                "team_id": event.team_id,
+                "player_id": event.player_id,
+                "quarter": event.quarter,
+                "clock": event.game_clock,
+                "seconds": event.seconds,
+                "event_type": event.event_type,
+                "detail": event.event_detail,
+                "home": event.home_score,
+                "away": event.away_score,
+            },
+        )
+
+
+def _replace_player_quarter_stats(conn: Connection, game_id: str, quarter_boxscore: List) -> None:
+    """Boxscore de jugador por cuarto (Fase 3, ACB-only): borrar-y-reinsertar por `game_id`."""
+    conn.execute(text("DELETE FROM player_game_quarter_stats WHERE game_id = :g"), {"g": game_id})
+    for row in quarter_boxscore:
+        conn.execute(
+            text(
+                "INSERT INTO player_game_quarter_stats"
+                " (game_id, player_id, quarter, minutes, pts, reb, ast, stl, tov, blk, pf,"
+                "  oreb, dreb, ftm, fta, plus_minus, pir)"
+                " VALUES (:g, :player_id, :quarter, :minutes, :pts, :reb, :ast, :stl, :tov, :blk, :pf,"
+                "  :oreb, :dreb, :ftm, :fta, :plus_minus, :pir)"
+            ),
+            {
+                "g": game_id,
+                "player_id": row.player_id,
+                "quarter": row.quarter,
+                "minutes": row.minutes,
+                "pts": row.pts,
+                "reb": row.reb,
+                "ast": row.ast,
+                "stl": row.stl,
+                "tov": row.tov,
+                "blk": row.blk,
+                "pf": row.pf,
+                "oreb": row.oreb,
+                "dreb": row.dreb,
+                "ftm": row.ftm,
+                "fta": row.fta,
+                "plus_minus": row.plus_minus,
+                "pir": row.pir,
+            },
+        )
+
+
+def _replace_player_advanced_stats(conn: Connection, game_id: str, player_advanced: List) -> None:
+    """Avanzadas oficiales por jugador (Fase 4, ACB-only): borrar-y-reinsertar por `game_id`.
+
+    Sin clave natural adicional más allá de `(game_id, player_id)` — se podría
+    hacer `ON CONFLICT DO UPDATE` como `player_game_stats`, pero se ingiere
+    solo para un subconjunto de jugadores por partido (ver
+    `ingest/acb/adapter.py::_player_advanced_stats`), así que borrar-y-
+    reinsertar evita dejar filas huérfanas de una ingesta anterior con más
+    jugadores que la actual.
+    """
+    conn.execute(text("DELETE FROM player_advanced_stats WHERE game_id = :g"), {"g": game_id})
+    for row in player_advanced:
+        conn.execute(
+            text(
+                "INSERT INTO player_advanced_stats"
+                " (game_id, player_id, ast_ratio, ast_pct, stl_ratio, stl_pct, blk_pct, tov_pct,"
+                "  orb_pct, drb_pct, trb_pct, ts_pct, three_par, ppt, pp2ps, pp3ps, ppft,"
+                "  possessions, pace)"
+                " VALUES (:g, :player_id, :ast_ratio, :ast_pct, :stl_ratio, :stl_pct, :blk_pct, :tov_pct,"
+                "  :orb_pct, :drb_pct, :trb_pct, :ts_pct, :three_par, :ppt, :pp2ps, :pp3ps, :ppft,"
+                "  :possessions, :pace)"
+            ),
+            {
+                "g": game_id,
+                "player_id": row.player_id,
+                "ast_ratio": row.ast_ratio,
+                "ast_pct": row.ast_pct,
+                "stl_ratio": row.stl_ratio,
+                "stl_pct": row.stl_pct,
+                "blk_pct": row.blk_pct,
+                "tov_pct": row.tov_pct,
+                "orb_pct": row.orb_pct,
+                "drb_pct": row.drb_pct,
+                "trb_pct": row.trb_pct,
+                "ts_pct": row.ts_pct,
+                "three_par": row.three_par,
+                "ppt": row.ppt,
+                "pp2ps": row.pp2ps,
+                "pp3ps": row.pp3ps,
+                "ppft": row.ppft,
+                "possessions": row.possessions,
+                "pace": row.pace,
+            },
         )

@@ -90,8 +90,14 @@ def test_acb_transform_and_load_is_idempotent(engine):
             text("SELECT COUNT(*) FROM player_game_stats WHERE game_id='acb-2025123401'")
         ).scalar_one() == 2
         assert conn.execute(text("SELECT COUNT(*) FROM shots WHERE game_id='acb-2025123401'")).scalar_one() == 2
-        # el rival ("Unicaja") no se duplica al re-ejecutar
-        assert conn.execute(text("SELECT COUNT(*) FROM teams WHERE name='Unicaja'")).scalar_one() == 1
+        # el rival ("Unicaja") no se duplica al re-ejecutar. `scalar_one()` ya
+        # falla solo si "acb-uni" quedara enlazado a mas de un equipo; no se
+        # comprueba `teams.name` porque el fixture semilla "Unicaja Málaga"
+        # (mismo club, `_KNOWN_TEAM_ALIASES` lo funde ahí en vez de crear una
+        # fila nueva "Unicaja" - ver `packages/baskonia_core/names.py`).
+        conn.execute(
+            text("SELECT team_id FROM team_external_ids WHERE source='acb' AND external_id='acb-uni'")
+        ).scalar_one()
 
 
 def test_acb_boxscore_photo_fills_in_for_a_rival_without_one(engine):
@@ -195,7 +201,7 @@ def test_acb_pipeline_run_isolates_failures():
     fake_client = mock.Mock()
     fake_client.fetch_season_game_ids.return_value = ["good", "bad"]
 
-    def fetch_game(game_id):
+    def fetch_game(game_id, **kwargs):
         if game_id == "bad":
             raise RuntimeError("boom")
         return RAW_GAME
@@ -234,7 +240,10 @@ def test_acb_run_single_game_carga_solo_el_partido_pedido(engine):
 
     assert summary == {"loaded": ["2025123401"], "failed": []}
     client.fetch_season_finished_matches.assert_called_once_with(2025)
-    client.fetch_game.assert_called_once_with("2025123401")
+    # `advanced_stats_team_ids` (Fase 4): vacío porque la BD del fixture no
+    # tiene `team_external_ids` de ACB para el Baskonia ni próximo rival
+    # cargado — `_advanced_stats_scope` degrada a set() sin fallar.
+    client.fetch_game.assert_called_once_with("2025123401", advanced_stats_team_ids=set())
 
     with engine.connect() as conn:
         assert conn.execute(

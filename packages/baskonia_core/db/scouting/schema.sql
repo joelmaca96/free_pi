@@ -56,16 +56,56 @@ CREATE INDEX idx_team_external_team ON team_external_ids(team_id);
 -- (Euroliga) y el 48% (Supercopa) de los tiros de la BD sin zona
 -- (`zone_id = NULL`, fuera de `game_zone_stats`), ver
 -- `local/features/006-zonas-cancha/00_request.md`. Se añaden las filas 7-9
--- para cubrir el resto de la zona ofensiva realista (x:15-485, y:50-460) casi
--- sin huecos — se dejan sin cubrir a propósito las franjas pegadas a banda
--- (x<15 o x>485 a media distancia de profundidad) y la línea de fondo detrás
--- del aro (y>455 en la columna de la pintura): son zonas fuera de banda o
--- pegadas al tablero, sin volumen real de tiro. Las filas nuevas siguen
--- siendo una aproximación de rectángulo -igual que las 6 originales-: "Ala
--- izq./der." mezclan tiros de 2 largos y triples de ala (la línea de triple
--- real es un arco, no cabe en un único corte recto sin multiplicar zonas);
--- se advierte igual que ya hacía `app/pages/proximo_rival.py` con las zonas
--- originales.
+-- para cubrir el resto de la zona ofensiva realista casi sin huecos.
+--
+-- RETESELADO 2 (2026-08-28): "casi" seguía dejando huecos reales — verificado
+-- contra los 95 263 tiros ya cargados en `data/baskonia.db`: 3 834 sin zona
+-- (4,0%), de los que 3 474 caían DENTRO del dominio 0-500 (el resto, unos
+-- pocos cientos, son coordenadas de origen fuera de todo rango físico —
+-- errores de la fuente, no un hueco de tesela; esos se quedan sin zona a
+-- propósito). Dos causas, ambas de rectángulos-a-medias, no de que faltara
+-- cubrir zonas enteras:
+--   1) Costuras de 1 unidad entre zonas vecinas que usaban límites
+--      consecutivos en vez de compartidos (p.ej. "Ala izq." acababa en
+--      x=194 y "Pintura" empezaba en x=195 — un tiro real en x=194.6, con
+--      coordenadas float, no encajaba en NINGUNO de los dos `BETWEEN`).
+--      Se corrige haciendo que cada par de zonas vecinas comparta el mismo
+--      límite exacto (un tiro justo en esa línea entera cae en cualquiera
+--      de las dos, que es un caso de medida nula, no un hueco).
+--   2) Dos franjas que el reteselado anterior dejó fuera A PROPÓSITO
+--      pensando que no tenían volumen real: las bandas laterales más allá
+--      de "Ala izq./der." (x<56 / x>444, entre la esquina de triple y el
+--      lateral de pista) y la línea de fondo pegada al aro (y>455, fuera de
+--      "Pintura"). Verificado que SÍ tienen volumen (varios cientos de
+--      tiros cada una) — se añaden las filas 11-13 para cubrirlas. También
+--      se estira "Triple exterior"/"Triple ala izq./der." hasta y=0 (antes
+--      cortaban en y=50): un tiro muy profundo (cerca de medio campo) es
+--      raro pero real, y el dominio del gráfico llega hasta ahí.
+-- Las filas 1/4/5/6 (anclas) NO cambian ninguno de los límites de los que
+-- depende `app/components/court.py::_court_line_layers` (`Pintura` entera;
+-- `x_max`/`y_min`/`y_max` de cada esquina de triple; `y_max` de "Triple
+-- exterior") — solo se tocan campos libres (el resto de límites de esas
+-- mismas filas) y las filas 2/3/6/8/9, que ya lo eran.
+--
+-- Las filas siguen siendo una aproximación de rectángulo -igual que desde el
+-- primer reteselado-, EXCEPTO "Ala izq./der." (filas 2/3): mezclaban tiros
+-- de 2 largos y triples de ala en el mismo rectángulo (la línea de triple
+-- real es un arco, no cabe en un único corte recto) hasta que se resolvió
+-- así:
+--
+-- SPLIT DE ALA POR TRIPLE (2026-08-27): filas 14-17 ("Ala izq./der. (2)"/
+-- "(3)"). Igual que "Mate" (fila 10, ver más abajo), NO son geometría real:
+-- cada una es un punto degenerado (nunca alcanzable por el `BETWEEN` de
+-- `classify_zone`, ver `ingest/common/zones.py`) que solo existe para que
+-- `shots.zone_id`/`game_zone_stats.zone_id` tengan a qué apuntar. La
+-- clasificación de VERDAD la hace `classify_zone` en dos pasos: primero
+-- localiza el rectángulo de siempre ("Ala izq."/"Ala der.", filas 2/3, que
+-- se DEJAN intactas para esto); si es una de esas dos, resuelve el lado con
+-- la elipse de triple real (`packages.baskonia_core.court_geometry`, la
+-- MISMA que dibuja `app/components/court.py::_court_line_layers`) y cae a la
+-- fila 14-17 que toque. `app/components/court.py` pinta esa frontera curva
+-- directamente (`_wing_split_layers`/`_wing_area_layers`), no el rectángulo
+-- degenerado de estas 4 filas.
 --
 -- Fila 10 ("Mate") es la excepción: no es geometría real, es una etiqueta
 -- para los tiros SIN coordenadas medidas (`shots.located = 0`, hoy solo los
@@ -143,6 +183,22 @@ CREATE TABLE games (
   away_score      INTEGER NOT NULL,
   pace            REAL NOT NULL,
   narrative       TEXT,
+  -- Metadata de partido (Fase 3, 2026-08-27): en ACB ya viaja en la misma
+  -- respuesta de boxscore que se descarga hoy (top-level `arena`/`attendance`/
+  -- `referees`, `headCoach` por equipo en `teamBoxscores`) — sin llamada HTTP
+  -- nueva, verificado en vivo. En Euroliga viaja en `GameMetadata.
+  -- get_game_metadata` (endpoint `Header`), que YA se llama hoy
+  -- (`ingest/euroleague/client.py::fetch_game_metadata`) — también sin
+  -- llamada nueva, verificado en vivo contra `live.euroleague.net/api/Header`
+  -- (`Referee1/2/3`, `Stadium`, `Capacity`, `CoachA/B`). `referees` guarda los
+  -- árbitros unidos por " · " (lista variable de 2-3 nombres según fuente,
+  -- no vale la pena una tabla aparte para un dato que no se consulta suelto).
+  -- Todas nullable: columnas añadidas sobre BDs ya cargadas.
+  arena           TEXT,
+  attendance      INTEGER,
+  referees        TEXT,
+  home_coach      TEXT,
+  away_coach      TEXT,
   UNIQUE (season_id, competition_id, game_date, home_team_id, away_team_id)
 );
 
@@ -180,6 +236,24 @@ CREATE TABLE game_advanced_stats (
   -- equipo los agregan con un self-join (`opp_*`).
   ftm           INTEGER,
   fta           INTEGER,
+  -- Boxscore ampliado de EQUIPO (Fase 1, 2026-08-27): totales que ambas
+  -- fuentes ya dan en `stats.total`/`totr` del boxscore que se descarga hoy,
+  -- sin llamada HTTP nueva — ver doc/features/ingestor/02_plan_stats_completas.md
+  -- §Fase 1. `pir` es la suma de valoraciones individuales (ACB `rating`,
+  -- Euroliga `Valuation`), verificado en vivo que ambas fuentes también la dan
+  -- ya sumada a nivel de equipo. Todas nullable: columnas añadidas sobre BDs
+  -- ya cargadas (ver `engine.py::_ADDITIVE_COLUMN_MIGRATIONS`), NULL = partido
+  -- ingerido antes de que existieran, no "cero".
+  stl           INTEGER,
+  tov           INTEGER,
+  blk           INTEGER,
+  blk_against   INTEGER,
+  pf            INTEGER,
+  pf_drawn      INTEGER,
+  oreb          INTEGER,
+  dreb          INTEGER,
+  plus_minus    INTEGER,
+  pir           INTEGER,
   PRIMARY KEY (game_id, team_id)
 );
 
@@ -193,6 +267,14 @@ CREATE TABLE game_team_quarter_stats (
   quarter         INTEGER NOT NULL CHECK (quarter BETWEEN 1 AND 4),
   points_for      INTEGER NOT NULL,
   points_against  INTEGER NOT NULL,
+  -- Faltas por cuarto (Fase 2): DERIVADAS, no una llamada de fuente nueva —
+  -- el loader las calcula agregando `play_events` por (game_id, team_id,
+  -- quarter) tras cargarlos, unificando ACB y Euroliga con una sola fuente de
+  -- verdad aunque el boxscore-por-cuarto de Euroliga no dé faltas (ver
+  -- doc/features/ingestor/02_plan_stats_completas.md §Fase 2/§Fase 3). NULL =
+  -- partido sin play-by-play tipado todavía, no "cero faltas".
+  fouls_for       INTEGER,
+  fouls_against   INTEGER,
   PRIMARY KEY (game_id, team_id, quarter)
 );
 
@@ -218,6 +300,84 @@ CREATE TABLE player_game_stats (
   -- libres" — por eso las vistas cuentan aparte `gp_ft`.
   ftm       INTEGER,
   fta       INTEGER,
+  -- Boxscore ampliado de JUGADOR (Fase 1, 2026-08-27): mismo motivo y misma
+  -- fuente que las columnas equivalentes de `game_advanced_stats` (ver ese
+  -- comentario) — verificado en vivo contra ambas fuentes,
+  -- doc/features/ingestor/02_plan_stats_completas.md §Fase 1. `dunks` es
+  -- ACB-only (Euroliga no lo publica en su boxscore): queda NULL para
+  -- cualquier fila de Euroliga, no es un hueco de ingesta.
+  stl         INTEGER,
+  tov         INTEGER,
+  blk         INTEGER,
+  blk_against INTEGER,
+  pf          INTEGER,
+  pf_drawn    INTEGER,
+  oreb        INTEGER,
+  dreb        INTEGER,
+  plus_minus  INTEGER,
+  pir         INTEGER,
+  dunks       INTEGER,
+  PRIMARY KEY (game_id, player_id)
+);
+
+-- Boxscore por jugador y CUARTO (Fase 3, ACB-only): `statsByPeriods` ya trae
+-- el boxscore completo por cuarto en la misma respuesta que se descarga hoy
+-- para el total del partido — asimetría real con Euroliga, que solo da
+-- puntos de equipo por cuarto (`ByQuarter`), no boxscore de jugador (ver
+-- doc/features/ingestor/02_plan_stats_completas.md §Fase 3). Se puebla SOLO
+-- cuando la fuente es ACB (capability `quarter_player_stats`, gated); las
+-- filas de partidos de Euroliga simplemente no existen, igual que
+-- `players.position` ya es siempre NULL en Euroliga hoy.
+CREATE TABLE player_game_quarter_stats (
+  game_id     TEXT NOT NULL REFERENCES games(id),
+  player_id   TEXT NOT NULL REFERENCES players(id),
+  quarter     INTEGER NOT NULL CHECK (quarter BETWEEN 1 AND 4),
+  minutes     REAL,
+  pts         INTEGER,
+  reb         INTEGER,
+  ast         INTEGER,
+  stl         INTEGER,
+  tov         INTEGER,
+  blk         INTEGER,
+  pf          INTEGER,
+  oreb        INTEGER,
+  dreb        INTEGER,
+  ftm         INTEGER,
+  fta         INTEGER,
+  plus_minus  INTEGER,
+  pir         INTEGER,
+  PRIMARY KEY (game_id, player_id, quarter)
+);
+CREATE INDEX idx_pgqs_game_player ON player_game_quarter_stats(game_id, player_id);
+
+-- Estadísticas avanzadas OFICIALES por jugador y partido (Fase 4, ACB-only):
+-- `AdvancedStats/player-advanced-stats` nunca se llamaba antes de esta fase
+-- (ver doc/features/ingestor/02_plan_stats_completas.md §Fase 4) — coste de
+-- una llamada HTTP por jugador y partido, así que se ingiere solo para
+-- jugadores del Baskonia y del próximo rival, no toda la plantilla rival
+-- histórica. Euroliga no tiene equivalente per-partido (su `PlayerStats`
+-- oficial es agregado de TEMPORADA, no por partido) — tabla ACB-only, gated
+-- por competición igual que `player_game_quarter_stats`.
+CREATE TABLE player_advanced_stats (
+  game_id       TEXT NOT NULL REFERENCES games(id),
+  player_id     TEXT NOT NULL REFERENCES players(id),
+  ast_ratio     REAL,
+  ast_pct       REAL,
+  stl_ratio     REAL,
+  stl_pct       REAL,
+  blk_pct       REAL,
+  tov_pct       REAL,
+  orb_pct       REAL,
+  drb_pct       REAL,
+  trb_pct       REAL,
+  ts_pct        REAL,
+  three_par     REAL,
+  ppt           REAL,
+  pp2ps         REAL,
+  pp3ps         REAL,
+  ppft          REAL,
+  possessions   REAL,
+  pace          REAL,
   PRIMARY KEY (game_id, player_id)
 );
 
@@ -314,6 +474,37 @@ CREATE TABLE key_events (
   label       TEXT NOT NULL
 );
 
+-- Play-by-play TIPADO (Fase 2, 2026-08-27): a diferencia de `key_events`
+-- (texto editorial libre, `label`), esto es un evento por fila con tipo
+-- consultable y reloj exacto — lo que hace falta para "¿en qué cuarto
+-- acumula faltas?" o rachas de pérdidas/robos por tramo de partido. Se llena
+-- con el mismo patrón "borrar por `game_id` y reinsertar" que
+-- `key_events`/`shots` (`ingest/common/loader.py::_replace_play_events`).
+-- `event_type` es uno de: 'steal', 'turnover', 'block', 'oreb', 'dreb',
+-- 'assist', 'foul_drawn', 'foul_personal' — ver
+-- doc/features/ingestor/02_plan_stats_completas.md §Fase 2 para el mapeo
+-- `playType`/`PLAYTYPE` verificado en vivo en cada fuente. `event_detail`
+-- guarda el código crudo de fuente SOLO para 'foul_personal' en ACB (6
+-- subtipos sin semántica distinguible, ver ese mismo documento) — el conteo
+-- agregado de faltas sigue viniendo del boxscore (`player_game_stats.pf`),
+-- no de contar estas filas, así que un subtipo sin diferenciar no bloquea
+-- ningún análisis ya existente.
+CREATE TABLE play_events (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  game_id       TEXT NOT NULL REFERENCES games(id),
+  team_id       TEXT NOT NULL REFERENCES teams(id),
+  player_id     TEXT REFERENCES players(id),  -- NULLABLE: algún evento no lleva jugador claro
+  quarter       TEXT NOT NULL,        -- 'Q1'..'Q4'/'OTn', mismo formato que key_events.quarter
+  game_clock    TEXT NOT NULL,        -- 'MM:SS'
+  seconds       REAL NOT NULL,        -- desde el inicio del partido (game_clock_to_seconds)
+  event_type    TEXT NOT NULL,
+  event_detail  TEXT,
+  home_score    INTEGER NOT NULL,
+  away_score    INTEGER NOT NULL
+);
+CREATE INDEX idx_play_events_game_team ON play_events(game_id, team_id);
+CREATE INDEX idx_play_events_type ON play_events(game_id, event_type);
+
 -- Progresión de marcador (hoy interpolada de forma sintética entre 0 y el
 -- resultado final; en producción, marcador real por posesión/minuto).
 CREATE TABLE score_progression (
@@ -371,6 +562,17 @@ CREATE TABLE upcoming_matchups (
 -- `game_advanced_stats`): es lo que hace falta para leer cuántos tiros
 -- libres CONCEDE un equipo, no solo cuántos lanza.
 
+-- BOXSCORE AMPLIADO (Fase 1, 2026-08-27): `gp_box_extras` cuenta los
+-- partidos con el bloque nuevo cargado (robos/pérdidas/tapones/faltas/
+-- rebote of-def/+-/PIR) — todas esas columnas las escribe SIEMPRE el mismo
+-- paso del adapter en un mismo commit por partido (a diferencia de ftm/fta,
+-- que se añadieron en momentos distintos para equipo y jugador), así que un
+-- único `COUNT` de cobertura basta para las diez en vez de repetir `gp_x`
+-- por columna. NULL en cualquiera de ellas = partido ingerido antes de esta
+-- fase, no "cero". `ast_to_ratio` INDIVIDUAL no se materializa aparte:
+-- `ast_avg`/`tov_avg` ya permiten calcularlo donde haga falta sin otra
+-- columna que mantener sincronizada.
+
 CREATE VIEW player_stats_by_competition AS
 SELECT
   pgs.player_id,
@@ -387,7 +589,20 @@ SELECT
   SUM(pgs.fta)                AS fta,
   AVG(pgs.ftm)                AS ftm_avg,
   AVG(pgs.fta)                AS fta_avg,
-  100.0 * SUM(pgs.ftm) / NULLIF(SUM(pgs.fta), 0) AS ft_pct
+  100.0 * SUM(pgs.ftm) / NULLIF(SUM(pgs.fta), 0) AS ft_pct,
+  COUNT(pgs.stl)               AS gp_box_extras,
+  AVG(pgs.stl)                 AS stl_avg,
+  AVG(pgs.tov)                 AS tov_avg,
+  AVG(pgs.blk)                 AS blk_avg,
+  AVG(pgs.blk_against)         AS blk_against_avg,
+  AVG(pgs.pf)                  AS pf_avg,
+  AVG(pgs.pf_drawn)            AS pf_drawn_avg,
+  AVG(pgs.oreb)                AS oreb_avg,
+  AVG(pgs.dreb)                AS dreb_avg,
+  AVG(pgs.plus_minus)          AS plus_minus_avg,
+  AVG(pgs.pir)                 AS pir_avg,
+  COUNT(pgs.dunks)             AS gp_dunks,
+  SUM(pgs.dunks)               AS dunks
 FROM player_game_stats pgs
 JOIN games g ON g.id = pgs.game_id
 GROUP BY pgs.player_id, g.season_id, g.competition_id;
@@ -407,7 +622,20 @@ SELECT
   SUM(pgs.fta)                AS fta,
   AVG(pgs.ftm)                AS ftm_avg,
   AVG(pgs.fta)                AS fta_avg,
-  100.0 * SUM(pgs.ftm) / NULLIF(SUM(pgs.fta), 0) AS ft_pct
+  100.0 * SUM(pgs.ftm) / NULLIF(SUM(pgs.fta), 0) AS ft_pct,
+  COUNT(pgs.stl)               AS gp_box_extras,
+  AVG(pgs.stl)                 AS stl_avg,
+  AVG(pgs.tov)                 AS tov_avg,
+  AVG(pgs.blk)                 AS blk_avg,
+  AVG(pgs.blk_against)         AS blk_against_avg,
+  AVG(pgs.pf)                  AS pf_avg,
+  AVG(pgs.pf_drawn)            AS pf_drawn_avg,
+  AVG(pgs.oreb)                AS oreb_avg,
+  AVG(pgs.dreb)                AS dreb_avg,
+  AVG(pgs.plus_minus)          AS plus_minus_avg,
+  AVG(pgs.pir)                 AS pir_avg,
+  COUNT(pgs.dunks)             AS gp_dunks,
+  SUM(pgs.dunks)               AS dunks
 FROM player_game_stats pgs
 JOIN games g ON g.id = pgs.game_id
 GROUP BY pgs.player_id, g.season_id;
@@ -424,6 +652,13 @@ SELECT
   AVG(gas.ts_pct)                       AS ts_pct,
   AVG(gas.ortg)                         AS ortg,
   AVG(gas.drtg)                         AS drtg,
+  -- Fase 0 (2026-08-27): tasas de equipo que ya se cargaban y ninguna query
+  -- seleccionaba — ver doc/features/ingestor/02_plan_stats_completas.md §Fase 0.
+  AVG(gas.ast_pct)                      AS ast_pct,
+  AVG(gas.stl_pct)                      AS stl_pct,
+  AVG(gas.blk_pct)                      AS blk_pct,
+  AVG(gas.ft_rate)                      AS ft_rate,
+  AVG(gas.ast_to_ratio)                 AS ast_to_ratio,
   COUNT(gas.fta)                        AS gp_ft,
   SUM(gas.ftm)                          AS ftm,
   SUM(gas.fta)                          AS fta,
@@ -435,7 +670,24 @@ SELECT
   SUM(opp.fta)                          AS opp_fta,
   AVG(opp.ftm)                          AS opp_ftm_avg,
   AVG(opp.fta)                          AS opp_fta_avg,
-  100.0 * SUM(opp.ftm) / NULLIF(SUM(opp.fta), 0) AS opp_ft_pct
+  100.0 * SUM(opp.ftm) / NULLIF(SUM(opp.fta), 0) AS opp_ft_pct,
+  -- Fase 1: boxscore ampliado de equipo, propio y CONCEDIDO (robos/tapones/
+  -- pérdidas/faltas del RIVAL en el mismo `game_id`, vía el mismo self-join
+  -- `opp` que ya resuelve tiros libres concedidos arriba).
+  COUNT(gas.stl)                        AS gp_box_extras,
+  AVG(gas.stl)                          AS stl_avg,
+  AVG(gas.tov)                          AS tov_avg,
+  AVG(gas.blk)                          AS blk_avg,
+  AVG(gas.blk_against)                  AS blk_against_avg,
+  AVG(gas.pf)                           AS pf_avg,
+  AVG(gas.pf_drawn)                     AS pf_drawn_avg,
+  AVG(gas.oreb)                         AS oreb_avg,
+  AVG(gas.dreb)                         AS dreb_avg,
+  AVG(gas.pir)                          AS pir_avg,
+  AVG(opp.stl)                          AS opp_stl_avg,
+  AVG(opp.tov)                          AS opp_tov_avg,
+  AVG(opp.blk)                          AS opp_blk_avg,
+  AVG(opp.pf)                           AS opp_pf_avg
 FROM game_advanced_stats gas
 JOIN games g ON g.id = gas.game_id
 LEFT JOIN game_advanced_stats opp
@@ -453,6 +705,11 @@ SELECT
   AVG(gas.ts_pct)                       AS ts_pct,
   AVG(gas.ortg)                         AS ortg,
   AVG(gas.drtg)                         AS drtg,
+  AVG(gas.ast_pct)                      AS ast_pct,
+  AVG(gas.stl_pct)                      AS stl_pct,
+  AVG(gas.blk_pct)                      AS blk_pct,
+  AVG(gas.ft_rate)                      AS ft_rate,
+  AVG(gas.ast_to_ratio)                 AS ast_to_ratio,
   COUNT(gas.fta)                        AS gp_ft,
   SUM(gas.ftm)                          AS ftm,
   SUM(gas.fta)                          AS fta,
@@ -464,7 +721,21 @@ SELECT
   SUM(opp.fta)                          AS opp_fta,
   AVG(opp.ftm)                          AS opp_ftm_avg,
   AVG(opp.fta)                          AS opp_fta_avg,
-  100.0 * SUM(opp.ftm) / NULLIF(SUM(opp.fta), 0) AS opp_ft_pct
+  100.0 * SUM(opp.ftm) / NULLIF(SUM(opp.fta), 0) AS opp_ft_pct,
+  COUNT(gas.stl)                        AS gp_box_extras,
+  AVG(gas.stl)                          AS stl_avg,
+  AVG(gas.tov)                          AS tov_avg,
+  AVG(gas.blk)                          AS blk_avg,
+  AVG(gas.blk_against)                  AS blk_against_avg,
+  AVG(gas.pf)                           AS pf_avg,
+  AVG(gas.pf_drawn)                     AS pf_drawn_avg,
+  AVG(gas.oreb)                         AS oreb_avg,
+  AVG(gas.dreb)                         AS dreb_avg,
+  AVG(gas.pir)                          AS pir_avg,
+  AVG(opp.stl)                          AS opp_stl_avg,
+  AVG(opp.tov)                          AS opp_tov_avg,
+  AVG(opp.blk)                          AS opp_blk_avg,
+  AVG(opp.pf)                           AS opp_pf_avg
 FROM game_advanced_stats gas
 JOIN games g ON g.id = gas.game_id
 LEFT JOIN game_advanced_stats opp
@@ -499,14 +770,32 @@ FROM team_stats_by_competition t
 WHERE t.gp >= 5;
 
 -- Lo mismo para jugadores. Mismo mínimo de partidos y por el mismo motivo.
+-- Fase 1 (2026-08-27): percentiles del boxscore ampliado, para que las
+-- métricas nuevas de `LEADER_METRICS` (`app/data/queries_assistant.py`)
+-- entren también en `league_percentiles` sin tool adicional, no solo en
+-- `league_leaders`. `tov_pct`/`pf_pct` se ordenan INVERTIDOS (mismo truco
+-- que `drtg_pct` en `team_style_percentiles`): menos pérdidas/faltas es
+-- mejor, así que p90 tiene que significar "cuida poco el balón" al revés,
+-- no premiar al que más pierde. OJO: un jugador sin boxscore ampliado
+-- todavía (partido ingerido antes de la Fase 1) tiene esas columnas en
+-- `NULL`, y SQLite las ordena como el valor más bajo — su percentil en
+-- estas columnas concretas no es fiable hasta que se reingiera.
 CREATE VIEW player_percentiles AS
 SELECT p.player_id, p.season_id, p.competition_id, p.gp,
        p.min_avg, p.pts_avg, p.reb_avg, p.ast_avg, p.efg_pct,
+       p.stl_avg, p.blk_avg, p.tov_avg, p.pf_avg, p.oreb_avg, p.dreb_avg, p.pir_avg,
        PERCENT_RANK() OVER (PARTITION BY p.season_id, p.competition_id ORDER BY p.pts_avg) AS pts_pct,
        PERCENT_RANK() OVER (PARTITION BY p.season_id, p.competition_id ORDER BY p.reb_avg) AS reb_pct,
        PERCENT_RANK() OVER (PARTITION BY p.season_id, p.competition_id ORDER BY p.ast_avg) AS ast_pct,
        PERCENT_RANK() OVER (PARTITION BY p.season_id, p.competition_id ORDER BY p.efg_pct) AS efg_pct_pct,
        PERCENT_RANK() OVER (PARTITION BY p.season_id, p.competition_id ORDER BY p.min_avg) AS min_pct,
+       PERCENT_RANK() OVER (PARTITION BY p.season_id, p.competition_id ORDER BY p.stl_avg) AS stl_pct,
+       PERCENT_RANK() OVER (PARTITION BY p.season_id, p.competition_id ORDER BY p.blk_avg) AS blk_pct,
+       PERCENT_RANK() OVER (PARTITION BY p.season_id, p.competition_id ORDER BY -p.tov_avg) AS tov_pct,
+       PERCENT_RANK() OVER (PARTITION BY p.season_id, p.competition_id ORDER BY -p.pf_avg) AS pf_pct,
+       PERCENT_RANK() OVER (PARTITION BY p.season_id, p.competition_id ORDER BY p.oreb_avg) AS oreb_pct,
+       PERCENT_RANK() OVER (PARTITION BY p.season_id, p.competition_id ORDER BY p.dreb_avg) AS dreb_pct,
+       PERCENT_RANK() OVER (PARTITION BY p.season_id, p.competition_id ORDER BY p.pir_avg) AS pir_pct,
        COUNT(*)      OVER (PARTITION BY p.season_id, p.competition_id)                     AS league_players
 FROM player_stats_by_competition p
 WHERE p.gp >= 5;
@@ -564,18 +853,26 @@ INSERT INTO teams (id, name, is_own_team) VALUES
   ('uni',  'Unicaja Málaga',     0);
 
 -- Ver el comentario sobre `CREATE TABLE court_zones` para la geometría completa
--- (anclas 1/4/5/6 fijas, resto reteselado 2026-08-27) y qué es la fila 10.
+-- (anclas 1/4/5/6 fijas, resto reteselado 2026-08-27/28) y qué son las filas
+-- 10 y 14-17 (puntos degenerados, no geometría real).
 INSERT INTO court_zones (id, label, x_min, x_max, y_min, y_max) VALUES
   (1,  'Pintura',              195, 305, 300, 455),
-  (2,  'Ala izq.',              56, 194, 171, 459),
-  (3,  'Ala der.',             306, 444, 171, 459),
-  (4,  'Triple esquina izq.',   15,  55, 380, 460),
-  (5,  'Triple esquina der.',  445, 485, 380, 460),
-  (6,  'Triple exterior',      160, 340,  50, 170),
-  (7,  'Media dist. central',  195, 305, 171, 299),
-  (8,  'Triple ala izq.',       16, 159,  50, 170),
-  (9,  'Triple ala der.',      341, 484,  50, 170),
-  (10, 'Mate',                 250, 250, 455, 455);
+  (2,  'Ala izq.',               0, 195, 170, 380),
+  (3,  'Ala der.',             305, 500, 170, 380),
+  (4,  'Triple esquina izq.',    0,  55, 380, 460),
+  (5,  'Triple esquina der.',  445, 500, 380, 460),
+  (6,  'Triple exterior',      160, 340,   0, 170),
+  (7,  'Media dist. central',  195, 305, 170, 300),
+  (8,  'Triple ala izq.',        0, 160,   0, 170),
+  (9,  'Triple ala der.',      340, 500,   0, 170),
+  (10, 'Mate',                 250, 250, 455, 455),
+  (11, 'Fondo izq.',            55, 195, 380, 460),
+  (12, 'Fondo der.',           305, 445, 380, 460),
+  (13, 'Línea de fondo',       195, 305, 455, 460),
+  (14, 'Ala izq. (2)',         100, 100, 300, 300),
+  (15, 'Ala izq. (3)',          50,  50, 250, 250),
+  (16, 'Ala der. (2)',         400, 400, 300, 300),
+  (17, 'Ala der. (3)',         450, 450, 250, 250);
 
 INSERT INTO players (id, team_id, name, number, position) VALUES
   ('howard',       'bas', 'Marcus Howard',           0,  'Base'),

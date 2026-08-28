@@ -28,6 +28,8 @@ TABLE_NAMES = [
     "game_advanced_stats",
     "game_team_quarter_stats",
     "player_game_stats",
+    "player_game_quarter_stats",  # Fase 3, ACB-only
+    "player_advanced_stats",      # Fase 4, ACB-only
     "lineups",
     "lineup_players",
     "lineup_stints",
@@ -35,6 +37,7 @@ TABLE_NAMES = [
     "game_zone_stats",
     "shots",
     "key_events",
+    "play_events",  # Fase 2
     "score_progression",
     "upcoming_matchups",
 ]
@@ -62,7 +65,12 @@ VIEW_NAMES = [
 # perdiendo todo lo ingerido. Se crean con su DDL literal de `schema.sql`
 # (junto a los índices que la nombren), así que no hay una segunda definición
 # que se pueda desincronizar.
-_ADDITIVE_TABLES = ["lineup_stints", "lineup_stint_players"]
+_ADDITIVE_TABLES = [
+    "lineup_stints", "lineup_stint_players",
+    "play_events",              # Fase 2
+    "player_game_quarter_stats",  # Fase 3, ACB-only
+    "player_advanced_stats",    # Fase 4, ACB-only
+]
 
 # Columnas añadidas a `schema.sql` DESPUÉS de que ya hubiera bases de datos
 # `data/baskonia.db` reales desplegadas con datos ingeridos de verdad. Este
@@ -88,6 +96,39 @@ _ADDITIVE_COLUMN_MIGRATIONS = [
     # jugadores, lo que estropea hacia atrás cualquier agregado histórico en
     # cuanto hay un traspaso (ver `lineups.team_id` en `schema.sql`).
     ("lineups", "team_id", "TEXT"),
+    # Fase 0/1/3 (doc/features/ingestor/02_plan_stats_completas.md), todas
+    # 2026-08-27: boxscore ampliado de equipo/jugador + metadata de partido.
+    # `game_advanced_stats.ast_pct/stl_pct/blk_pct/ft_rate/ast_to_ratio` NO
+    # están aquí: ya existían en `schema.sql` desde antes de esta entrega
+    # (Fase 0 solo amplía las VISTAS que las seleccionan, no la tabla).
+    ("game_advanced_stats", "stl", "INTEGER"),
+    ("game_advanced_stats", "tov", "INTEGER"),
+    ("game_advanced_stats", "blk", "INTEGER"),
+    ("game_advanced_stats", "blk_against", "INTEGER"),
+    ("game_advanced_stats", "pf", "INTEGER"),
+    ("game_advanced_stats", "pf_drawn", "INTEGER"),
+    ("game_advanced_stats", "oreb", "INTEGER"),
+    ("game_advanced_stats", "dreb", "INTEGER"),
+    ("game_advanced_stats", "plus_minus", "INTEGER"),
+    ("game_advanced_stats", "pir", "INTEGER"),
+    ("player_game_stats", "stl", "INTEGER"),
+    ("player_game_stats", "tov", "INTEGER"),
+    ("player_game_stats", "blk", "INTEGER"),
+    ("player_game_stats", "blk_against", "INTEGER"),
+    ("player_game_stats", "pf", "INTEGER"),
+    ("player_game_stats", "pf_drawn", "INTEGER"),
+    ("player_game_stats", "oreb", "INTEGER"),
+    ("player_game_stats", "dreb", "INTEGER"),
+    ("player_game_stats", "plus_minus", "INTEGER"),
+    ("player_game_stats", "pir", "INTEGER"),
+    ("player_game_stats", "dunks", "INTEGER"),
+    ("game_team_quarter_stats", "fouls_for", "INTEGER"),
+    ("game_team_quarter_stats", "fouls_against", "INTEGER"),
+    ("games", "arena", "TEXT"),
+    ("games", "attendance", "INTEGER"),
+    ("games", "referees", "TEXT"),
+    ("games", "home_coach", "TEXT"),
+    ("games", "away_coach", "TEXT"),
 ]
 
 # Las VISTAS (`VIEW_NAMES`) no se migran con `ALTER TABLE`: se recrean enteras

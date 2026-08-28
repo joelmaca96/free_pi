@@ -82,11 +82,14 @@ la web hoy en día - **distinta** de la que documenta/usa OpenACB:
 (verificado en vivo: `--season 2025` -> `editionId=90`, coincide con el
 `id` de la temporada "2025-2026" que devuelve `availableFilters.seasons`).
 """
+import logging
 import os
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
+
+logger = logging.getLogger(__name__)
 
 USER_AGENT = os.getenv(
     "ACB_USER_AGENT",
@@ -323,6 +326,18 @@ class AcbClient:
         """
         return self._get(f"{MATCHDATA_BASE}/AdvancedStats/match-advanced-stats?matchId={match_id}")
 
+    def fetch_player_advanced_stats(self, match_id: Any, player_license: Any) -> Dict[str, Any]:
+        """Estadísticas avanzadas OFICIALES de UN jugador en el partido (Fase 4).
+
+        Una llamada HTTP por jugador — nunca se recorre la plantilla entera de
+        un partido con esto (ver `fetch_game(advanced_stats_team_ids=...)`,
+        que acota a qué equipos se les pide). `player_license` es el mismo id
+        que `playerLicenseId` en el play-by-play / `player.id` en el boxscore.
+        """
+        return self._get(
+            f"{MATCHDATA_BASE}/AdvancedStats/player-advanced-stats?matchId={match_id}&playerLicense={player_license}"
+        )
+
     def fetch_match_header(self, match_id: Any) -> Dict[str, Any]:
         """Cabecera del partido (`competitionId`/marcador por cuarto/equipos).
 
@@ -346,15 +361,27 @@ class AcbClient:
         """IDs de los partidos finalizados de una temporada (envoltorio de `fetch_season_finished_matches`)."""
         return [str(match["id"]) for match in self.fetch_season_finished_matches(season)]
 
-    def fetch_game(self, game_id: str) -> Dict[str, Any]:
+    def fetch_game(
+        self, game_id: str, advanced_stats_team_ids: Optional[set] = None
+    ) -> Dict[str, Any]:
         """Contrato común (`ingest.common.raw_game`) para un partido ya finalizado.
 
         Necesita que `game_id` venga de una llamada previa a
         `fetch_season_finished_matches`/`fetch_season_game_ids` (de ahí saca
         el resumen del partido - equipo local/visitante, marcador, fecha -
         cacheado en memoria); boxscore, tiros y play-by-play se piden aquí.
+
+        Args:
+            advanced_stats_team_ids: ids ACB (numéricos, como `str`) de los
+                equipos cuyos jugadores merece la pena pedir con
+                `fetch_player_advanced_stats` (Fase 4) - una llamada HTTP
+                POR JUGADOR, así que se acota por diseño (ver
+                `ingest/acb/pipeline.py`, normalmente Baskonia + próximo
+                rival) y nunca se activa por defecto. `None`/vacío = no pedir
+                ninguna (comportamiento previo a esta fase).
         """
-        from .adapter import build_raw_game, is_out_of_scope_competition  # import diferido: evita ciclo con parser.py
+        # import diferido: evita ciclo con parser.py
+        from .adapter import _full_game_stats, build_raw_game, is_out_of_scope_competition
 
         key = str(game_id)
         match = self._match_cache.get(key)
@@ -385,9 +412,28 @@ class AcbClient:
             advanced_stats = self.fetch_game_advanced_stats(game_id)
         except Exception:  # noqa: BLE001 - opcional: si falla, build_raw_game cae a la estimación propia
             advanced_stats = None
+
+        player_advanced_stats = None
+        if advanced_stats_team_ids:
+            player_advanced_stats = {}
+            for team_box in boxscore.get("teamBoxscores", []):
+                if str(team_box["team"]["id"]) not in {str(t) for t in advanced_stats_team_ids}:
+                    continue
+                for row in _full_game_stats(team_box)["players"]:
+                    license_id = row["player"]["id"]
+                    try:
+                        player_advanced_stats[str(license_id)] = self.fetch_player_advanced_stats(
+                            game_id, license_id
+                        )
+                    except Exception:  # noqa: BLE001 - un jugador sin avanzadas no debe tumbar el partido
+                        logger.warning(
+                            "ACB: fallo pidiendo player-advanced-stats de %s en el partido %s",
+                            license_id, game_id,
+                        )
+
         return build_raw_game(
             match, boxscore, self._season_by_match[key],
             shots=shots, play_by_play=play_by_play, advanced_stats=advanced_stats,
-            competition_id=competition_id,
+            competition_id=competition_id, player_advanced_stats=player_advanced_stats,
         )
 

@@ -15,6 +15,52 @@ from .parser import SOURCE, parse_and_resolve
 logger = logging.getLogger(__name__)
 
 
+def _advanced_stats_scope(engine: Engine, season: int) -> set:
+    """Ids ACB de Baskonia + su próximo rival (Fase 4, ver `AcbClient.fetch_game`).
+
+    Estadísticas avanzadas OFICIALES por jugador cuestan una llamada HTTP por
+    jugador y partido — el plan (doc/features/ingestor/
+    02_plan_stats_completas.md §Fase 4) decide, a propósito, ingerirlas solo
+    para el Baskonia y su próximo rival, no toda la plantilla de cada rival
+    histórico. Puramente de LECTURA (nunca crea `seasons`/`upcoming_matchups`
+    si faltan): una temporada sin sembrar simplemente no amplía el alcance,
+    no rompe la carga de partidos.
+
+    El "próximo rival" es la fila con la fecha más próxima de
+    `upcoming_matchups` para esta temporada, sin filtrar por `>= hoy` — al
+    reingerir una temporada ya cerrada no tiene sentido pedir "el próximo
+    partido real"; se toma la aproximación más simple (primer rival por
+    fecha) en vez de no ampliar el alcance en absoluto.
+    """
+    label = f"{season}-{season + 1}"
+    with engine.connect() as conn:
+        season_row = conn.execute(text("SELECT id FROM seasons WHERE label = :label"), {"label": label}).first()
+        if season_row is None:
+            return set()
+        season_id = season_row[0]
+        ids = {
+            row[0]
+            for row in conn.execute(
+                text(
+                    "SELECT tei.external_id FROM team_external_ids tei"
+                    " JOIN teams t ON t.id = tei.team_id"
+                    " WHERE t.is_own_team = 1 AND tei.source = 'acb'"
+                )
+            ).all()
+        }
+        rival = conn.execute(
+            text(
+                "SELECT tei.external_id FROM upcoming_matchups um"
+                " JOIN team_external_ids tei ON tei.team_id = um.opponent_team_id AND tei.source = 'acb'"
+                " WHERE um.season_id = :season_id ORDER BY um.match_date ASC LIMIT 1"
+            ),
+            {"season_id": season_id},
+        ).first()
+        if rival is not None:
+            ids.add(rival[0])
+    return ids
+
+
 def run(engine: Engine, season: int, client: AcbClient = None) -> Dict[str, List[str]]:
     """Descarga y carga todos los partidos finalizados de una temporada ACB.
 
@@ -28,9 +74,15 @@ def run(engine: Engine, season: int, client: AcbClient = None) -> Dict[str, List
     game_ids = client.fetch_season_game_ids(season)
     logger.info("ACB %s: %d partidos finalizados encontrados", season, len(game_ids))
 
+    try:
+        advanced_stats_team_ids = _advanced_stats_scope(engine, season)
+    except Exception:  # noqa: BLE001 - resolver el alcance de Fase 4 no debe tumbar el backfill entero
+        logger.exception("ACB %s: no se pudo resolver el alcance de avanzadas por jugador (Fase 4); se omite", season)
+        advanced_stats_team_ids = set()
+
     for game_id in game_ids:
         try:
-            raw = client.fetch_game(game_id)
+            raw = client.fetch_game(game_id, advanced_stats_team_ids=advanced_stats_team_ids)
             with engine.begin() as conn:
                 game = parse_and_resolve(conn, raw)
                 load_game(conn, game)
@@ -74,7 +126,11 @@ def run_single_game(
             raise ValueError(
                 f"ACB: el partido {game_id} no aparece como finalizado en la temporada {season}."
             )
-        raw = client.fetch_game(game_id)
+        try:
+            advanced_stats_team_ids = _advanced_stats_scope(engine, season)
+        except Exception:  # noqa: BLE001 - ver el mismo try/except en run()
+            advanced_stats_team_ids = set()
+        raw = client.fetch_game(game_id, advanced_stats_team_ids=advanced_stats_team_ids)
         with engine.begin() as conn:
             game = parse_and_resolve(conn, raw)
             load_game(conn, game)

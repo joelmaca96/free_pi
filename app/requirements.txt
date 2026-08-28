@@ -20,3 +20,7 @@ openai>=1.0
 # OJO: la API de Claude NO tiene capa gratuita — una clave sin saldo lista
 # modelos pero devuelve 400 al primer mensaje.
 anthropic>=1.0
+
+# Generación del informe "PPT para Paolo" (`app/reports/postgame_ppt.py`):
+# construye el .pptx en memoria, sin depender de PowerPoint instalado.
+python-pptx>=1.0

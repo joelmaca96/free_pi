@@ -48,15 +48,16 @@ _MIME_BY_EXTENSION = {
 }
 
 
-@functools.lru_cache(maxsize=128)
-def _local_photo_data_uri(local_path: str) -> Optional[str]:
-    """Codifica como `data:` URI el fichero de `local_path` (columna
-    `photo_local_path`), o `None` si no se puede leer (ver docstring del
-    módulo para por qué no se usa la ruta guardada tal cual).
+def local_photo_bytes(local_path: str) -> Optional[bytes]:
+    """Bytes crudos del fichero de `local_path` (columna `photo_local_path`),
+    o `None` si no se puede leer (ver docstring del módulo para por qué no se
+    usa la ruta guardada tal cual).
 
-    Cacheada por proceso (`lru_cache`): la interfaz es de solo lectura y la
-    ingesta corre aparte (ver `_TTL` de `app/data/queries.py`), así que no
-    hace falta invalidar dentro de la vida de un mismo proceso de Streamlit.
+    Extraído de `_local_photo_data_uri` para quien necesite la imagen real en
+    vez de un `data:` URI — hoy `app/reports/postgame_ppt.py`, que inserta la
+    foto directamente en una diapositiva. Sin caché a propósito: a diferencia
+    de `_local_photo_data_uri` (que repinta la misma foto en cada rerun de
+    Streamlit), un informe se genera una vez por clic.
     """
     # `Path` en Linux no separa por `\`; se normaliza a mano para tolerar
     # una ruta guardada por una ingesta corrida en Windows en desarrollo.
@@ -64,9 +65,24 @@ def _local_photo_data_uri(local_path: str) -> Optional[str]:
     if not filename:
         return None
     try:
-        raw = (_PHOTOS_DIR / filename).read_bytes()
+        return (_PHOTOS_DIR / filename).read_bytes()
     except OSError:
         return None
+
+
+@functools.lru_cache(maxsize=128)
+def _local_photo_data_uri(local_path: str) -> Optional[str]:
+    """Codifica como `data:` URI el fichero de `local_path` (columna
+    `photo_local_path`), o `None` si no se puede leer.
+
+    Cacheada por proceso (`lru_cache`): la interfaz es de solo lectura y la
+    ingesta corre aparte (ver `_TTL` de `app/data/queries.py`), así que no
+    hace falta invalidar dentro de la vida de un mismo proceso de Streamlit.
+    """
+    raw = local_photo_bytes(local_path)
+    if raw is None:
+        return None
+    filename = Path(local_path.replace("\\", "/")).name
     mime = _MIME_BY_EXTENSION.get(Path(filename).suffix.lower(), "application/octet-stream")
     return f"data:{mime};base64,{base64.b64encode(raw).decode('ascii')}"
 
@@ -81,8 +97,13 @@ def _is_missing(value) -> bool:
     return isinstance(value, float) and value != value  # NaN != NaN
 
 
-def _initials(name: str) -> str:
-    """Iniciales para el badge: primera letra de hasta dos palabras del nombre."""
+def initials(name: str) -> str:
+    """Iniciales para el badge: primera letra de hasta dos palabras del nombre.
+
+    Pública (no `_initials`) porque `app/reports/postgame_ppt.py` la reutiliza
+    para el mismo badge de respaldo, ahora dentro de una diapositiva en vez de
+    HTML — misma regla, un solo sitio que la define.
+    """
     parts = [p for p in name.split() if p]
     if not parts:
         return "?"
@@ -145,12 +166,12 @@ def avatar_html(
             f'style="width:{width}px;height:{height}px;border-radius:{radius};object-fit:cover;'
             f'object-position:{object_position};display:block" />'
         )
-    initials = html.escape(_initials(name))
+    initials_text = html.escape(initials(name))
     font_size = max(12, min(width, height) // 2)
     return (
         f'<div title="{safe_name}" style="width:{width}px;height:{height}px;border-radius:{radius};'
         f'background:{_ACCENT};color:#fff;display:flex;align-items:center;justify-content:center;'
-        f'font-weight:700;font-size:{font_size}px;font-family:sans-serif">{initials}</div>'
+        f'font-weight:700;font-size:{font_size}px;font-family:sans-serif">{initials_text}</div>'
     )
 
 

@@ -5,7 +5,11 @@ from ingest.common.schema_types import (
     KeyEvent,
     LineupRecord,
     NormalizedGame,
+    PlayerAdvancedStat,
     PlayerGameStat,
+    PlayerQuarterStat,
+    PlayEvent,
+    QuarterStat,
     ScoreStep,
     ShotRecord,
     StintRecord,
@@ -25,10 +29,46 @@ def _sample_game() -> NormalizedGame:
         pace=72.5,
         narrative="Partido de prueba",
         advanced=[
-            GameAdvancedStat(team_id="bas", efg_pct=55.0, ts_pct=58.0, tov_pct=12.0, orb_pct=25.0, ortg=112.0, drtg=108.0, net_rating=4.0),
+            GameAdvancedStat(
+                team_id="bas", efg_pct=55.0, ts_pct=58.0, tov_pct=12.0, orb_pct=25.0, ortg=112.0, drtg=108.0, net_rating=4.0,
+                # Fase 1: boxscore ampliado de equipo.
+                stl=7, tov=11, blk=3, blk_against=2, pf=18, pf_drawn=20, oreb=9, dreb=27, plus_minus=2, pir=108,
+            ),
         ],
         boxscore=[
-            PlayerGameStat(player_id="howard", minutes=30.0, pts=20, reb=3, ast=5, efg_pct=58.0),
+            PlayerGameStat(
+                player_id="howard", minutes=30.0, pts=20, reb=3, ast=5, efg_pct=58.0,
+                # Fase 1: boxscore ampliado de jugador.
+                stl=2, tov=1, blk=0, blk_against=1, pf=2, pf_drawn=3, oreb=1, dreb=2, plus_minus=6, pir=24, dunks=1,
+            ),
+        ],
+        # Fase 2: play-by-play tipado — dos faltas de "bas" y una de "rm" en
+        # el primer cuarto, para comprobar que el loader deriva
+        # `fouls_for`/`fouls_against` de `game_team_quarter_stats` a partir
+        # de esto, no del adapter.
+        play_events=[
+            PlayEvent(team_id="bas", player_id="howard", quarter="Q1", game_clock="08:00", seconds=2320.0,
+                       event_type="foul_personal", home_score=2, away_score=0),
+            PlayEvent(team_id="bas", player_id=None, quarter="Q1", game_clock="05:00", seconds=2500.0,
+                       event_type="foul_personal", home_score=4, away_score=2),
+            PlayEvent(team_id="rm", player_id=None, quarter="Q1", game_clock="03:00", seconds=2580.0,
+                       event_type="foul_personal", home_score=6, away_score=2),
+            PlayEvent(team_id="bas", player_id="howard", quarter="Q1", game_clock="07:00", seconds=2380.0,
+                       event_type="steal", home_score=2, away_score=0),
+        ],
+        quarter_stats=[
+            QuarterStat(team_id="bas", quarter=1, points_for=20, points_against=18),
+            QuarterStat(team_id="rm", quarter=1, points_for=18, points_against=20),
+        ],
+        # Fase 3: metadata de partido + boxscore de jugador por cuarto (ACB-only).
+        arena="Fernando Buesa Arena", attendance=8200,
+        referees="Antonio Conde · Martín Caballero", home_coach="Pedro Martínez", away_coach="Xavi Pascual",
+        quarter_boxscore=[
+            PlayerQuarterStat(player_id="howard", quarter=1, pts=6, reb=1, ast=2, stl=1, pf=1),
+        ],
+        # Fase 4: avanzadas oficiales por jugador (ACB-only).
+        player_advanced=[
+            PlayerAdvancedStat(player_id="howard", ts_pct=61.2, ppt=1.3, possessions=71.0, pace=345.0),
         ],
         lineups=[
             LineupRecord(
@@ -85,6 +125,42 @@ def test_load_game_inserts_all_child_tables(engine):
                  " WHERE s.game_id='acb-99001'")
         ).scalar_one() == 5
 
+        # Fase 1: boxscore ampliado, equipo y jugador.
+        assert conn.execute(
+            text("SELECT stl, tov, blk, blk_against, pf, pf_drawn, oreb, dreb, plus_minus, pir"
+                 " FROM game_advanced_stats WHERE game_id='acb-99001'")
+        ).first() == (7, 11, 3, 2, 18, 20, 9, 27, 2, 108)
+        assert conn.execute(
+            text("SELECT stl, tov, blk, pf, plus_minus, pir, dunks"
+                 " FROM player_game_stats WHERE game_id='acb-99001'")
+        ).first() == (2, 1, 0, 2, 6, 24, 1)
+
+        # Fase 2: play-by-play tipado (4 eventos) + faltas por cuarto
+        # DERIVADAS por el loader (2 de "bas", 1 de "rm" en Q1 — el robo no cuenta).
+        assert conn.execute(text("SELECT COUNT(*) FROM play_events WHERE game_id='acb-99001'")).scalar_one() == 4
+        assert conn.execute(
+            text("SELECT fouls_for, fouls_against FROM game_team_quarter_stats"
+                 " WHERE game_id='acb-99001' AND team_id='bas' AND quarter=1")
+        ).first() == (2, 1)
+        assert conn.execute(
+            text("SELECT fouls_for, fouls_against FROM game_team_quarter_stats"
+                 " WHERE game_id='acb-99001' AND team_id='rm' AND quarter=1")
+        ).first() == (1, 2)
+
+        # Fase 3: metadata de partido + boxscore de jugador por cuarto.
+        assert conn.execute(
+            text("SELECT arena, attendance, home_coach, away_coach FROM games WHERE id='acb-99001'")
+        ).first() == ("Fernando Buesa Arena", 8200, "Pedro Martínez", "Xavi Pascual")
+        assert conn.execute(
+            text("SELECT pts, stl FROM player_game_quarter_stats"
+                 " WHERE game_id='acb-99001' AND player_id='howard' AND quarter=1")
+        ).first() == (6, 1)
+
+        # Fase 4: avanzadas oficiales por jugador.
+        assert conn.execute(
+            text("SELECT ts_pct, ppt, pace FROM player_advanced_stats WHERE game_id='acb-99001' AND player_id='howard'")
+        ).first() == (61.2, 1.3, 345.0)
+
 
 def test_load_game_is_idempotent_on_rerun(engine):
     game = _sample_game()
@@ -106,6 +182,9 @@ def test_load_game_is_idempotent_on_rerun(engine):
         ).scalar_one() == 5
         assert conn.execute(text("SELECT COUNT(*) FROM shots WHERE game_id='acb-99001'")).scalar_one() == 3
         assert conn.execute(text("SELECT COUNT(*) FROM key_events WHERE game_id='acb-99001'")).scalar_one() == 1
+        assert conn.execute(text("SELECT COUNT(*) FROM play_events WHERE game_id='acb-99001'")).scalar_one() == 4
+        assert conn.execute(text("SELECT COUNT(*) FROM player_game_quarter_stats WHERE game_id='acb-99001'")).scalar_one() == 1
+        assert conn.execute(text("SELECT COUNT(*) FROM player_advanced_stats WHERE game_id='acb-99001'")).scalar_one() == 1
 
 
 def test_list_existing_external_ids_filtra_por_fuente_y_temporada(engine):

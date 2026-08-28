@@ -26,7 +26,7 @@ import streamlit as st
 
 from components.ask_assistant import ask_assistant_button
 from components.avatar import player_avatar_html, team_crest_html
-from components.court import shot_chart, shot_chart_caption, zone_breakdown
+from components.court import shot_chart, shot_chart_caption, zone_breakdown, zone_heatmap, zone_heatmap_caption
 from components.header import page_header
 from components.player_dialog import player_detail
 from data import queries
@@ -93,7 +93,7 @@ with info_col:
             f"({fecha}, {matchup['competition']}, Baskonia como {condicion.lower()})."
         ),
         label="Preguntar al asistente sobre este partido",
-        use_container_width=False,
+        width="content",
     )
 
 # De qué temporada salen los datos de scouting. NO tiene por qué ser la
@@ -145,7 +145,7 @@ def render_head_to_head() -> None:
     st.dataframe(
         display_h2h,
         hide_index=True,
-        use_container_width=True,
+        width="stretch",
         column_order=["game_date", "season_label", "competition", "condicion", "resultado"],
         column_config={
             "game_date": st.column_config.TextColumn("Fecha"),
@@ -193,7 +193,7 @@ else:
     st.dataframe(
         display_df,
         hide_index=True,
-        use_container_width=True,
+        width="stretch",
         column_order=["game_date", "competition", "condicion", "rival", "resultado"],
         column_config={
             "game_date": st.column_config.TextColumn("Fecha"),
@@ -232,6 +232,37 @@ else:
             # cargados, ver el docstring de `team_advanced_profile`) — se
             # distingue de "0%", no se disimula el hueco de cobertura.
             cols[7].metric("FT%", f"{row.ft_pct:.1f}" if pd.notna(row.ft_pct) else "—")
+
+            # Fase 0 (quick win, 2026-08-27): tasas de equipo ya cargadas que
+            # ninguna query seleccionaba — % de canastas asistidas, presión
+            # defensiva (robos/tapones por posesión rival), ratio AST/TOV.
+            if pd.notna(getattr(row, "ast_pct", None)) or pd.notna(getattr(row, "stl_pct", None)):
+                rate_cols = st.columns(5)
+                rate_cols[0].metric("% Asistidas", f"{row.ast_pct:.1f}" if pd.notna(row.ast_pct) else "—")
+                rate_cols[1].metric("% Robo", f"{row.stl_pct:.1f}" if pd.notna(row.stl_pct) else "—")
+                rate_cols[2].metric("% Tapón", f"{row.blk_pct:.1f}" if pd.notna(row.blk_pct) else "—")
+                rate_cols[3].metric("Tasa TL", f"{row.ft_rate:.1f}" if pd.notna(row.ft_rate) else "—")
+                rate_cols[4].metric("AST/TOV", f"{row.ast_to_ratio:.2f}" if pd.notna(row.ast_to_ratio) else "—")
+
+            # Boxscore ampliado de equipo (Fase 1): propio y CONCEDIDO.
+            if pd.notna(getattr(row, "stl_avg", None)):
+                box_cols = st.columns(4)
+                box_cols[0].metric(
+                    "Robos (propio·rival)",
+                    f"{row.stl_avg:.1f} · {row.opp_stl_avg:.1f}" if pd.notna(row.opp_stl_avg) else f"{row.stl_avg:.1f}",
+                )
+                box_cols[1].metric(
+                    "Tapones (propio·rival)",
+                    f"{row.blk_avg:.1f} · {row.opp_blk_avg:.1f}" if pd.notna(row.opp_blk_avg) else f"{row.blk_avg:.1f}",
+                )
+                box_cols[2].metric(
+                    "Pérdidas (propio·rival)",
+                    f"{row.tov_avg:.1f} · {row.opp_tov_avg:.1f}" if pd.notna(row.opp_tov_avg) else f"{row.tov_avg:.1f}",
+                )
+                box_cols[3].metric(
+                    "Faltas (propio·rival)",
+                    f"{row.pf_avg:.1f} · {row.opp_pf_avg:.1f}" if pd.notna(row.opp_pf_avg) else f"{row.pf_avg:.1f}",
+                )
             # La procedencia de ORtg/DRtg/ritmo NO es la misma en las dos fuentes y
             # eso cambia cómo hay que leer la cifra — se dice, no se disimula (ver
             # doc/features/ingestor/01_estado.md §2.2/§2.3).
@@ -283,10 +314,11 @@ else:
                     )
                     st.markdown(f"**#{player.number} · {player.name}**")
                     st.caption(player.position or "—")
+                    pir_bit = f" · PIR {player.pir_avg:.1f}" if pd.notna(getattr(player, "pir_avg", None)) else ""
                     st.caption(
-                        f"{player.pts_avg:.1f} pts/partido" if pd.notna(player.pts_avg) else "Sin partidos todavía"
+                        f"{player.pts_avg:.1f} pts/partido{pir_bit}" if pd.notna(player.pts_avg) else "Sin partidos todavía"
                     )
-                    if st.button("Ver estadísticas", key=f"rival_detail_{player.id}", use_container_width=True):
+                    if st.button("Ver estadísticas", key=f"rival_detail_{player.id}", width="stretch"):
                         player_detail(player.id)
 
     st.caption(
@@ -316,7 +348,7 @@ else:
     st.dataframe(
         lineups_df,
         hide_index=True,
-        use_container_width=True,
+        width="stretch",
         column_order=["jugadores", "minutes", "plus_minus", "stints"],
         column_config={
             "jugadores": st.column_config.TextColumn("Quinteto", width="large"),
@@ -362,7 +394,7 @@ else:
         )
         .properties(height=240)
     )
-    st.altair_chart(chart, use_container_width=True)
+    st.altair_chart(chart, width="stretch")
 
     min_gp = int(quarters_df["gp"].min())
     st.caption(
@@ -371,6 +403,27 @@ else:
         if min_gp >= 4
         else f"⚠ Muestra pequeña: solo {min_gp} partido(s) con parcial registrado — léelo con cautela."
     )
+
+    # Faltas medias por cuarto (Fase 2) — el momento de acumulación de faltas:
+    # preparación de rotaciones con margen de faltas contra este rival.
+    fouls_df = queries.team_foul_quarter_profile(engine, rival_team_id, scouting_season_id)
+    if not fouls_df.empty:
+        fouls_chart = (
+            alt.Chart(fouls_df)
+            .mark_bar(color=_MUTED)
+            .encode(
+                x=alt.X("quarter:O", title="Cuarto"),
+                y=alt.Y("avg_fouls_for:Q", title="Faltas por partido"),
+                tooltip=[
+                    alt.Tooltip("quarter:O", title="Cuarto"),
+                    alt.Tooltip("avg_fouls_for:Q", title="Faltas cometidas", format=".1f"),
+                    alt.Tooltip("gp:Q", title="Partidos con dato"),
+                ],
+            )
+            .properties(height=160)
+        )
+        st.caption(f"Faltas cometidas por {rival_name}, por cuarto")
+        st.altair_chart(fouls_chart, width="stretch")
 
 st.divider()
 
@@ -386,11 +439,6 @@ else:
     filtered_df = shots_df if player_choice == "Todos" else shots_df[shots_df["player_name"] == player_choice]
 
     zones_df = queries.court_zones(engine)
-    # Sin `use_container_width`: `shot_chart` ya fija su propio ancho (dominio
-    # cuadrado) — estirarlo al contenedor aplana la cancha (ver `court.py`).
-    st.altair_chart(shot_chart(filtered_df, zones_df))
-    st.caption(shot_chart_caption(filtered_df))
-
     # El % exacto por zona no se estima a ojo de la nube de puntos — tabla aparte.
     # No se filtra por jugador: `game_zone_stats` está agregado por equipo en
     # origen, no guarda quién tiró.
@@ -407,6 +455,24 @@ else:
     # zonas de ala — sí lo son en Pintura, Triple esquina, Triple exterior y
     # Mate, que no mezclan nada. Se declara la cobertura siempre, y el aviso se
     # refuerza solo si de verdad queda un hueco apreciable. El mapa de arriba
-    # es fiable siempre: usa las coordenadas, no las zonas.
+    # es fiable siempre: usa las coordenadas, no las zonas (y desde esta
+    # revisión, su fondo también parte "Ala izq./der." por la línea real de
+    # triple — ver `court.py::_wing_split_layers` — aunque esta tabla, atada
+    # a `game_zone_stats`, siga sin poder desglosarlas).
     zone_df = queries.team_zone_profile(engine, rival_team_id, scouting_season_id)
+
+    # Uno al lado del otro, no apilados: son dos lecturas del mismo mapa
+    # (nube de tiros vs. acierto por zona) y se comparan mejor en paralelo.
+    # Cada gráfico conserva su ancho fijo (dominio cuadrado, sin
+    # `use_container_width`/`width="stretch"` — ver `court.py`) y ya trae de
+    # serie el icono de pantalla completa de Streamlit al pasar el ratón por
+    # encima, para verlo grande sin perder el layout de dos columnas.
+    col_shots, col_zones = st.columns(2)
+    with col_shots:
+        st.altair_chart(shot_chart(filtered_df, zones_df))
+        st.caption(shot_chart_caption(filtered_df))
+    with col_zones:
+        st.markdown("**Acierto por zona**")
+        st.altair_chart(zone_heatmap(zone_df, zones_df))
+        st.caption(zone_heatmap_caption(zone_df))
     zone_breakdown(zone_df, len(shots_df), scope="team")

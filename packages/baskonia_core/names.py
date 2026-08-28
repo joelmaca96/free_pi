@@ -44,6 +44,39 @@ _KNOWN_TEAM_ALIASES = {
     # identificar al Baskonia (ver `ingest/euroleague/pipeline.py::
     # _own_team_euroleague_code`).
     "kosner baskonia vitoria gasteiz": "baskonia",
+    # HALLAZGO (2026-08-28): el mismo bug de arriba (ACB da un `id` de equipo
+    # nuevo cada vez que cambia el patrocinador) le pasaba a CASI todos los
+    # rivales, no solo al Baskonia - se detectó al preguntarle al asistente
+    # por "Bilbao Basket" y devolver dos candidatos ("Bilbao Basket" y "Surne
+    # Bilbao") que son el mismo club. `data/baskonia.db` ya tenía las filas
+    # de `teams` duplicadas fusionadas a mano (ver
+    # `local/features/.../migraciones` o el historial de chat); estas
+    # entradas son lo que evita que la próxima ingesta (próximo cambio de
+    # patrocinador) vuelva a crear una fila nueva.
+    "barca": "fc barcelona",
+    "surne bilbao": "bilbao",
+    "amara lleida": "hiopos lleida",
+    "cochesinternet lleida": "hiopos lleida",
+    "ilerna lleida": "hiopos lleida",
+    "kids us manresa": "baxi manresa",
+    "occident manresa": "baxi manresa",
+    "casademont zgz": "casademont zaragoza",
+    "la laguna tfe": "la laguna tenerife",
+    "dreamland gran canaria": "gran canaria",
+    "tirma gran canaria": "gran canaria",
+    "fiatc girona": "girona",
+    "burgos grupo de santiago": "recoletas salud san pablo burgos",
+    "recoletas salud": "recoletas salud san pablo burgos",
+    "san pablo burgos segura y mayor": "recoletas salud san pablo burgos",
+    "asisa joventut": "joventut badalona",
+    "morabanc andorra undercoverlab": "morabanc andorra",
+    "morabanc and": "morabanc andorra",
+    "ucam murcia polymec": "ucam murcia",
+    "oteclima granada": "coviran granada",
+    "stellantis you granada": "coviran granada",
+    "bayern munich": "fc bayern munich",
+    "unicaja malaga": "unicaja",
+    "cajasiete fundacion canarias": "fundacion canarias",
 }
 
 

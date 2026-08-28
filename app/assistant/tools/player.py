@@ -117,6 +117,11 @@ def player_game(
     warnings = [fallback_warning] if fallback_warning else []
     if line.get("fta") is None:
         warnings.append("Este partido no trae tiros libres (columna vacía en la base de datos), no es que no tirara.")
+    if line.get("stl") is None:
+        warnings.append(
+            "Este partido no trae boxscore ampliado (robos/pérdidas/tapones/faltas/rebote of-def/+-/PIR), "
+            "columna vacía en la base de datos."
+        )
 
     return ok(
         {
@@ -176,8 +181,9 @@ def player_game_log(ctx: ToolContext, player_id: str, season_id: int = None, lim
     family="player",
     description=(
         "Medias de un jugador por competición y combinadas, con partidos jugados (gp) y, si esta "
-        "base de datos los tiene, sus tiros libres (volumen y acierto). Cita siempre el gp: "
-        "'en 43 partidos', no 'esta temporada'."
+        "base de datos los tiene, sus tiros libres (volumen y acierto) y su boxscore ampliado "
+        "(robos, pérdidas, tapones dados/recibidos, faltas cometidas/recibidas, rebote "
+        "ofensivo/defensivo, +/-, PIR, mates). Cita siempre el gp: 'en 43 partidos', no 'esta temporada'."
     ),
     parameters=schema(
         {"player_id": {"type": "string"}, "season_id": {"type": "integer"}}, required=["player_id"]
@@ -221,7 +227,25 @@ def player_averages(ctx: ToolContext, player_id: str, season_id: int = None) -> 
     else:
         warnings.append("Esta base de datos no tiene tiros libres: no hables del juego desde la línea.")
 
-    data = {"averages": rows, "free_throws": free_throws}
+    # Boxscore ampliado (Fase 1): robos/pérdidas/tapones (dados y recibidos)/
+    # faltas (cometidas y recibidas)/rebote ofensivo-defensivo/+-/PIR/mates —
+    # mismo patrón condicionado que el bloque `free_throws` de arriba.
+    box_extras = []
+    if ctx.capabilities.box_extras:
+        box_extras = records(queries_assistant.player_box_extras(ctx.engine, player_id, season))
+        if any(row.get("gp_box_extras", 0) < row.get("gp", 0) for row in box_extras):
+            warnings.append(
+                "Algunos partidos no traen boxscore ampliado (robos/pérdidas/tapones/faltas/rebote "
+                "of-def/+-/PIR): esas medias están calculadas sobre los partidos de `gp_box_extras`, "
+                "no sobre `gp`."
+            )
+    else:
+        warnings.append(
+            "Esta base de datos no tiene boxscore ampliado: no hables de robos, tapones, pérdidas, "
+            "faltas, rebote ofensivo/defensivo, +/- ni PIR de este jugador."
+        )
+
+    data = {"averages": rows, "free_throws": free_throws, "box_extras": box_extras}
     return ok(
         data,
         source="player_stats_by_competition / player_stats_combined",
@@ -351,4 +375,84 @@ def player_minutes_load(ctx: ToolContext, team_id: str, n_games: int = 5, season
         scope=f"últimos {n_games} partidos · temporada {season}",
         warnings=[fallback_warning] if fallback_warning else None,
         artifact=artifact("table", rows, title="Carga de minutos"),
+    )
+
+
+@register(
+    "player_advanced_profile",
+    family="player",
+    description=(
+        "Estadísticas avanzadas OFICIALES de un jugador partido a partido (ratio de asistencias/"
+        "robos/pérdidas, % de rebote separado, TS%, fuente de puntos por tipo de tiro, ritmo "
+        "individual), con si su equipo ganó o perdió ese partido. Solo existe para ACB, nunca para "
+        "Euroliga (esa fuente no tiene avanzadas oficiales por partido, solo agregado de temporada)."
+    ),
+    parameters=schema(
+        {"player_id": {"type": "string"}, "season_id": {"type": "integer"}}, required=["player_id"]
+    ),
+    artifact="table",
+    requires="player_advanced_stats",
+)
+def player_advanced_profile(ctx: ToolContext, player_id: str, season_id: int = None) -> dict:
+    """Avanzadas oficiales por partido (Fase 4, ACB-only) — ver `queries_assistant.player_advanced_profile`."""
+    season, fallback_warning = _player_season(ctx, player_id, season_id)
+    profile = queries_assistant.player_advanced_profile(ctx.engine, player_id, season)
+    if profile.empty:
+        return fail(
+            "sin datos",
+            detail=f"{player_id} no tiene avanzadas oficiales por partido en la temporada {season}.",
+            suggestion=(
+                "Esta fase solo se ingiere para el Baskonia y su próximo rival (por coste de red), y "
+                "solo existe en ACB — un jugador de Euroliga o un rival histórico no la tendrá."
+            ),
+        )
+    rows = records(profile)
+    warnings = [fallback_warning] if fallback_warning else []
+    warnings.append(
+        "'win' se deduce del equipo ACTUAL del jugador (players.team_id): en un jugador traspasado "
+        "a mitad de temporada puede no coincidir con el equipo real de ese partido concreto."
+    )
+    return ok(
+        rows,
+        source="player_advanced_stats + games",
+        scope=f"temporada {season}",
+        gp=len(rows),
+        warnings=warnings,
+        artifact=artifact("table", rows, title="Avanzadas oficiales por partido"),
+    )
+
+
+@register(
+    "player_quarter_profile",
+    family="player",
+    description=(
+        "Rendimiento medio de un jugador por cuarto a lo largo de la temporada (puntos, "
+        "rebotes, asistencias, +/-, PIR): ¿empieza fuerte y decae, o al revés (impacto desde el "
+        "banquillo en el último cuarto)? Solo existe para ACB — Euroliga no publica boxscore de "
+        "jugador por cuarto, solo puntos de equipo (ver team_quarter_profile para eso)."
+    ),
+    parameters=schema(
+        {"player_id": {"type": "string"}, "season_id": {"type": "integer"}}, required=["player_id"]
+    ),
+    artifact="bar",
+    requires="quarter_player_stats",
+)
+def player_quarter_profile(ctx: ToolContext, player_id: str, season_id: int = None) -> dict:
+    """Perfil por cuarto de un jugador (Fase 3, ACB-only) — ver `queries_assistant.player_quarter_profile`."""
+    season, fallback_warning = _player_season(ctx, player_id, season_id)
+    quarters = queries_assistant.player_quarter_profile(ctx.engine, player_id, season)
+    if quarters.empty:
+        return fail(
+            "sin datos",
+            detail=f"{player_id} no tiene boxscore por cuarto en la temporada {season}.",
+            suggestion="Esta fase solo existe en partidos de ACB: un jugador que solo jugó en Euroliga no la tendrá.",
+        )
+    rows = records(quarters)
+    return ok(
+        rows,
+        source="player_game_quarter_stats",
+        scope=f"temporada {season} · solo partidos de ACB",
+        gp=int(quarters["gp"].max()),
+        warnings=[fallback_warning] if fallback_warning else None,
+        artifact=artifact("bar", rows, title="Rendimiento por cuarto"),
     )

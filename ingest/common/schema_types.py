@@ -30,6 +30,20 @@ class GameAdvancedStat:
     # línea. `None` = la fuente no dio el dato, distinto de 0.
     ftm: Optional[int] = None
     fta: Optional[int] = None
+    # Boxscore ampliado de EQUIPO (Fase 1, ver doc/features/ingestor/
+    # 02_plan_stats_completas.md): totales que ambas fuentes ya dan en
+    # `stats.total`/`totr`, verificado en vivo. `None` = la fuente no lo dio
+    # para este partido, distinto de 0.
+    stl: Optional[int] = None
+    tov: Optional[int] = None
+    blk: Optional[int] = None
+    blk_against: Optional[int] = None
+    pf: Optional[int] = None
+    pf_drawn: Optional[int] = None
+    oreb: Optional[int] = None
+    dreb: Optional[int] = None
+    plus_minus: Optional[int] = None
+    pir: Optional[int] = None
 
 
 @dataclass
@@ -44,6 +58,19 @@ class PlayerGameStat:
     # definición). `None` = la fuente no dio el dato, distinto de 0.
     ftm: Optional[int] = None
     fta: Optional[int] = None
+    # Boxscore ampliado de JUGADOR (Fase 1). `dunks` es ACB-only (Euroliga no
+    # lo publica en su boxscore) — siempre `None` para una fila de Euroliga.
+    stl: Optional[int] = None
+    tov: Optional[int] = None
+    blk: Optional[int] = None
+    blk_against: Optional[int] = None
+    pf: Optional[int] = None
+    pf_drawn: Optional[int] = None
+    oreb: Optional[int] = None
+    dreb: Optional[int] = None
+    plus_minus: Optional[int] = None
+    pir: Optional[int] = None
+    dunks: Optional[int] = None
 
 
 @dataclass
@@ -109,12 +136,95 @@ class ScoreStep:
 
 @dataclass
 class QuarterStat:
-    """Puntos anotados/encajados por cuarto (fiel a la parte "quarters" de 09_team_pace.R)."""
+    """Puntos anotados/encajados por cuarto (fiel a la parte "quarters" de 09_team_pace.R).
+
+    `fouls_for`/`fouls_against` (Fase 2) NO los rellena el adapter: se
+    derivan en `ingest/common/loader.py` agregando `play_events` por
+    (game_id, team_id, quarter) DESPUÉS de cargarlos, para que ACB y Euroliga
+    compartan una única fuente de verdad aunque el boxscore-por-cuarto de
+    Euroliga no dé faltas (ver `doc/features/ingestor/
+    02_plan_stats_completas.md` §Fase 2/§Fase 3). `None` hasta que el loader
+    los calcula (partido sin play-by-play tipado).
+    """
 
     team_id: str
     quarter: int
     points_for: int
     points_against: int
+    fouls_for: Optional[int] = None
+    fouls_against: Optional[int] = None
+
+
+@dataclass
+class PlayEvent:
+    """Un evento tipado del play-by-play (Fase 2), con reloj exacto.
+
+    `event_type` es uno de: 'steal', 'turnover', 'block', 'oreb', 'dreb',
+    'assist', 'foul_drawn', 'foul_personal'. `event_detail` solo se rellena
+    para 'foul_personal' en ACB (código crudo de los 6 subtipos sin
+    semántica distinguible, ver `ingest/acb/adapter.py`).
+    """
+
+    team_id: str
+    player_id: Optional[str]
+    quarter: str
+    game_clock: str
+    seconds: float
+    event_type: str
+    home_score: int
+    away_score: int
+    event_detail: Optional[str] = None
+
+
+@dataclass
+class PlayerQuarterStat:
+    """Boxscore de un jugador en UN cuarto (Fase 3, ACB-only, ver `player_game_quarter_stats`)."""
+
+    player_id: str
+    quarter: int
+    minutes: Optional[float] = None
+    pts: Optional[int] = None
+    reb: Optional[int] = None
+    ast: Optional[int] = None
+    stl: Optional[int] = None
+    tov: Optional[int] = None
+    blk: Optional[int] = None
+    pf: Optional[int] = None
+    oreb: Optional[int] = None
+    dreb: Optional[int] = None
+    ftm: Optional[int] = None
+    fta: Optional[int] = None
+    plus_minus: Optional[int] = None
+    pir: Optional[int] = None
+
+
+@dataclass
+class PlayerAdvancedStat:
+    """Estadísticas avanzadas OFICIALES de un jugador en un partido (Fase 4, ACB-only).
+
+    Fiel a `AdvancedStats/player-advanced-stats` (contexto `partido`, no
+    `temporada`/`win`/`loss` — esos se piden aparte si hicieran falta). Ver
+    `ingest/acb/adapter.py::_player_advanced_stats`.
+    """
+
+    player_id: str
+    ast_ratio: Optional[float] = None
+    ast_pct: Optional[float] = None
+    stl_ratio: Optional[float] = None
+    stl_pct: Optional[float] = None
+    blk_pct: Optional[float] = None
+    tov_pct: Optional[float] = None
+    orb_pct: Optional[float] = None
+    drb_pct: Optional[float] = None
+    trb_pct: Optional[float] = None
+    ts_pct: Optional[float] = None
+    three_par: Optional[float] = None
+    ppt: Optional[float] = None
+    pp2ps: Optional[float] = None
+    pp3ps: Optional[float] = None
+    ppft: Optional[float] = None
+    possessions: Optional[float] = None
+    pace: Optional[float] = None
 
 
 @dataclass
@@ -140,3 +250,15 @@ class NormalizedGame:
     key_events: List[KeyEvent] = field(default_factory=list)
     score_progression: List[ScoreStep] = field(default_factory=list)
     quarter_stats: List[QuarterStat] = field(default_factory=list)
+    # Metadata de partido (Fase 3): árbitros, asistencia, pabellón, entrenadores
+    # — ya viaja en las respuestas que se descargan hoy en las dos fuentes, ver
+    # `games.arena`/etc en `schema.sql`. Todo `None` si la fuente no lo dio.
+    arena: Optional[str] = None
+    attendance: Optional[int] = None
+    referees: Optional[str] = None
+    home_coach: Optional[str] = None
+    away_coach: Optional[str] = None
+    # Play-by-play tipado (Fase 2) y avanzadas oficiales por jugador (Fase 4).
+    play_events: List[PlayEvent] = field(default_factory=list)
+    quarter_boxscore: List[PlayerQuarterStat] = field(default_factory=list)
+    player_advanced: List[PlayerAdvancedStat] = field(default_factory=list)

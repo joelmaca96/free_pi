@@ -37,6 +37,12 @@ class Capabilities:
     lineup_team: bool = False
     lineup_stints: bool = False
     league_percentiles: bool = False
+    # Fase 0-4 (doc/features/ingestor/02_plan_stats_completas.md).
+    box_extras: bool = False        # Fase 1: robos/pérdidas/tapones/faltas/rebote of-def/+-/PIR
+    play_events: bool = False       # Fase 2: play-by-play tipado (play_events)
+    game_metadata: bool = False     # Fase 3: árbitros/asistencia/pabellón/entrenadores
+    quarter_player_stats: bool = False  # Fase 3: boxscore de jugador por cuarto (ACB-only)
+    player_advanced_stats: bool = False  # Fase 4: avanzadas oficiales por jugador (ACB-only)
     seasons: List[Dict[str, object]] = field(default_factory=list)
     competitions: List[str] = field(default_factory=list)
     date_range: Optional[List[str]] = None
@@ -50,6 +56,11 @@ class Capabilities:
             "lineup_team": self.lineup_team,
             "lineup_stints": self.lineup_stints,
             "league_percentiles": self.league_percentiles,
+            "box_extras": self.box_extras,
+            "play_events": self.play_events,
+            "game_metadata": self.game_metadata,
+            "quarter_player_stats": self.quarter_player_stats,
+            "player_advanced_stats": self.player_advanced_stats,
             "seasons": self.seasons,
             "competitions": self.competitions,
             "date_range": self.date_range,
@@ -84,6 +95,29 @@ class Capabilities:
             gaps.append(
                 "No hay vistas de percentiles de liga en esta base de datos: los perfiles de equipo "
                 "van sin contexto de liga (hay que reingerir para crearlas)."
+            )
+        if not self.box_extras:
+            gaps.append(
+                "No hay boxscore ampliado (robos, pérdidas, tapones, faltas, rebote ofensivo/defensivo, "
+                "+/-, PIR) en esta base de datos: no se puede hablar de disciplina defensiva ni de "
+                "valoración por jugador."
+            )
+        if not self.play_events:
+            gaps.append(
+                "No hay play-by-play tipado: no se puede decir en qué momento del partido se acumulan "
+                "las faltas ni las pérdidas/robos."
+            )
+        if not self.game_metadata:
+            gaps.append("No hay árbitros/asistencia/pabellón/entrenadores registrados para ningún partido.")
+        if not self.quarter_player_stats:
+            gaps.append(
+                "No hay boxscore de jugador por cuarto (solo existe para partidos de ACB): no se puede "
+                "decir si un jugador empieza fuerte y decae, o al revés."
+            )
+        if not self.player_advanced_stats:
+            gaps.append(
+                "No hay estadísticas avanzadas oficiales por jugador y partido (solo existen para ACB): "
+                "sin contexto de victoria/derrota ni fuente de puntos normalizada por jugador."
             )
         return gaps
 
@@ -130,6 +164,19 @@ def probe(engine: Engine) -> Capabilities:
     league_percentiles = "team_style_percentiles" in set(inspector.get_view_names()) and bool(
         _scalar(engine, "SELECT 1 FROM team_style_percentiles LIMIT 1")
     )
+    box_extras = _has_column(inspector, "player_game_stats", "stl") and bool(
+        _scalar(engine, "SELECT 1 FROM player_game_stats WHERE stl IS NOT NULL LIMIT 1")
+    )
+    play_events = inspector.has_table("play_events") and bool(_scalar(engine, "SELECT 1 FROM play_events LIMIT 1"))
+    game_metadata = _has_column(inspector, "games", "arena") and bool(
+        _scalar(engine, "SELECT 1 FROM games WHERE arena IS NOT NULL LIMIT 1")
+    )
+    quarter_player_stats = inspector.has_table("player_game_quarter_stats") and bool(
+        _scalar(engine, "SELECT 1 FROM player_game_quarter_stats LIMIT 1")
+    )
+    player_advanced_stats = inspector.has_table("player_advanced_stats") and bool(
+        _scalar(engine, "SELECT 1 FROM player_advanced_stats LIMIT 1")
+    )
 
     with engine.connect() as conn:
         seasons = [
@@ -150,6 +197,11 @@ def probe(engine: Engine) -> Capabilities:
         lineup_team=lineup_team,
         lineup_stints=lineup_stints,
         league_percentiles=league_percentiles,
+        box_extras=box_extras,
+        play_events=play_events,
+        game_metadata=game_metadata,
+        quarter_player_stats=quarter_player_stats,
+        player_advanced_stats=player_advanced_stats,
         seasons=seasons,
         competitions=competitions,
         date_range=date_range,

@@ -82,7 +82,7 @@ with header_col:
         f"{capabilities.counts.get('games', 0)} partidos cargados"
     )
 with actions_col:
-    if st.button("Vaciar chat", use_container_width=True):
+    if st.button("Vaciar chat", width="stretch"):
         st.session_state["assistant_history"] = []
         st.session_state["assistant_messages"] = []
         st.session_state["assistant_questions"] = 0
@@ -157,7 +157,7 @@ for index, entry in enumerate(st.session_state["assistant_history"]):
 if not st.session_state["assistant_history"]:
     st.caption("Prueba con una de estas:")
     for column, suggestion in zip(st.columns(len(_SUGGESTIONS)), _SUGGESTIONS):
-        if column.button(suggestion, use_container_width=True, key=f"chip_{suggestion[:20]}"):
+        if column.button(suggestion, width="stretch", key=f"chip_{suggestion[:20]}"):
             st.session_state["assistant_pending"] = suggestion
             st.rerun()
 

@@ -21,6 +21,7 @@ una tiene su motivo:
 """
 import logging
 import os
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
@@ -160,16 +161,30 @@ class Agent:
 
         turn = AgentTurn()
         spent_tokens = 0
+        turn_started = time.monotonic()
 
         for iteration in range(1, self.max_iterations + 1):
             turn.iterations = iteration
             if on_text_reset is not None:
                 on_text_reset()
+            llm_started = time.monotonic()
             response = self.client.chat(
                 messages, self.catalog.specs(), system=self.system_prompt, on_text=on_text
             )
+            llm_elapsed = time.monotonic() - llm_started
             spent_tokens += int(response.usage.get("total_tokens", 0) or 0)
             _accumulate_usage(turn.usage, response.usage)
+            logger.info(
+                "assistant.timing | llm vuelta=%d/%d | %.2fs | modelo=%s | tool_calls=%d | "
+                "stop=%s | tokens=%s",
+                iteration,
+                self.max_iterations,
+                llm_elapsed,
+                self.client.label,
+                len(response.tool_calls),
+                response.stop_reason,
+                response.usage.get("total_tokens"),
+            )
 
             if not response.tool_calls:
                 turn.text = response.text
@@ -187,7 +202,16 @@ class Agent:
             if response.provider_state is not None:
                 assistant_message["provider_state"] = response.provider_state
             messages.append(assistant_message)
+            tools_started = time.monotonic()
             invocations = self._execute_all(response.tool_calls, on_tool_start, on_tool_end)
+            logger.info(
+                "assistant.timing | tools vuelta=%d/%d | %.2fs | n=%d | %s",
+                iteration,
+                self.max_iterations,
+                time.monotonic() - tools_started,
+                len(invocations),
+                ", ".join(inv.name for inv in invocations),
+            )
             turn.invocations.extend(invocations)
             # TODOS los resultados, en el mismo bloque y en el mismo orden en
             # que se pidieron. Ver docstring del módulo.
@@ -218,6 +242,13 @@ class Agent:
         turn.messages = messages
         turn.unverified_numbers = verify_numbers(turn.text, turn.invocations)
         _log_sql_escapes(question, turn.invocations)
+        logger.info(
+            "assistant.timing | turno completo | %.2fs | %d vueltas | parada=%s | pregunta=%r",
+            time.monotonic() - turn_started,
+            turn.iterations,
+            turn.stopped_reason or "-",
+            question,
+        )
         return turn
 
     def _execute_all(self, calls: List[ToolCall], on_tool_start, on_tool_end) -> List[ToolInvocation]:

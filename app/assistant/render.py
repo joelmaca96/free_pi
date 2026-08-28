@@ -68,7 +68,7 @@ def _render_bar(df: pd.DataFrame) -> None:
             )
             .properties(height=28 * len(df) + 40)
         )
-        st.altair_chart(chart, use_container_width=True)
+        st.altair_chart(chart, width="stretch")
         return
 
     if {"quarter", "avg_points_for", "avg_points_against"} <= set(df.columns):
@@ -94,7 +94,7 @@ def _render_bar(df: pd.DataFrame) -> None:
             )
             .properties(height=260)
         )
-        st.altair_chart(chart, use_container_width=True)
+        st.altair_chart(chart, width="stretch")
         return
 
     _render_table(df)

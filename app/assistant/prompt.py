@@ -67,13 +67,26 @@ TRAMPAS DE ESTE ESQUEMA (aplican también a run_sql):
   marcador, así que no se puede recortar "los últimos minutos" salvo que exista
   `lineup_stints`.
 - Una columna en NULL suele significar "ese partido se cargó antes de que la columna
-  existiera", NO "cero". Vale para ftm/fta y para lineups.team_id.
+  existiera", NO "cero". Vale para ftm/fta, para lineups.team_id y para TODO el boxscore
+  ampliado (stl/tov/blk/pf/oreb/dreb/plus_minus/pir) y las avanzadas oficiales.
 - En ACB, ORtg/DRtg/pace son dato oficial; en Euroliga son una ESTIMACIÓN propia (Dean
   Oliver). Dilo al comparar las dos.
 - `score_progression` no guarda el instante de juego, así que no se puede cruzar con
   quintetos ni con tiros.
 - Los tiros libres no tienen coordenadas: `shots` es solo tiro de campo, y `efg_pct` los
-  excluye por definición."""
+  excluye por definición.
+- `play_events.event_type='foul_personal'` no distingue el subtipo de falta (6 códigos ACB
+  sin semántica clara, guardados en bruto en `event_detail`): di "cometió una falta", nunca
+  de qué tipo. El TOTAL de faltas de un jugador/equipo sale siempre de `pf` del boxscore, no
+  de contar eventos — pueden no cuadrar exactamente si falta algún evento del PBP.
+- `game_team_quarter_stats.fouls_for/fouls_against` se DERIVAN de `play_events`: pueden ser
+  NULL en un cuarto que sí tiene `points_for/points_against` (ese partido no tiene
+  play-by-play tipado todavía), no son la misma cobertura.
+- `player_game_quarter_stats` (boxscore por cuarto) y `player_advanced_stats` (avanzadas
+  oficiales por partido) solo existen para partidos de ACB, nunca Euroliga. Además
+  `player_advanced_stats` solo se ingiere para el Baskonia y su próximo rival, no para la
+  plantilla completa de cada rival histórico — que un jugador rival no la tenga no es un
+  hueco de carga, es el alcance real de esta fase."""
 
 # ---------------------------------------------------------------------------
 # Bloque 3: glosario
@@ -86,7 +99,13 @@ GLOSARIO:
 - ORtg / DRtg: puntos anotados / encajados por 100 posesiones. Net rating = la diferencia.
 - pace: posesiones por partido. Alto = partido de más ritmo.
 - plus/minus: diferencia de puntos con ese quinteto en pista. Por 40 minutos = normalizado.
-- percentil (p71): por encima del 71% de los equipos de SU competición, no de todas."""
+- percentil (p71): por encima del 71% de los equipos de SU competición, no de todas.
+- PIR / valoración: fórmula oficial de la fuente que resume el partido en un número (a más
+  alto, mejor); sirve para comparar jugadores de estilos distintos sin construir una fórmula
+  propia. No la reconstruyas a mano ni la expliques término a término.
+- ast_ratio vs ast_pct (avanzadas oficiales, solo ACB): NO son lo mismo. ast_ratio son
+  asistencias por 100 posesiones individuales; ast_pct es el % de las canastas de su equipo
+  que asiste ese jugador mientras está en pista. Lo mismo aplica a stl_ratio/stl_pct."""
 
 # ---------------------------------------------------------------------------
 # Bloque 4: guía de uso de herramientas
@@ -104,18 +123,40 @@ CÓMO USAR LAS HERRAMIENTAS:
   rendirte."""
 
 
-def _schema_card(max_columns: int = 12) -> str:
+def _schema_card(max_columns: int = 40) -> str:
     """Resumen generado de `schema.sql`: tablas y vistas con sus columnas útiles.
 
     Generado y no escrito a mano para que no se desincronice del esquema real
     — es el mismo argumento por el que `_refresh_views` recrea las vistas
     desde el fichero en vez de repetir el DDL.
+
+    `max_columns` subió de 12 a 40 el 2026-08-27: con 12, tablas como
+    `game_advanced_stats` (26 columnas tras las Fases 1-4 de
+    `02_plan_stats_completas.md`) cortaban justo antes de las columnas de
+    boxscore ampliado (`stl`/`tov`/`blk`/`pf`/`oreb`/`dreb`/`plus_minus`/`pir`),
+    `games` cortaba antes de `referees`/`home_coach`/`away_coach`, y
+    `team_stats_by_competition`/`team_stats_combined` (38 columnas, la vista
+    más ancha del esquema) cortaban justo antes de los `opp_*` — el boxscore
+    ampliado CONCEDIDO por el rival, que es la mitad más útil de ese bloque
+    para scouting (§Fase 1 del plan). El propio `run_sql` (§4.6, último
+    recurso) quedaba sin saber que esas columnas existen, justo las que
+    motivaron la fase. El corte se marca ahora con `… (+N más)` en vez de
+    desaparecer en silencio, para que si una tabla vuelve a crecer por encima
+    del límite se note en el prompt en vez de repetir el mismo hallazgo sin
+    que nadie lo vea.
     """
     if SCHEMA_PATH is None or not SCHEMA_PATH.exists():  # pragma: no cover - defensivo
         return "TABLAS: (no disponible)"
 
     script = SCHEMA_PATH.read_text(encoding="utf-8")
     script = re.sub(r"--[^\n]*", "", script)
+
+    def _formatted(name: str, columns: List[str], *, is_view: bool) -> str:
+        shown = columns[:max_columns]
+        omitted = len(columns) - len(shown)
+        suffix = f", … (+{omitted} más)" if omitted > 0 else ""
+        label = f"{name} (vista)" if is_view else name
+        return f"- {label}: {', '.join(shown)}{suffix}"
 
     lines: List[str] = ["TABLAS Y VISTAS (columnas principales):"]
     for match in re.finditer(r"CREATE\s+TABLE\s+(\w+)\s*\((.*?)\n\);", script, re.DOTALL | re.IGNORECASE):
@@ -126,14 +167,15 @@ def _schema_card(max_columns: int = 12) -> str:
             if column and column.group(1).upper() not in ("PRIMARY", "UNIQUE", "FOREIGN", "CHECK"):
                 columns.append(column.group(1))
         if columns:
-            lines.append(f"- {name}: {', '.join(columns[:max_columns])}")
+            lines.append(_formatted(name, columns, is_view=False))
 
     for match in re.finditer(r"CREATE\s+VIEW\s+(\w+)\s+AS(.*?);", script, re.DOTALL | re.IGNORECASE):
         name, body = match.group(1), match.group(2)
         aliases = re.findall(r"\bAS\s+(\w+)\s*[,\n]", body)
-        columns = aliases or re.findall(r"\b(\w+)\.(\w+)", body)[:max_columns]
-        flat = [c if isinstance(c, str) else c[1] for c in columns][:max_columns]
-        lines.append(f"- {name} (vista): {', '.join(dict.fromkeys(flat))}")
+        columns = aliases or [c[1] for c in re.findall(r"\b(\w+)\.(\w+)", body)]
+        flat = list(dict.fromkeys(columns))
+        if flat:
+            lines.append(_formatted(name, flat, is_view=True))
 
     return "\n".join(lines)
 

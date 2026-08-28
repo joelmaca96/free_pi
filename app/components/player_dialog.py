@@ -26,8 +26,8 @@ import streamlit as st
 
 from components.ask_assistant import ask_assistant_button
 from components.avatar import player_avatar_html
-from components.court import shot_chart, shot_chart_caption, zone_breakdown
-from data import queries
+from components.court import shot_chart, shot_chart_caption, zone_breakdown, zone_heatmap, zone_heatmap_caption
+from data import queries, queries_assistant
 from data.db import get_read_engine
 
 _ACCENT = "#008300"
@@ -91,7 +91,7 @@ def player_detail(player_id: str) -> None:
             key=f"ask_player_{player_id}",
             context=f"El usuario viene de la ficha del jugador {player_id} ({bio['name']}).",
             label="Preguntar al asistente",
-            use_container_width=False,
+            width="content",
         )
 
     st.divider()
@@ -132,6 +132,22 @@ def player_detail(player_id: str) -> None:
                 # cargados, ver el docstring de `queries.player_averages_all`).
                 cols[6].metric("FT%", f"{row.ft_pct:.1f}" if pd.notna(row.ft_pct) else "—")
 
+                # Boxscore ampliado (Fase 1): mismo criterio "NaN = sin dato,
+                # no cero" que arriba — `gp_box_extras` viaja en `row` pero no
+                # se pinta, es solo la señal de cobertura parcial.
+                if pd.notna(getattr(row, "stl_avg", None)):
+                    extra_cols = st.columns(8)
+                    extra_cols[0].metric("Rob", f"{row.stl_avg:.1f}")
+                    extra_cols[1].metric("Tap", f"{row.blk_avg:.1f}" if pd.notna(row.blk_avg) else "—")
+                    extra_cols[2].metric("PP", f"{row.tov_avg:.1f}" if pd.notna(row.tov_avg) else "—")
+                    extra_cols[3].metric("Reb.Of", f"{row.oreb_avg:.1f}" if pd.notna(row.oreb_avg) else "—")
+                    extra_cols[4].metric("Reb.Def", f"{row.dreb_avg:.1f}" if pd.notna(row.dreb_avg) else "—")
+                    extra_cols[5].metric("Faltas", f"{row.pf_avg:.1f}" if pd.notna(row.pf_avg) else "—")
+                    extra_cols[6].metric(
+                        "+/-", f"{row.plus_minus_avg:+.1f}" if pd.notna(row.plus_minus_avg) else "—"
+                    )
+                    extra_cols[7].metric("PIR", f"{row.pir_avg:.1f}" if pd.notna(row.pir_avg) else "—")
+
     # ---------------------------------------------------------- partido a partido --
     log_df = queries.player_game_log(engine, player_id, stats_season_id)
 
@@ -148,6 +164,16 @@ def player_detail(player_id: str) -> None:
         best = log_df.loc[log_df[stat].idxmax()]
         col.metric(label, int(best[stat]))
         col.caption(f"{best['game_date']} · vs {best['rival']}")
+
+    # Fase 1: robos/tapones — solo si el partido a partido trae boxscore
+    # ampliado (columna presente Y con algún dato real, no solo NULL).
+    if "stl" in log_df.columns and log_df["stl"].notna().any():
+        r4, r5 = st.columns(2)
+        for col, stat, label in ((r4, "stl", "Máx. robos"), (r5, "blk", "Máx. tapones")):
+            if log_df[stat].notna().any():
+                best = log_df.loc[log_df[stat].idxmax()]
+                col.metric(label, int(best[stat]))
+                col.caption(f"{best['game_date']} · vs {best['rival']}")
 
     st.divider()
 
@@ -167,7 +193,7 @@ def player_detail(player_id: str) -> None:
         )
         .properties(height=200)
     )
-    st.altair_chart(trend, use_container_width=True)
+    st.altair_chart(trend, width="stretch")
 
     st.divider()
 
@@ -176,7 +202,7 @@ def player_detail(player_id: str) -> None:
     st.dataframe(
         log_df,
         hide_index=True,
-        use_container_width=True,
+        width="stretch",
         height=280,
         column_order=["rival_logo_url", "rival", "game_date", "competition", "condicion", "minutes", "pts", "reb", "ast", "efg_pct"],
         column_config={
@@ -196,6 +222,31 @@ def player_detail(player_id: str) -> None:
         },
     )
 
+    # ------------------------------------------------- avanzadas oficiales (Fase 4) --
+    # ACB-only (Euroliga no tiene avanzadas oficiales por partido) y acotado
+    # por coste a Baskonia + próximo rival (ver `ingest/acb/pipeline.py::
+    # _advanced_stats_scope`) — puede no haber nada que mostrar, y está bien.
+    advanced_df = queries_assistant.player_advanced_profile(engine, player_id, stats_season_id)
+    if not advanced_df.empty:
+        st.divider()
+        st.markdown("**Avanzadas oficiales (ACB) — victorias vs. derrotas**")
+        wins = advanced_df[advanced_df["win"] == 1]
+        losses = advanced_df[advanced_df["win"] == 0]
+        a1, a2, a3 = st.columns(3)
+        a1.metric("Partidos con dato", len(advanced_df))
+        a2.metric(
+            "TS% en victorias",
+            f"{wins['ts_pct'].mean():.1f}" if not wins.empty and wins["ts_pct"].notna().any() else "—",
+        )
+        a3.metric(
+            "TS% en derrotas",
+            f"{losses['ts_pct'].mean():.1f}" if not losses.empty and losses["ts_pct"].notna().any() else "—",
+        )
+        st.caption(
+            "PIR/TS%/ritmo oficiales de acb.com, solo disponibles para el Baskonia y el próximo rival "
+            "(coste de red). 'win' se deduce del equipo actual del jugador."
+        )
+
     # -------------------------------------------------------------- mapa de tiros --
     shots_df = queries.player_shots_season(engine, player_id, stats_season_id)
     if shots_df.empty:
@@ -204,15 +255,26 @@ def player_detail(player_id: str) -> None:
         st.divider()
         st.markdown("**Mapa de tiros de la temporada**")
         zones_df = queries.court_zones(engine)
-        # Sin `use_container_width`: `shot_chart` ya fija su propio ancho (dominio
-        # cuadrado) — estirarlo al contenedor aplana la cancha (ver `court.py`).
-        st.altair_chart(shot_chart(shots_df, zones_df))
-        st.caption(shot_chart_caption(shots_df))
-
         # A diferencia del equipo (`team_zone_profile`, agregado en origen sin
         # desglose por jugador), aquí sí hay una tabla equivalente por jugador
         # — `player_zone_profile` la calcula de `shots.zone_id` porque no
         # existe un agregado oficial por jugador que reutilizar (ver su
         # docstring).
         zone_df = queries.player_zone_profile(engine, player_id, stats_season_id)
+
+        # Uno al lado del otro, no apilados: son dos lecturas del mismo mapa
+        # (nube de tiros vs. acierto por zona) y se comparan mejor en
+        # paralelo. Cada gráfico conserva su ancho fijo (dominio cuadrado,
+        # sin `use_container_width`/`width="stretch"` — ver `court.py`) y ya
+        # trae de serie el icono de pantalla completa de Streamlit al pasar
+        # el ratón por encima, para verlo grande sin perder el layout de dos
+        # columnas.
+        col_shots, col_zones = st.columns(2)
+        with col_shots:
+            st.altair_chart(shot_chart(shots_df, zones_df))
+            st.caption(shot_chart_caption(shots_df))
+        with col_zones:
+            st.markdown("**Acierto por zona**")
+            st.altair_chart(zone_heatmap(zone_df, zones_df))
+            st.caption(zone_heatmap_caption(zone_df))
         zone_breakdown(zone_df, len(shots_df), scope="player")

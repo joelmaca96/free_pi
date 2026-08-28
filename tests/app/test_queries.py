@@ -13,7 +13,7 @@ from sqlalchemy import text
 
 from packages.baskonia_core.db.scouting import create_scouting_engine, init_scouting_db
 
-from app.data.queries import team_scouting_season
+from app.data.queries import game_player_report, team_scouting_season
 
 
 @pytest.fixture()
@@ -94,3 +94,87 @@ def test_falls_back_across_more_than_one_season_gap(engine):
     result = team_scouting_season.__wrapped__(engine, "rm", 3)
 
     assert result == {"season_id": 1, "label": "2025-2026", "is_fallback": True}
+
+
+# ------------------------------------------------------- game_player_report --
+# Alimenta el informe "PPT para Paolo" (`app/reports/postgame_ppt.py`): boxscore
+# ampliado de un partido + triples derivados de `shots`. El seed ya trae la
+# plantilla del Baskonia (`players`, team_id='bas') y las 13 zonas de cancha
+# (`court_zones`, con cinco que empiezan por "Triple") — solo hace falta el
+# partido y las filas de estadística propias de cada test.
+
+
+def _add_player(conn, player_id: str, team_id: str, name: str) -> None:
+    conn.execute(
+        text("INSERT INTO players (id, team_id, name, number, position) VALUES (:id, :team_id, :name, 99, 'Base')"),
+        {"id": player_id, "team_id": team_id, "name": name},
+    )
+
+
+def _add_player_game_stats(conn, game_id: str, player_id: str, **overrides) -> None:
+    base = {
+        "game_id": game_id, "player_id": player_id, "minutes": 20.0, "pts": 10, "reb": 4, "ast": 3,
+        "efg_pct": 50.0, "ftm": None, "fta": None, "stl": None, "tov": None, "blk": None,
+        "blk_against": None, "pf": None, "pf_drawn": None, "oreb": None, "dreb": None,
+        "plus_minus": None, "pir": None, "dunks": None,
+    }
+    base.update(overrides)
+    conn.execute(
+        text(
+            "INSERT INTO player_game_stats (game_id, player_id, minutes, pts, reb, ast, efg_pct,"
+            " ftm, fta, stl, tov, blk, blk_against, pf, pf_drawn, oreb, dreb, plus_minus, pir, dunks)"
+            " VALUES (:game_id, :player_id, :minutes, :pts, :reb, :ast, :efg_pct,"
+            " :ftm, :fta, :stl, :tov, :blk, :blk_against, :pf, :pf_drawn, :oreb, :dreb, :plus_minus, :pir, :dunks)"
+        ),
+        base,
+    )
+
+
+def _add_shot(conn, game_id: str, player_id: str, zone_id: int, made: int) -> None:
+    conn.execute(
+        text(
+            "INSERT INTO shots (game_id, player_id, zone_id, pos_x, pos_y, made, located)"
+            " VALUES (:game_id, :player_id, :zone_id, 250.0, 80.0, :made, 1)"
+        ),
+        {"game_id": game_id, "player_id": player_id, "zone_id": zone_id, "made": made},
+    )
+
+
+def test_game_player_report_includes_threes_and_free_throws(engine):
+    """Triples derivados de `shots` (zonas 'Triple*', ver seed de `court_zones`)
+    + tiros libres ya presentes en `player_game_stats`, unidos en una fila."""
+    with engine.begin() as conn:
+        _add_game(conn, "g-report", 1, "bas", "rm")
+        _add_player_game_stats(conn, "g-report", "howard", pts=21, ftm=3, fta=4)
+        _add_shot(conn, "g-report", "howard", zone_id=6, made=1)  # Triple exterior, anotado
+        _add_shot(conn, "g-report", "howard", zone_id=6, made=0)  # Triple exterior, fallado
+        _add_shot(conn, "g-report", "howard", zone_id=1, made=1)  # Pintura: no es un triple
+
+    df = game_player_report.__wrapped__(engine, "g-report", "bas")
+
+    assert len(df) == 1
+    row = df.iloc[0]
+    assert row["player_id"] == "howard"
+    assert row["tpm"] == 1
+    assert row["tpa"] == 2
+    assert row["ftm"] == 3 and row["fta"] == 4
+
+
+def test_game_player_report_excludes_dnp_and_other_team(engine):
+    """Un convocado sin minutos jugados no aporta nada a un informe de puntos
+    destacados (mismo criterio que 'Carga de minutos' en `estado_equipo.py`,
+    que también lo descarta) y un jugador del rival no es del Baskonia aunque
+    juegue el mismo partido."""
+    with engine.begin() as conn:
+        _add_player(conn, "rival-x", "rm", "Jugador Rival")
+        _add_game(conn, "g-report-2", 1, "bas", "rm")
+        _add_player_game_stats(conn, "g-report-2", "howard", minutes=0.0, pts=0)
+        _add_player_game_stats(conn, "g-report-2", "moneke", minutes=18.0, pts=8)
+        _add_player_game_stats(conn, "g-report-2", "rival-x", minutes=25.0, pts=15)
+
+    df_bas = game_player_report.__wrapped__(engine, "g-report-2", "bas")
+
+    assert df_bas["player_id"].tolist() == ["moneke"]
+    # NULL de SQL == NaN en pandas para una columna sin dato: no hay tiros
+    # con coordenadas en este partido, no que no lanzara ningún triple.
+    assert df_bas["tpa"].isna().all()

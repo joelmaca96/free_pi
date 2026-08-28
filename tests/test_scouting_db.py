@@ -162,7 +162,7 @@ def test_init_syncs_court_zone_geometry_on_an_existing_db():
         # El tiro ya cargado, que apuntaba al id 2, sigue existiendo — el id no
         # se borra ni se reasigna, solo cambian sus límites/etiqueta.
         shot_zone = conn.execute(text("SELECT zone_id FROM shots WHERE id = 1")).scalar_one()
-    assert zone_2 == ("Ala izq.", 56, 194)  # reajustada, no borrada
+    assert zone_2 == ("Ala izq.", 0, 195)  # reajustada, no borrada
     assert zone_10 == ("Mate",)              # zona nueva, presente
     assert shot_zone == 2
     eng.dispose()
@@ -174,7 +174,10 @@ def test_init_court_zone_sync_is_idempotent(engine):
     with engine.connect() as conn:
         count = conn.execute(text("SELECT COUNT(*) FROM court_zones")).scalar_one()
         pintura = conn.execute(text("SELECT x_min, x_max, y_min, y_max FROM court_zones WHERE id = 1")).first()
-    assert count == 10
+    # 13 zonas del reteselado + 4 sub-zonas degeneradas del split de ala por
+    # triple ("Ala izq./der. (2)/(3)", filas 14-17 — ver el comentario sobre
+    # `court_zones` en `schema.sql`).
+    assert count == 17
     assert pintura == (195, 305, 300, 455)
 
 
