@@ -27,8 +27,8 @@ accionable pesa menos que una peor pero exportable.
 |---|-----------|--------------|--------------------|
 | 01 ✅ | [Rotaciones y parciales explicados](01_rotaciones_y_parciales.md) | Timeline de rotaciones con el margen detrás; clic en un parcial → qué quinteto había y qué pasó | Completos |
 | 02 ✅ | [Calidad de tiro (xPPS)](02_calidad_de_tiro.md) | Separar la decisión (qué tiro se genera) del acierto (si entra), en ataque y en defensa | Completos |
-| 03 | [Dossier de scouting del rival](03_dossier_scouting_rival.md) | Un botón → `.pptx` de prepartido con perfil, jugadores clave y claves del partido | Completos |
-| 04 | [Fatiga y calendario ACB+Euroliga](04_fatiga_y_calendario.md) | Descanso real, semanas dobles y carga de minutos, nuestra y del rival | Completos |
+| 03 ✅ | [Dossier de scouting del rival](03_dossier_scouting_rival.md) | Un botón → `.pptx` de prepartido con perfil, jugadores clave y claves del partido | Completos |
+| 04 ✅ | [Fatiga y calendario ACB+Euroliga](04_fatiga_y_calendario.md) | Descanso real, semanas dobles y carga de minutos, nuestra y del rival | Completos |
 | 05 | [Perfil arbitral](05_perfil_arbitral.md) | Qué pita cada árbitro: faltas, tiros libres, sesgo local, efecto sobre jugadores concretos | Completos |
 | 06 | [Gestión de faltas](06_gestion_de_faltas.md) | Minuto exacto de cada falta: quién se carga pronto, a quién no ponerle mano | Completos |
 | 07 | [On/Off y duplas](07_onoff_y_duplas.md) | Rendimiento del equipo con y sin cada jugador, y por parejas/tríos | Completos (parte ya existe en el asistente) |
@@ -51,11 +51,21 @@ aquí para no perderla: el día que se sepa el formato destino, es de las más b
 Dos cosas que aparecieron al verificar las cifras y que conviene arreglar al margen de lo que se
 implemente:
 
-- **El Barça está duplicado.** `barca` ("Barça", 42 partidos de ACB + 2 de Copa) y `fcb` ("FC
-  Barcelona", 40 de Euroliga) son el mismo club, y el puente de identidad no los une. Real Madrid,
-  Valencia y Baskonia sí están unificados: solo falla el Barça. Bloquea la propuesta
-  [04](04_fatiga_y_calendario.md) y falsea cualquier agregado por club de ese equipo. Ver
-  `tests/ingest/test_identity_collision.py`.
+- **El Barça estaba duplicado — arreglado (2026-08-29).** `barca` ("Barça", 42 partidos de ACB + 2
+  de Copa) y `fcb` ("FC Barcelona", 40 de Euroliga) eran el mismo club bajo dos `team_id`, y el
+  puente de identidad no los unía: bloqueaba la propuesta [04](04_fatiga_y_calendario.md) (que ya
+  está implementada) y falseaba cualquier agregado por club de ese equipo. `_KNOWN_TEAM_ALIASES`
+  (`packages/baskonia_core/names.py`) ya evita que una ingesta nueva vuelva a separarlos;
+  `tools/fix_barca_identity.py` fusionó con retroactividad los que ya estaban cargados (equipo +
+  14 jugadores partidos en dos roster distintos, fusionados por dorsal compartido). La comprobación
+  de integridad que lo detecta corre ahora al final de cada ingesta
+  (`ingest.common.identity.find_team_identity_collisions`, cableada en `ingest/run_all.py`).
+  **Al arreglarlo apareció el mismo bug en otros ~23 pares de clubes** (Bilbao Basket/Surne Bilbao,
+  Bayern/FC Bayern Múnich, varios Manresa/Burgos/Lleida/Granada con nombre de patrocinador...) —
+  `_KNOWN_TEAM_ALIASES` ya los reconoce para ingestas futuras, pero los que YA están cargados no se
+  han fusionado con retroactividad como el Barça: solo importa para un agregado por club de esos
+  equipos concretos (ninguno juega ACB+Euroliga a la vez, así que no bloquean la 04), pero conviene
+  planificar el mismo arreglo si se prepara scouting de alguno de ellos en profundidad.
 - **La ficha biográfica está casi vacía**: `height_cm` es NULL en los 968 jugadores, `birth_date`
   solo existe en 12 y 452 jugadores tienen la posición en blanco. Limita sobre todo a
   [11](11_similitud_de_jugadores.md).

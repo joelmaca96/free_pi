@@ -188,6 +188,27 @@ TERMS: Dict[str, Term] = {
         "Margen", "Diferencia en el marcador",
         "Puntos a favor menos puntos en contra en ese instante. Positivo = ganando.",
     ),
+    # -------------------------------------- fatiga y calendario (propuesta 04) --
+    "rest_days": Term(
+        "Descanso", "Días de descanso",
+        "Días desde el partido anterior del equipo, en CUALQUIER competición — ACB y Euroliga cuentan "
+        "igual. Vacío en el primer partido registrado: no hay 'anterior' del que restar.",
+    ),
+    "rolling_minutes": Term(
+        "Carga", "Minutos en la ventana",
+        "Minutos acumulados de un jugador en los últimos N días de calendario, no en los últimos N "
+        "partidos: cinco partidos en nueve días y cinco en tres semanas no son la misma carga.",
+    ),
+    "minutes_per_day": Term(
+        "Min/día", "Minutos por día disponible",
+        "Carga de la ventana dividida entre sus días. Compara jugadores con roles distintos sin que un "
+        "partido más o menos en la ventana desnivele la lectura.",
+    ),
+    "rest_bucket": Term(
+        "Tramo de descanso", "Días de descanso agrupados",
+        "≤1, 2, 3-4 o ≥5 días desde el partido anterior. Con 78 partidos como mucho por temporada de "
+        "doble competición, la muestra de cada tramo puede ser pequeña — mira siempre el PJ.",
+    ),
 }
 
 

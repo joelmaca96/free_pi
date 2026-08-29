@@ -1602,3 +1602,183 @@ def player_shot_counts(_engine: Engine, team_id: str, season_id: int) -> pd.Data
         GROUP BY p.id, p.name, g.competition_id, s.zone_id, cz.label, COALESCE(s.located, 1)
     """)
     return pd.read_sql(sql, _engine, params={"team_id": team_id, "season_id": season_id})
+
+
+# ---------------------------------------------------------------------------
+# Fatiga y calendario cruzado ACB + Euroliga
+# (`doc/features/propuestas/04_fatiga_y_calendario.md`).
+#
+# Las tres consultas comparten un mismo cálculo de fondo: el DESCANSO de un
+# equipo es la distancia en días hasta su partido anterior EN CUALQUIER
+# COMPETICIÓN, no solo la que se esté mirando — es el matiz que ninguna web
+# de estadística puede dar porque ninguna tiene ACB y Euroliga bajo la misma
+# identidad de club (§1/§4 del documento). El `LAG` de SQLite corre sobre TODO
+# el historial del equipo, sin filtrar por `season_id`, y solo el resultado
+# final se recorta a la temporada pedida — así el primer partido de una
+# temporada nueva no pierde su descanso real (el del final de la anterior)
+# solo por caer justo en el corte.
+#
+# Requieren que `team_external_ids` no tenga un club partido en dos
+# `team_id` (§5 del documento: el caso real era el Barça, `barca` + `fcb`,
+# arreglado con `tools/fix_barca_identity.py`) — un club así ve la mitad de
+# sus partidos aquí, con el descanso y la carga equivocados.
+# ---------------------------------------------------------------------------
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def rest_days(_engine: Engine, team_id: str, season_id: int) -> pd.DataFrame:
+    """Días de descanso con los que un equipo llega a cada partido de la temporada.
+
+    Returns:
+        `game_id, game_date, competition, condicion, rival, rest_days`,
+        cronológico. `rest_days` es `None` en el primerísimo partido del
+        equipo en TODA la base de datos (no hay "anterior" que restar);
+        cualquier otro hueco, incluido el de pretemporada al empezar una
+        temporada nueva, se calcula contra el último partido jugado de
+        verdad, sea de la competición que sea. Vacío si el equipo no tiene
+        partidos en esa temporada.
+    """
+    sql = text("""
+        WITH team_games AS (
+            SELECT g.id, g.game_date, g.season_id, c.name AS competition,
+                   CASE WHEN g.home_team_id = :team_id THEN 'Local' ELSE 'Visitante' END AS condicion,
+                   CASE WHEN g.home_team_id = :team_id THEN t_away.name ELSE t_home.name END AS rival,
+                   LAG(g.game_date) OVER (ORDER BY g.game_date) AS previous_game_date
+            FROM games g
+            JOIN teams t_home ON t_home.id = g.home_team_id
+            JOIN teams t_away ON t_away.id = g.away_team_id
+            JOIN competitions c ON c.id = g.competition_id
+            WHERE g.home_team_id = :team_id OR g.away_team_id = :team_id
+        )
+        SELECT id AS game_id, game_date, competition, condicion, rival,
+               CAST(julianday(game_date) - julianday(previous_game_date) AS INTEGER) AS rest_days
+        FROM team_games
+        WHERE season_id = :season_id
+        ORDER BY game_date
+    """)
+    return pd.read_sql(sql, _engine, params={"team_id": team_id, "season_id": season_id})
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def rolling_load(_engine: Engine, team_id: str, season_id: int, days: int) -> pd.DataFrame:
+    """Minutos acumulados de cada jugador activo en una ventana móvil de `days` días.
+
+    A diferencia de `minutes_load` (últimos N PARTIDOS), la ventana es de
+    CALENDARIO: cinco partidos en nueve días y cinco en tres semanas no son la
+    misma carga, y contar partidos confunde las dos (§2a del documento). La
+    ventana de cada fila termina en la fecha de ESE partido y mira `days` días
+    atrás, semiabierta por la izquierda (mismo criterio que
+    `pandas.DataFrame.rolling` con ventana temporal): con `days=7`, una fila
+    del domingo suma desde el lunes anterior en adelante, no desde el domingo
+    previo, que quedaría justo fuera.
+
+    Un partido sin minutos (DNP, no convocado) cuenta como 0 en la suma de la
+    ventana, no como hueco: la ausencia no descansa menos a nadie, y dejarla
+    fuera de la cuenta rebajaría artificialmente la carga de un jugador con
+    bajas intermitentes.
+
+    Args:
+        days: tamaño de la ventana en días (7 o 14 en la pantalla, ver el
+            documento; cualquier entero positivo funciona).
+
+    Returns:
+        `player_id, player_name, game_date, minutes, rolling_minutes,
+        games_in_window, minutes_per_day`. `minutes` es el dato crudo de ESE
+        partido (`NaN` = no jugó, mismo criterio que `minutes_load`);
+        `rolling_minutes`/`games_in_window` sí cuentan esos partidos, como
+        0 minutos / 1 partido. `minutes_per_day = rolling_minutes / days`,
+        para comparar jugadores con roles distintos sin que un partido más o
+        menos en la ventana desnivele la lectura (sugerencia del documento,
+        §4). Vacío si el equipo no tiene jugadores activos con partidos en
+        esa temporada.
+    """
+    sql = text("""
+        SELECT p.id AS player_id, p.name AS player_name, g.game_date, pgs.minutes
+        FROM players p
+        JOIN games g ON (g.home_team_id = :team_id OR g.away_team_id = :team_id) AND g.season_id = :season_id
+        LEFT JOIN player_game_stats pgs ON pgs.game_id = g.id AND pgs.player_id = p.id
+        WHERE p.team_id = :team_id AND p.active = 1
+        ORDER BY p.name, g.game_date
+    """)
+    df = pd.read_sql(sql, _engine, params={"team_id": team_id, "season_id": season_id})
+    if df.empty:
+        return df
+
+    df["game_date"] = pd.to_datetime(df["game_date"])
+    df["_minutes_filled"] = df["minutes"].fillna(0.0)
+
+    def _rolling(group: pd.DataFrame) -> pd.DataFrame:
+        windowed = group.rolling(f"{days}D", on="game_date")["_minutes_filled"]
+        # pandas 3.x quita la columna de agrupación (`player_id`) del grupo
+        # que llega aquí y solo la deja en `group.name` — hay que devolverla
+        # explícitamente o la fila pierde con qué jugador identificarse.
+        return group.assign(
+            player_id=group.name, rolling_minutes=windowed.sum(), games_in_window=windowed.count()
+        )
+
+    result = df.groupby("player_id", group_keys=False, sort=False).apply(_rolling)
+    result["minutes_per_day"] = result["rolling_minutes"] / days
+    columns = ["player_id", "player_name", "game_date", "minutes", "rolling_minutes", "games_in_window", "minutes_per_day"]
+    return result.sort_values(["player_name", "game_date"]).reset_index(drop=True)[columns]
+
+
+#: Orden explícito de los tramos de descanso — NO alfabético: "≥5" iría antes
+#: que "≤1" por el punto de código de sus símbolos, que es justo lo que
+#: produciría un `ORDER BY rest_bucket` sin más.
+_REST_BUCKETS = ["≤1", "2", "3-4", "≥5"]
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def performance_by_rest(_engine: Engine, team_id: str, season_id: int) -> pd.DataFrame:
+    """Net rating del equipo agrupado por tramos de descanso (≤1, 2, 3-4, ≥5 días).
+
+    El dato que convierte la ficha de fatiga en decisión (§2b del documento):
+    "con dos días de descanso concede X puntos más por 100 posesiones que con
+    más". Mismo cálculo de descanso que `rest_days` (cualquier competición,
+    `LAG` sobre todo el historial del equipo), aquí cruzado con
+    `game_advanced_stats` en vez de mostrado como calendario.
+
+    Returns:
+        `rest_bucket, gp, net_rating`, en el orden fijo de `_REST_BUCKETS`
+        (un tramo sin partidos con `game_advanced_stats` no aparece). `gp`
+        viaja siempre: con 78 partidos como mucho por temporada de doble
+        competición (§4 del documento), un tramo puede tener muestra
+        minúscula y hay que poder decirlo, no solo enseñar la media. El
+        primerísimo partido del equipo en toda la base de datos (sin
+        "anterior" del que restar el descanso) queda fuera de los cuatro
+        tramos, no metido en ninguno. Vacío si el equipo no tiene partidos
+        con estadísticas avanzadas en esa temporada.
+    """
+    sql = text("""
+        WITH team_games AS (
+            SELECT g.id, g.season_id,
+                   CAST(julianday(g.game_date) - julianday(
+                       LAG(g.game_date) OVER (ORDER BY g.game_date)
+                   ) AS INTEGER) AS rest_days
+            FROM games g
+            WHERE g.home_team_id = :team_id OR g.away_team_id = :team_id
+        )
+        SELECT
+            CASE
+                WHEN tg.rest_days <= 1 THEN '≤1'
+                WHEN tg.rest_days = 2 THEN '2'
+                WHEN tg.rest_days IN (3, 4) THEN '3-4'
+                ELSE '≥5'
+            END AS rest_bucket,
+            COUNT(*) AS gp,
+            AVG(gas.net_rating) AS net_rating
+        FROM team_games tg
+        JOIN game_advanced_stats gas ON gas.game_id = tg.id AND gas.team_id = :team_id
+        WHERE tg.season_id = :season_id AND tg.rest_days IS NOT NULL
+        GROUP BY rest_bucket
+    """)
+    df = pd.read_sql(sql, _engine, params={"team_id": team_id, "season_id": season_id})
+    if df.empty:
+        return df
+    order = {bucket: i for i, bucket in enumerate(_REST_BUCKETS)}
+    return (
+        df.assign(_sort=df["rest_bucket"].map(order))
+        .sort_values("_sort")
+        .drop(columns="_sort")
+        .reset_index(drop=True)
+    )

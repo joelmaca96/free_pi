@@ -1,6 +1,16 @@
 # 03. Dossier de scouting del rival, en un botón
 
-**Estado:** propuesta, sin implementar · **Fecha:** 2026-08-28 · **Índice:** [00_indice.md](00_indice.md)
+**Estado:** IMPLEMENTADA la v1 (2026-08-29, seis diapositivas, sin mapa de tiros — ver §7) ·
+**Fecha de la propuesta:** 2026-08-28 · **Índice:** [00_indice.md](00_indice.md)
+
+Botón "📊 Generar dossier de scouting" en `app/pages/proximo_rival.py`, justo después del aviso
+de temporada de scouting. La maquetación compartida con "PPT para Paolo" vive en
+`app/reports/_deck.py` (extraída de `postgame_ppt.py` como proponía §4); el ensamblado de este
+dossier, en `app/reports/scouting_ppt.py`, con el mismo patrón de dos capas (reglas + LLM
+opcional) en jugadores clave y claves del partido. Sin mapa de tiros todavía (§4: pedía una
+dependencia nueva o dibujar la pista a mano) — la calidad de tiro sí entra en la diapositiva 3,
+pero como texto (`analytics/shot_quality.py::verdict`), no como el mapa de la pantalla. Tests en
+`tests/app/test_scouting_ppt.py`, mismo criterio que `tests/app/test_postgame_ppt.py`.
 
 ## 1. El problema del entrenador
 

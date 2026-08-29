@@ -157,6 +157,91 @@ else:
     st.altair_chart((heat + text).properties(height=28 * minutes_df["player_name"].nunique() + 40), width="stretch")
     st.caption("Celda en blanco = el jugador no disputó ese partido (rotación, baja o convocatoria).")
 
+    # ------------------------------------------------ descanso entre partidos --
+    # Mismo recorte de fechas que el mapa de arriba (los `n_games` partidos
+    # del slider), para que las dos lecturas —cuánto se jugó y con cuánto
+    # descanso se llegó— se miren sobre el mismo tramo de calendario.
+    # `rest_days` cuenta CUALQUIER competición (§4 de la propuesta 04): el
+    # descanso antes de un partido de Euroliga sí cuenta el de ACB anterior.
+    st.markdown("**Descanso entre partidos**")
+    shown_dates = set(minutes_df["game_date"])
+    rest_df = queries.rest_days(engine, team_id, season_id)
+    rest_df = rest_df[rest_df["game_date"].isin(shown_dates)]
+    if not rest_df.empty:
+        st.dataframe(
+            rest_df,
+            hide_index=True,
+            width="content",
+            column_order=["game_date", "competition", "condicion", "rival", "rest_days"],
+            column_config={
+                "game_date": st.column_config.TextColumn("Fecha"),
+                "competition": st.column_config.TextColumn("Comp."),
+                "condicion": st.column_config.TextColumn("Cond."),
+                "rival": st.column_config.TextColumn("Rival"),
+                "rest_days": st.column_config.NumberColumn("Descanso (días)", help=help_text("rest_days")),
+            },
+        )
+        st.caption("Vacío en el primer partido de la base de datos: no hay uno anterior del que restar.")
+
+    # ------------------------------------------------------- carga acumulada --
+    # Ventana móvil de calendario (§2a de la propuesta 04), no de partidos:
+    # cinco partidos en nueve días y cinco en tres semanas no son la misma
+    # carga, y `minutes_load` de arriba (últimos N partidos) no distingue
+    # entre las dos.
+    st.markdown("**Carga acumulada (ventana móvil)**")
+    window_days = st.radio("Ventana", options=[7, 14], horizontal=True, key="load_window_days")
+    alert_threshold = st.number_input(
+        f"Aviso: minutos en {window_days} días por encima de",
+        min_value=0,
+        value=140 if window_days == 7 else 240,
+        step=10,
+        key="load_alert_threshold",
+    )
+
+    rolling_df = queries.rolling_load(engine, team_id, season_id, window_days)
+    # Mismos jugadores que el mapa de arriba (con minutos reales en la
+    # ventana de partidos mostrada) — un fichaje sin debutar no aporta nada
+    # a una lectura de carga.
+    rolling_df = rolling_df[rolling_df["player_name"].isin(minutes_df["player_name"].unique())]
+
+    if rolling_df.empty:
+        st.info("Sin datos suficientes para calcular la carga acumulada.")
+    else:
+        latest_date = rolling_df["game_date"].max()
+        latest = rolling_df[rolling_df["game_date"] == latest_date].sort_values("rolling_minutes", ascending=False)
+
+        games_in_window = int(latest["games_in_window"].iloc[0])
+        if games_in_window >= 3:
+            st.warning(
+                f"⚠ {games_in_window}º partido en {window_days} días a fecha de {latest_date.date()}: "
+                "semana cargada, mira quién repite minutos altos en los anteriores."
+            )
+
+        bar = (
+            alt.Chart(latest)
+            .mark_bar()
+            .encode(
+                x=alt.X("rolling_minutes:Q", title=f"Minutos en {window_days} días"),
+                y=alt.Y("player_name:N", title=None, sort="-x"),
+                color=alt.condition(
+                    alt.datum.rolling_minutes > alert_threshold, alt.value("#c0392b"), alt.value("#104281")
+                ),
+                tooltip=[
+                    alt.Tooltip("player_name:N", title="Jugador"),
+                    alt.Tooltip("rolling_minutes:Q", title="Minutos", format=".0f"),
+                    alt.Tooltip("games_in_window:Q", title="Partidos en la ventana"),
+                    alt.Tooltip("minutes_per_day:Q", title="Min/día", format=".1f"),
+                ],
+            )
+            .properties(height=24 * len(latest) + 20)
+        )
+        st.altair_chart(bar, width="stretch")
+        st.caption(
+            f"Carga de cada jugador en los {window_days} días hasta {latest_date.date()}. En rojo, por "
+            f"encima del aviso configurado ({alert_threshold} min)."
+        )
+        glossary_expander(["rest_days", "rolling_minutes", "minutes_per_day"])
+
 st.divider()
 
 # ----------------------------------------------------------------- quintetos --

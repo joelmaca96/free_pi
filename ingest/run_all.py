@@ -12,6 +12,7 @@ import argparse
 import logging
 
 from ingest.common.db import get_engine
+from ingest.common.identity import find_team_identity_collisions
 from ingest.common.logging_utils import configure_logging
 
 logger = logging.getLogger(__name__)
@@ -80,6 +81,21 @@ def run_all(season: int, database_url: str = None, skip: tuple = ()) -> dict:
         results["euroleague"] = {"ok": None, "summary": "omitido"}
         results["euroleague_upcoming"] = {"ok": None, "summary": "omitido"}
 
+    # Comprobación de integridad de identidad de club (§5 de
+    # doc/features/propuestas/04_fatiga_y_calendario.md), SIEMPRE al final —
+    # incluso si algún módulo se omitió: un club duplicado ("ningún club con
+    # dos identidades") es más barato de detectar aquí, en cada ingesta, que
+    # de descubrir a ojo meses después mirando un agregado que sale por la
+    # mitad. Solo avisa, no arregla nada (ver el docstring de la función).
+    with engine.connect() as conn:
+        collisions = find_team_identity_collisions(conn)
+    if collisions:
+        logger.warning("colisión de identidad de club detectada: %s", collisions)
+    results["identity_check"] = {
+        "ok": not collisions,
+        "summary": f"{len(collisions)} colisión(es): {collisions}" if collisions else "sin colisiones",
+    }
+
     return results
 
 
@@ -102,8 +118,12 @@ def main() -> None:
             print(f"  {name}: omitido")
         elif result["ok"]:
             print(f"  {name}: OK -> {result['summary']}")
-        else:
+        elif "error" in result:
             print(f"  {name}: FALLÓ -> {result['error']}")
+        else:
+            # `identity_check`: no falla ejecutando nada, solo avisa (ver su
+            # docstring) - no tiene "error" que imprimir, solo "summary".
+            print(f"  {name}: AVISO -> {result['summary']}")
 
 
 if __name__ == "__main__":

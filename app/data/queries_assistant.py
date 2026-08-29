@@ -457,7 +457,18 @@ def team_style_row(
 def player_percentile_row(
     _engine: Engine, player_id: str, season_id: int, competition_id: Optional[int] = None
 ) -> pd.DataFrame:
-    """Percentiles de un jugador dentro de su competición y temporada."""
+    """Percentiles de un jugador dentro de su competición y temporada.
+
+    Fase 1 (2026-08-29): se añaden robos/tapones/pérdidas/faltas/rebote
+    of-def/valoración — ya calculados en la vista `player_percentiles`
+    (Fase 1 de boxscore ampliado) pero fuera de esta `SELECT` porque hasta
+    ahora nadie los pedía; el dossier de scouting del rival
+    (`app/reports/scouting_ppt.py`) es el primer consumidor que sí necesita
+    poder decir "roba mucho balón" o "acumula faltas rápido" con un percentil
+    detrás, no solo puntos/rebotes/asistencias/acierto. `tov_pct`/`pf_pct`
+    vienen ya invertidos en la vista (percentil bajo = pierde/comete más),
+    ver su comentario en `schema.sql`.
+    """
     clauses = ["p.player_id = :player_id", "p.season_id = :season_id"]
     params = {"player_id": player_id, "season_id": season_id}
     if competition_id is not None:
@@ -467,7 +478,10 @@ def player_percentile_row(
     sql = text(f"""
         SELECT c.name AS competition, p.gp, p.league_players,
                p.min_avg, p.min_pct, p.pts_avg, p.pts_pct, p.reb_avg, p.reb_pct,
-               p.ast_avg, p.ast_pct, p.efg_pct, p.efg_pct_pct
+               p.ast_avg, p.ast_pct, p.efg_pct, p.efg_pct_pct,
+               p.stl_avg, p.stl_pct, p.blk_avg, p.blk_pct, p.tov_avg, p.tov_pct,
+               p.pf_avg, p.pf_pct, p.oreb_avg, p.oreb_pct, p.dreb_avg, p.dreb_pct,
+               p.pir_avg, p.pir_pct
         FROM player_percentiles p
         JOIN competitions c ON c.id = p.competition_id
         WHERE {' AND '.join(clauses)}

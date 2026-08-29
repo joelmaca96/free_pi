@@ -14,7 +14,7 @@ ingesta, y `ingest/` no viaja en la imagen de la interfaz (ver el docstring
 de ese módulo para el razonamiento completo). Se reexporta desde aquí para
 que todo lo que ya la importaba de `ingest.common.identity` siga funcionando.
 """
-from typing import Optional
+from typing import List, Optional, Tuple
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
@@ -27,6 +27,7 @@ __all__ = [
     "get_competition_id",
     "resolve_or_create_team",
     "resolve_or_create_player",
+    "find_team_identity_collisions",
 ]
 
 
@@ -198,6 +199,41 @@ def resolve_or_create_player(
         {"player_id": player_id, "source": source, "external_id": external_id},
     )
     return player_id
+
+
+def find_team_identity_collisions(conn: Connection) -> List[Tuple[str, str]]:
+    """Pares de `teams.id` que normalizan al mismo nombre pero viven bajo ids distintos.
+
+    Comprobación de integridad post-ingesta ("ningún club con dos
+    identidades", `doc/features/propuestas/04_fatiga_y_calendario.md` §5).
+    Caso real que la motiva: el Barça llegó a existir como `barca` ("Barça",
+    creado desde ACB) y `fcb` ("FC Barcelona", creado desde Euroliga) hasta
+    que `_KNOWN_TEAM_ALIASES` (`packages/baskonia_core/names.py`) los unificó
+    — mientras estuvieron separados, cualquier agregado por `team_id` de ese
+    club (récord, carga de minutos, descanso entre partidos...) veía solo la
+    mitad de sus partidos, sin que nada lo avisara. `resolve_or_create_team`
+    ya evita crear un duplicado NUEVO una vez que el alias existe, pero no
+    fusiona uno que ya se creó antes de que se añadiera el alias — esta
+    función solo DETECTA esa situación (para loguearla al final de una
+    ingesta, ver `ingest/run_all.py`); arreglar una detectada es una
+    migración de datos de una vez (`tools/fix_barca_identity.py` es el
+    ejemplo real), no algo que la ingesta pueda deshacer sola.
+
+    Returns:
+        Lista de `(team_id_a, team_id_b)`, ordenado alfabéticamente dentro de
+        cada par, uno por cada equipo adicional que comparte nombre
+        normalizado con uno visto antes. Vacía si no hay colisiones.
+    """
+    rows = conn.execute(text("SELECT id, name FROM teams ORDER BY id")).all()
+    seen: dict = {}
+    collisions: List[Tuple[str, str]] = []
+    for row in rows:
+        key = normalize_name(row.name)
+        if key in seen:
+            collisions.append(tuple(sorted((seen[key], row.id))))
+        else:
+            seen[key] = row.id
+    return collisions
 
 
 def _unique_id(conn: Connection, table: str, base_slug: str) -> str:

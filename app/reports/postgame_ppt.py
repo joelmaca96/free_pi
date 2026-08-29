@@ -30,41 +30,27 @@ falla) se queda con su fallback, nunca con una diapositiva vacía.
 import io
 import json
 import logging
-import os
 import re
 from typing import Dict, List, Optional
 
 import pandas as pd
 from pptx import Presentation
-from pptx.dml.color import RGBColor
-from pptx.enum.shapes import MSO_SHAPE
-from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
-from pptx.util import Inches, Pt
 
-# `queries.py`/`avatar.py`/`assistant.llm` se importan igual venga el paquete
-# por `app.*` (pytest, raíz en sys.path) o por su nombre corto (Streamlit,
-# `app/` en sys.path) — mismo motivo y mismo patrón que
-# `assistant/tools/context.py`.
+# `queries.py`/`assistant.llm`/`_deck` se importan igual venga el paquete por
+# `app.*` (pytest, raíz en sys.path) o por su nombre corto (Streamlit, `app/`
+# en sys.path) — mismo motivo y mismo patrón que `assistant/tools/context.py`.
 try:  # pragma: no cover - depende de cómo se arranque el proceso, no de la lógica
     from app.assistant.llm import LLMClient, LLMError
-    from app.components import avatar
     from app.components.branding import CREST_PATH
     from app.data import queries
+    from app.reports import _deck
 except ImportError:  # pragma: no cover
     from assistant.llm import LLMClient, LLMError
-    from components import avatar
     from components.branding import CREST_PATH
     from data import queries
+    from reports import _deck
 
 logger = logging.getLogger(__name__)
-
-_ACCENT = RGBColor(0x00, 0x83, 0x00)  # verde Baskonia — mismo accent que el resto de la interfaz
-_DARK = RGBColor(0x1A, 0x1A, 0x1A)
-_MUTED = RGBColor(0x6B, 0x6B, 0x6B)
-_WHITE = RGBColor(0xFF, 0xFF, 0xFF)
-
-_SLIDE_WIDTH_IN = 13.333  # 16:9
-_SLIDE_HEIGHT_IN = 7.5
 
 _MAX_HIGHLIGHTS = 4
 _FALLBACK_TEXT = "Sin nada destacado que señalar en este partido."
@@ -292,109 +278,44 @@ def select_highlights(
 
 
 # ================================================================= diapositivas ==
-
-
-def _strip_shape_chrome(shape) -> None:
-    """Sin borde ni sombra por defecto — sin esto cada rectángulo sale con una
-    sombra gris que no pega con el resto, plano, de la interfaz."""
-    shape.line.fill.background()
-    shape.shadow.inherit = False
+#
+# La maquetación en sí (banda de portada, foto+viñetas) vive en `_deck.py`,
+# compartida con `scouting_ppt.py` — aquí solo se decide QUÉ texto va en cada
+# hueco para el informe de post-partido.
 
 
 def _add_title_slide(prs: Presentation, game_context: dict) -> None:
-    slide = prs.slides.add_slide(prs.slide_layouts[6])  # layout en blanco
-
-    band = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(0), Inches(0), prs.slide_width, Inches(2.3))
-    band.fill.solid()
-    band.fill.fore_color.rgb = _ACCENT
-    _strip_shape_chrome(band)
-
-    if os.path.exists(CREST_PATH):
-        slide.shapes.add_picture(CREST_PATH, Inches(0.6), Inches(0.5), height=Inches(1.3))
-
-    title = slide.shapes.add_textbox(Inches(2.2), Inches(0.45), Inches(10.5), Inches(1.1))
-    p = title.text_frame.paragraphs[0]
-    p.text = "Puntos destacados del partido"
-    p.font.size, p.font.bold, p.font.color.rgb = Pt(32), True, _WHITE
-
-    subtitle = slide.shapes.add_textbox(Inches(2.2), Inches(1.4), Inches(10.5), Inches(0.7))
-    p = subtitle.text_frame.paragraphs[0]
-    p.text = game_context.get("subtitle", "")
-    p.font.size, p.font.color.rgb = Pt(18), _WHITE
-
-    footer = slide.shapes.add_textbox(Inches(0.6), Inches(3.1), Inches(12.0), Inches(1.0))
-    tf = footer.text_frame
-    tf.word_wrap = True
-    p = tf.paragraphs[0]
-    p.text = (
-        "Generado automáticamente a partir del boxscore — revisa los datos antes de usarlo en pista."
+    _deck.add_band_title_slide(
+        prs,
+        title="Puntos destacados del partido",
+        subtitle=game_context.get("subtitle", ""),
+        footer="Generado automáticamente a partir del boxscore — revisa los datos antes de usarlo en pista.",
+        crest_path=CREST_PATH,
     )
-    p.font.size, p.font.italic, p.font.color.rgb = Pt(14), True, _MUTED
 
 
 def _add_player_slide(prs: Presentation, row: dict, highlights: List[str]) -> None:
-    slide = prs.slides.add_slide(prs.slide_layouts[6])
-
-    photo_w, photo_h = Inches(3.6), Inches(5.4)  # ratio 2:3, igual que `avatar.player_avatar_html`
-    left, top = Inches(0.5), Inches(1.1)
-
-    raw = None
-    local_path = row.get("photo_local_path")
-    if pd.notna(local_path):
-        raw = avatar.local_photo_bytes(local_path)
-    if raw is not None:
-        slide.shapes.add_picture(io.BytesIO(raw), left, top, width=photo_w, height=photo_h)
-    else:
-        # Mismo badge de respaldo que la interfaz (`avatar.avatar_html`): sin
-        # foto real, iniciales sobre verde Baskonia — nunca un hueco vacío.
-        badge = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, left, top, photo_w, photo_h)
-        badge.fill.solid()
-        badge.fill.fore_color.rgb = _ACCENT
-        _strip_shape_chrome(badge)
-        tf = badge.text_frame
-        tf.vertical_anchor = MSO_ANCHOR.MIDDLE
-        p = tf.paragraphs[0]
-        p.text = avatar.initials(row["player_name"])
-        p.font.size, p.font.bold, p.font.color.rgb = Pt(96), True, _WHITE
-        p.alignment = PP_ALIGN.CENTER
-
-    header = slide.shapes.add_textbox(Inches(4.5), Inches(0.5), Inches(8.3), Inches(1.1))
-    tf = header.text_frame
-    tf.word_wrap = True
-    p = tf.paragraphs[0]
-    p.text = f"#{int(row['number'])} · {row['player_name']}"
-    p.font.size, p.font.bold, p.font.color.rgb = Pt(28), True, _DARK
-    if row.get("position"):
-        p2 = tf.add_paragraph()
-        p2.text = row["position"]
-        p2.font.size, p2.font.color.rgb = Pt(16), _MUTED
-
-    stat_line = slide.shapes.add_textbox(Inches(4.5), Inches(1.55), Inches(8.3), Inches(0.5))
     minutes = float(row["minutes"])
     bits = [f"{minutes:.0f}'", f"{int(row['pts'])} pts", f"{int(row['reb'])} reb", f"{int(row['ast'])} ast"]
     pir = _num(row, "pir")
     if pir is not None:
         bits.append(f"PIR {int(pir)}")
-    p = stat_line.text_frame.paragraphs[0]
-    p.text = " · ".join(bits)
-    p.font.size, p.font.color.rgb = Pt(15), _MUTED
 
-    body = slide.shapes.add_textbox(Inches(4.5), Inches(2.35), Inches(8.3), Inches(4.3))
-    tf = body.text_frame
-    tf.word_wrap = True
-    items = highlights or [_FALLBACK_TEXT]
-    for index, text in enumerate(items):
-        p = tf.paragraphs[0] if index == 0 else tf.add_paragraph()
-        p.text = f"●  {text}"
-        p.font.size, p.font.color.rgb = Pt(22), _DARK
-        p.space_after = Pt(16)
+    _deck.add_photo_bullets_slide(
+        prs,
+        name=f"#{int(row['number'])} · {row['player_name']}",
+        subtitle=row.get("position") or "",
+        stat_line=" · ".join(bits),
+        bullets=highlights,
+        photo_local_path=row.get("photo_local_path"),
+        photo_url=row.get("photo_url"),
+        fallback_text=_FALLBACK_TEXT,
+    )
 
 
 def build_postgame_ppt(rows: List[dict], highlights: Dict[str, List[str]], game_context: dict) -> bytes:
     """Bytes del `.pptx`: una portada + una diapositiva por fila de `rows`."""
-    prs = Presentation()
-    prs.slide_width = Inches(_SLIDE_WIDTH_IN)
-    prs.slide_height = Inches(_SLIDE_HEIGHT_IN)
+    prs = _deck.new_presentation()
 
     _add_title_slide(prs, game_context)
     for row in rows:

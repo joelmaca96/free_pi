@@ -25,6 +25,7 @@ import pandas as pd
 import streamlit as st
 
 from analytics import shot_quality
+from assistant.llm import LLMError, build_llm_client
 from components.ask_assistant import ask_assistant_button
 from components.avatar import player_avatar_html, team_crest_html
 from components.court import shot_chart, shot_chart_caption, zone_breakdown, zone_heatmap, zone_heatmap_caption
@@ -37,11 +38,13 @@ from components.shot_quality import (
     quality_caveat,
     quality_metrics,
 )
-from data import queries
+from data import queries, queries_assistant
 from data.db import get_read_engine
+from reports import scouting_ppt
 
 _ACCENT = "#008300"   # verde Baskonia — puntos anotados por el rival
 _MUTED = "#898781"    # ink muted — puntos encajados
+_PPT_MIME = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
 
 engine = get_read_engine()
 own_team_id = queries.get_own_team_id(engine)
@@ -72,7 +75,8 @@ if matchup is None:
 rival_team_id = matchup["opponent_team_id"]
 rival_name = matchup["opponent"]
 condicion = "Local" if matchup["is_home"] else "Visitante"
-fecha = dt.date.fromisoformat(str(matchup["match_date"])).strftime("%d %b %Y")
+match_date = dt.date.fromisoformat(str(matchup["match_date"]))
+fecha = match_date.strftime("%d %b %Y")
 
 # ------------------------------------------------------------- cabecera --
 crest_col, info_col = st.columns([1, 6])
@@ -176,6 +180,53 @@ if scouting_season_id is None:
     render_head_to_head()
     st.stop()
 
+# ------------------------------------------------------- dossier de scouting --
+# Propuesta 03 (`doc/features/propuestas/03_dossier_scouting_rival.md`): un
+# botón que convierte todo el scouting de esta pantalla en un `.pptx`
+# proyectable para la reunión del día antes — a la reunión no va la
+# aplicación. Mismo patrón que "PPT para Paolo"
+# (`app/pages/partidos_anteriores.py`): bytes en `session_state` +
+# `download_button`, porque este último provoca *rerun* y el fichero no
+# puede construirse en el mismo paso en que se descarga. Clave por rival Y
+# temporada de scouting: cambiar de rival (o que la página caiga a otra
+# temporada por fallback) no debe ofrecer para descargar el dossier de otro.
+dossier_state_key = f"dossier_bytes_{rival_team_id}_{scouting_season_id}"
+if st.button("📊 Generar dossier de scouting", key=f"dossier_btn_{rival_team_id}", width="stretch"):
+    with st.spinner(f"Generando el dossier de {rival_name}..."):
+        try:
+            llm_client = build_llm_client()
+        except LLMError:
+            # Proveedor configurado pero inutilizable (SDK que falta, clave
+            # rechazada): el dossier sale igual, con el fallback por reglas de
+            # `scouting_ppt` — este botón no depende del chat.
+            llm_client = None
+        st.session_state[dossier_state_key] = scouting_ppt.generate_scouting_ppt(
+            engine,
+            rival_team_id=rival_team_id,
+            rival_name=rival_name,
+            is_home=matchup["is_home"],
+            competition=matchup["competition"],
+            fecha=fecha,
+            own_team_id=own_team_id,
+            scouting_season_id=scouting_season_id,
+            scouting_season_label=scouting["label"],
+            is_fallback_season=scouting["is_fallback"],
+            today=today,
+            llm_client=llm_client,
+        )
+
+if st.session_state.get(dossier_state_key):
+    st.download_button(
+        "Descargar dossier",
+        data=st.session_state[dossier_state_key],
+        file_name=f"scouting_{rival_name}_{fecha}.pptx".replace(" ", "_"),
+        mime=_PPT_MIME,
+        key=f"dossier_dl_{rival_team_id}",
+        width="stretch",
+    )
+
+st.divider()
+
 # ------------------------------------------------- balance y forma reciente --
 st.subheader("Balance y forma reciente")
 
@@ -212,6 +263,133 @@ else:
         },
     )
     st.caption(f"Últimos {len(display_df)} partidos de {rival_name}, todas las competiciones.")
+
+st.divider()
+
+# ------------------------------------------------------------------ fatiga --
+# Ficha de fatiga del rival (§2b de la propuesta 04,
+# `doc/features/propuestas/04_fatiga_y_calendario.md`): un bloque corto para
+# "¿cómo llega?" sin tener que cruzar el calendario a mano. Depende de
+# `recent_df` (arriba): sin un último partido jugado no hay descanso que
+# calcular. Si la temporada de scouting es un FALLBACK (el rival aún no ha
+# jugado en la seleccionada, ver el aviso de arriba), su "último partido" es
+# de otra temporada y el descanso hasta ESTE partido no significaría nada
+# real — se dice en vez de enseñar un número engañoso.
+st.subheader("Fatiga y descanso")
+if recent_df.empty:
+    st.info(f"Sin partidos recientes de {rival_name}: no se puede calcular su descanso ni su carga.")
+elif scouting["is_fallback"]:
+    st.info(
+        f"{rival_name} no ha jugado todavía en la temporada seleccionada: su descanso y su carga de "
+        f"los últimos días no se pueden calcular sobre partidos de {scouting['label']}."
+    )
+else:
+    last_game = recent_df.iloc[0]
+    last_game_date = dt.date.fromisoformat(str(last_game["game_date"]))
+    days_rest = (match_date - last_game_date).days
+
+    rest_col, w7_col, w14_col = st.columns(3)
+    rest_col.metric(f"Descanso hasta el {fecha}", f"{days_rest} días", help=help_text("rest_days"))
+    rest_col.caption(
+        f"Último partido: {last_game['competition']} en {last_game['condicion'].lower()} "
+        f"el {last_game_date.strftime('%d %b')}."
+    )
+    # Partidos en los últimos 7/14 días ANTES de hoy — lo que ya se sabe con
+    # certeza; el propio partido que se está preparando no cuenta como uno más.
+    for col, window in ((w7_col, 7), (w14_col, 14)):
+        cutoff = today - dt.timedelta(days=window)
+        in_window = recent_df[
+            recent_df["game_date"].apply(lambda d: dt.date.fromisoformat(str(d))) >= cutoff
+        ]
+        col.metric(f"Partidos en {window} días", len(in_window))
+        if not in_window.empty:
+            col.caption(" · ".join(f"{r['competition']} {r['game_date']}" for _, r in in_window.iloc[::-1].iterrows()))
+
+    # Minutos de sus jugadores principales en la ventana de 7 días, y quién
+    # está jugando por encima de su media de la temporada (§2b del documento).
+    rolling_df = queries.rolling_load(engine, rival_team_id, scouting_season_id, 7)
+    if rolling_df.empty:
+        st.caption("Sin minutos registrados en esa ventana para desglosar por jugador.")
+    else:
+        latest_rolling_date = rolling_df["game_date"].max()
+        latest = rolling_df[rolling_df["game_date"] == latest_rolling_date].copy()
+        averages = queries_assistant.team_roster_production(engine, rival_team_id, scouting_season_id)
+        latest = latest.merge(averages[["id", "min_avg"]], left_on="player_id", right_on="id", how="left")
+        latest["minutos_recientes_partido"] = latest["rolling_minutes"] / latest["games_in_window"].replace(0, pd.NA)
+        latest["por_encima_de_su_media"] = latest["minutos_recientes_partido"] > latest["min_avg"]
+        top_load = latest.sort_values("rolling_minutes", ascending=False).head(6)
+        st.dataframe(
+            top_load,
+            hide_index=True,
+            width="stretch",
+            column_order=[
+                "player_name", "rolling_minutes", "games_in_window", "minutos_recientes_partido",
+                "min_avg", "por_encima_de_su_media",
+            ],
+            column_config={
+                "player_name": st.column_config.TextColumn("Jugador"),
+                "rolling_minutes": st.column_config.NumberColumn(
+                    "Min. en 7 días", format="%.0f", help=help_text("rolling_minutes")
+                ),
+                "games_in_window": st.column_config.NumberColumn("Partidos"),
+                "minutos_recientes_partido": st.column_config.NumberColumn("Min/partido reciente", format="%.1f"),
+                "min_avg": st.column_config.NumberColumn("Media de temporada", format="%.1f", help=help_text("minutes")),
+                "por_encima_de_su_media": st.column_config.CheckboxColumn("¿Por encima de su media?"),
+            },
+        )
+        st.caption(f"Los {min(6, len(latest))} jugadores con más minutos en los últimos 7 días, a fecha de {latest_rolling_date.date()}.")
+
+    # Rendimiento con y sin descanso: el dato que convierte la ficha en
+    # decisión ("con dos días de descanso concede X puntos más por 100
+    # posesiones", §2b/§4 del documento).
+    perf_df = queries.performance_by_rest(engine, rival_team_id, scouting_season_id)
+    if perf_df.empty:
+        st.caption("Sin estadísticas avanzadas suficientes para cruzar rendimiento con descanso.")
+    else:
+        short = perf_df[perf_df["rest_bucket"].isin(["≤1", "2"])]
+        long = perf_df[perf_df["rest_bucket"].isin(["3-4", "≥5"])]
+        short_gp, long_gp = int(short["gp"].sum()), int(long["gp"].sum())
+        short_net = (short["net_rating"] * short["gp"]).sum() / short_gp if short_gp else None
+        long_net = (long["net_rating"] * long["gp"]).sum() / long_gp if long_gp else None
+
+        net_col_short, net_col_long = st.columns(2)
+        net_col_short.metric(
+            "Net rating con ≤2 días de descanso",
+            f"{short_net:+.1f}" if short_net is not None else "—",
+        )
+        net_col_short.caption(f"{short_gp} partido(s) con estadísticas avanzadas.")
+        net_col_long.metric(
+            "Net rating con ≥3 días de descanso",
+            f"{long_net:+.1f}" if long_net is not None else "—",
+        )
+        net_col_long.caption(f"{long_gp} partido(s) con estadísticas avanzadas.")
+
+        chart = (
+            alt.Chart(perf_df)
+            .mark_bar(color=_ACCENT)
+            .encode(
+                x=alt.X("rest_bucket:N", title="Días de descanso", sort=perf_df["rest_bucket"].tolist()),
+                y=alt.Y("net_rating:Q", title="Net rating"),
+                tooltip=[
+                    alt.Tooltip("rest_bucket:N", title="Descanso"),
+                    alt.Tooltip("net_rating:Q", title="Net rating", format="+.1f"),
+                    alt.Tooltip("gp:Q", title="Partidos"),
+                ],
+            )
+            .properties(height=180)
+        )
+        st.altair_chart(chart, width="stretch")
+        min_bucket_gp = int(perf_df["gp"].min())
+        st.caption(
+            f"Desglose por tramo de descanso ({int(perf_df['gp'].sum())} partidos con estadísticas avanzadas "
+            f"en total). {'⚠ Algún tramo tiene solo ' + str(min_bucket_gp) + ' partido(s): léelo con cautela.' if min_bucket_gp < 4 else ''}"
+        )
+        glossary_expander(["rest_bucket", "net_rating", "rolling_minutes"])
+
+    st.caption(
+        "Aproximación desde calendario y minutos de partido, no datos médicos ni de entrenamiento — "
+        "no lo trates como predicción de lesión."
+    )
 
 st.divider()
 

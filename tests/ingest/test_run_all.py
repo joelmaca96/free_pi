@@ -88,4 +88,21 @@ def test_run_all_respects_skip(monkeypatch, engine):
         results = run_all_module.run_all(season=2025, skip=("acb", "euroleague", "baskonia_web"))
 
     fake_acb.assert_not_called()
-    assert all(result["ok"] is None for result in results.values())
+    # `identity_check` corre SIEMPRE, incluso con todo lo demás omitido (es
+    # una comprobación de lo que ya hay en la BD, no de lo que se acaba de
+    # ingerir) — se comprueba aparte, ver `test_run_all_always_runs_the_identity_check`.
+    pipeline_results = {name: result for name, result in results.items() if name != "identity_check"}
+    assert all(result["ok"] is None for result in pipeline_results.values())
+
+
+def test_run_all_always_runs_the_identity_check_even_with_everything_skipped(monkeypatch, engine):
+    """La comprobación de integridad de identidad de club (§5 de
+    `doc/features/propuestas/04_fatiga_y_calendario.md`) no depende de qué
+    pipeline se acabe de correr: lee lo que YA hay en `teams`, así que debe
+    reportarse aunque `--skip` deje fuera los tres módulos."""
+    monkeypatch.setattr(run_all_module, "get_engine", lambda database_url=None: engine)
+
+    results = run_all_module.run_all(season=2025, skip=("acb", "euroleague", "baskonia_web"))
+
+    assert results["identity_check"]["ok"] is True  # el seed de test no tiene clubes duplicados
+    assert "sin colisiones" in results["identity_check"]["summary"]
