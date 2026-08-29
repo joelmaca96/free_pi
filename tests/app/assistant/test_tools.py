@@ -669,3 +669,100 @@ def test_player_shot_profile_without_shots_explains_why(catalog):
     result = catalog.execute("1", "player_shot_profile", {"player_id": "kotsar"}).result
     assert result["error"] == "sin tiros"
     assert "coordenadas" in result["suggestion"]
+
+
+# ------------------------------------------------------------------ game_runs --
+# "¿Dónde se decidió el partido?" contestada con la MISMA lógica que pinta la
+# pestaña "Rotaciones" de "Partidos anteriores": dos definiciones distintas de
+# "parcial" —una en el gráfico y otra en el chat— es la forma más rápida de
+# que el asistente contradiga a la pantalla delante del entrenador.
+
+#: Play-by-play sintético de `g5` (bas local, val visitante): un 10-0 del
+#: Baskonia entre el segundo 120 y el 180, y marcador plano alrededor, para
+#: que el parcial detectado sea uno y se puedan afirmar sus cifras.
+_RUN_EVENTS = (
+    "('g5', 'bas', NULL,     'Q1', '09:30', 30,  'dreb',     0,  0),"
+    "('g5', 'val', NULL,     'Q1', '08:00', 120, 'dreb',     6,  6),"
+    "('g5', 'bas', 'howard', 'Q1', '07:30', 150, 'steal',    11, 6),"
+    "('g5', 'val', NULL,     'Q1', '07:00', 180, 'turnover', 16, 6),"
+    "('g5', 'bas', NULL,     'Q1', '06:30', 210, 'dreb',     16, 6)"
+)
+
+
+def _load_run_fixture(engine, ctx, with_stints=True):
+    """Deja `g5` con play-by-play (y opcionalmente tramos) y vuelve a sondear."""
+    from sqlalchemy import text
+
+    from app.assistant.capabilities import probe
+
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO play_events (game_id, team_id, player_id, quarter, game_clock, seconds,"
+                f" event_type, home_score, away_score) VALUES {_RUN_EVENTS}"
+            )
+        )
+    if with_stints:
+        add_stints(engine, [("g5", "bas", 0.0, 400.0, 16, 6, 0, ["howard", "moneke", "codi", "nikos", "kotsar"])])
+    ctx.capabilities = probe(engine)
+    return ToolCatalog(ctx)
+
+
+def test_game_runs_is_not_registered_without_play_events(ctx):
+    """Sin marcador con reloj no hay parciales que detectar (§4.4)."""
+    assert "game_runs" not in ToolCatalog(ctx).tools
+
+
+def test_game_runs_answers_where_the_game_was_decided(engine, ctx):
+    """El parcial, el quinteto que lo jugó y lo que pasó dentro, en una llamada."""
+    catalog = _load_run_fixture(engine, ctx)
+    assert "game_runs" in catalog.tools
+
+    result = catalog.execute("1", "game_runs", {"game_id": "g5"}).result
+    run = result["data"]["parciales"][0]
+
+    assert result["data"]["team_id"] == "bas"
+    assert (run["start_seconds"], run["end_seconds"], run["swing"]) == (120.0, 180.0, 10)
+    assert (run["points_for"], run["points_against"]) == (10, 0)
+    assert "Marcus Howard" in run["quinteto"]
+    assert any("steal (Marcus Howard)" in event for event in run["eventos"])
+    assert result["artifact"]["type"] == "table"
+
+
+def test_game_runs_always_says_that_the_shots_are_missing(engine, ctx):
+    """La mayor carencia de la función se dice en voz alta, no se deduce (§5)."""
+    catalog = _load_run_fixture(engine, ctx)
+
+    result = catalog.execute("1", "game_runs", {"game_id": "g5"}).result
+
+    assert any("tiros" in warning for warning in result["meta"]["warnings"])
+
+
+def test_game_runs_warns_when_it_cannot_name_the_five_on_court(engine, ctx):
+    """Hay parcial pero no tramos: se contesta lo que se sabe, avisando de lo que no."""
+    catalog = _load_run_fixture(engine, ctx, with_stints=False)
+
+    result = catalog.execute("1", "game_runs", {"game_id": "g5"}).result
+
+    assert result["data"]["parciales"][0]["quinteto"] is None
+    assert any("quién estaba en pista" in warning for warning in result["meta"]["warnings"])
+
+
+def test_game_runs_rejects_a_team_that_did_not_play_that_game(engine, ctx):
+    """Un parcial 'a favor' de un equipo que no juega el partido no significa nada."""
+    catalog = _load_run_fixture(engine, ctx)
+
+    result = catalog.execute("1", "game_runs", {"game_id": "g5", "team_id": "rm"}).result
+
+    assert result["error"] == "equipo ajeno al partido"
+    assert "'bas'" in result["suggestion"]
+
+
+def test_game_runs_with_a_threshold_nothing_reaches_suggests_lowering_it(engine, ctx):
+    """Los umbrales son del entrenador: si no sale nada, el camino es bajarlos."""
+    catalog = _load_run_fixture(engine, ctx)
+
+    result = catalog.execute("1", "game_runs", {"game_id": "g5", "min_swing": 30}).result
+
+    assert result["error"] == "sin parciales"
+    assert "min_swing" in result["suggestion"]

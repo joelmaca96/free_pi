@@ -9,9 +9,17 @@ import datetime as dt
 import altair as alt
 import streamlit as st
 
+from analytics import shot_quality
 from components.avatar import team_crest_html
 from components.court import shot_chart, shot_chart_caption, zone_breakdown, zone_heatmap, zone_heatmap_caption
+from components.glossary import glossary_expander, help_text
 from components.header import page_header
+from components.shot_quality import (
+    league_reference_expander,
+    player_quality_table,
+    quality_caveat,
+    quality_metrics,
+)
 from data import queries
 from data.db import get_read_engine
 
@@ -176,9 +184,11 @@ else:
         column_order=["jugadores", "minutes", "plus_minus", "stints"],
         column_config={
             "jugadores": st.column_config.TextColumn("Quinteto", width="large"),
-            "minutes": st.column_config.NumberColumn("Min. juntos", format="%.1f"),
-            "plus_minus": st.column_config.NumberColumn("+/-"),
-            "stints": st.column_config.NumberColumn("Tramos"),
+            "minutes": st.column_config.NumberColumn(
+                "Min. juntos", format="%.1f", help=help_text("lineup_minutes")
+            ),
+            "plus_minus": st.column_config.NumberColumn("+/-", help=help_text("lineup_plus_minus")),
+            "stints": st.column_config.NumberColumn("Tramos", help=help_text("stints")),
         },
     )
     st.caption(
@@ -186,6 +196,7 @@ else:
         "esta temporada, aunque vengan de partidos distintos. Tramos = en cuántos tramos "
         "reconstruidos ha aparecido (sustituciones incluidas)."
     )
+    glossary_expander(["lineup_minutes", "lineup_plus_minus", "stints"])
 
 st.divider()
 
@@ -246,3 +257,75 @@ else:
         st.altair_chart(zone_heatmap(zone_df, zones_df))
         st.caption(zone_heatmap_caption(zone_df))
     zone_breakdown(zone_df, len(shots_df), scope="team")
+
+st.divider()
+
+# ------------------------------------------------------- calidad de tiro --
+# xPPS: separar la DECISIÓN (qué tiro se genera) del ACIERTO (si entra), en
+# ataque y en defensa — propuesta 02
+# (`doc/features/propuestas/02_calidad_de_tiro.md`). El cálculo entero está en
+# `app/analytics/shot_quality.py`; aquí solo se pide y se pinta.
+#
+# Sección aparte de "Mapa de tiros de la temporada" y no un modo suyo, aunque
+# las dos pinten la misma cancha: los porcentajes de arriba salen del agregado
+# oficial `game_zone_stats` y estos de `shots` tiro a tiro contra la línea base
+# de la liga. Son dos fuentes con dos coberturas distintas, y mezclarlas en un
+# mismo bloque con un interruptor invitaría a comparar dos números que no son
+# comparables.
+st.subheader("Calidad de tiro (xPPS)")
+
+# `court_zones` se vuelve a pedir aquí (consulta cacheada, coste cero) en vez
+# de reutilizar el `zones_df` de la sección de arriba: aquel se define dentro
+# del `else` de "¿hay tiros?", así que un equipo sin tiros con coordenadas
+# dejaría esta sección sin geometría.
+quality_zones_df = queries.court_zones(engine)
+quality_counts = queries.team_shot_counts(engine, team_id, shots_season_id)
+conceded_counts = queries.team_shot_counts(engine, team_id, shots_season_id, conceded=True)
+baseline = shot_quality.league_baseline(queries.league_shot_counts(engine, shots_season_id))
+own_valued = shot_quality.with_expected(quality_counts, baseline)
+conceded_valued = shot_quality.with_expected(conceded_counts, baseline)
+
+if own_valued.empty and conceded_valued.empty:
+    st.info("Sin tiros localizados y clasificados por zona en esa temporada: no hay calidad de tiro que medir.")
+else:
+    attack_col, defense_col = st.columns(2)
+    with attack_col:
+        st.markdown("**Ataque · lo que generamos**")
+        quality_metrics(shot_quality.summarize(own_valued), subject="el ataque")
+    with defense_col:
+        st.markdown("**Defensa · lo que concedemos**")
+        # Sin `reference_xpps`: la referencia natural de la defensa es la
+        # media de la liga, y eso ya está dentro del propio xPPS concedido.
+        quality_metrics(shot_quality.summarize(conceded_valued), subject="la defensa", conceded=True)
+
+    # El mapa "vs. liga": no dónde acertamos más, sino dónde acertamos más que
+    # los demás. Es la lectura que distingue una zona en la que somos buenos de
+    # una en la que tira bien todo el mundo.
+    map_col, table_col = st.columns([1, 1])
+    with map_col:
+        side = st.radio(
+            "Lado",
+            options=["Ataque", "Defensa"],
+            horizontal=True,
+            key="own_quality_side",
+            label_visibility="collapsed",
+        )
+        side_valued = own_valued if side == "Ataque" else conceded_valued
+        side_zones = shot_quality.zone_profile(side_valued)
+        st.altair_chart(zone_heatmap(side_zones, quality_zones_df, mode="vs_league"))
+        st.caption(zone_heatmap_caption(side_zones, mode="vs_league"))
+    with table_col:
+        st.markdown("**Quién elige bien y quién acierta**")
+        # Desde `player_shot_counts`, no desde `own_valued`: el corte por
+        # equipo no trae `player_id` (agrega antes de llegar aquí).
+        player_valued = shot_quality.with_expected(
+            queries.player_shot_counts(engine, team_id, shots_season_id), baseline
+        )
+        player_quality_table(
+            shot_quality.summarize_by(player_valued, ["player_id"], extra=["player_name"])
+        )
+
+    _, coverage = shot_quality.split_usable(quality_counts)
+    quality_caveat(coverage)
+    glossary_expander(["xpps", "pps", "diff_shrunk", "shots", "fg_pct", "zone_label"])
+    league_reference_expander(baseline)

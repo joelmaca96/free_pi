@@ -550,7 +550,90 @@ def _heat_color(pct, lo: float, mid: float, hi: float) -> str:
     return _lerp_color(_HEAT_MID, _HEAT_HIGH, 0 if span <= 0 else (pct - mid) / span)
 
 
-def _wing_area_layers(zones: pd.DataFrame, zone_df: pd.DataFrame, lo: float, mid: float, hi: float) -> list:
+# --------------------------------------------------------- modo "vs. liga" --
+# La escala de `_heat_color` es relativa a las zonas del propio gráfico porque
+# hasta ahora no había con qué compararlas. Con la línea base de
+# `app/analytics/shot_quality.py` sí la hay, y eso permite una escala ABSOLUTA
+# y divergente: cuánto se acierta en una zona por encima o por debajo de lo
+# que acierta ahí TODA la liga. Es la diferencia entre "aquí tiramos peor que
+# en la pintura" y "aquí tiramos peor que el resto de la liga" — la segunda es
+# la que responde de verdad a "¿somos buenos aquí?" (§2 de la propuesta 02).
+
+#: Diferencia de acierto (puntos porcentuales contra la liga) donde satura el
+#: color. ±10 pp es una diferencia enorme para una zona con volumen: dejar la
+#: escala abierta haría que un +30 pp de doce tiros aplastara visualmente todo
+#: lo demás, que es justo lo que la regularización de `shot_quality` evita en
+#: los números.
+_DIFF_CAP = 10.0
+_HEAT_NEUTRAL = _hex_to_rgb("#f0ede4")  # "igual que la liga" — el centro de la escala divergente
+
+#: Títulos de las dos líneas del tooltip en cada modo: son el mismo par de
+#: campos (`line1`/`line2`) contando cosas distintas.
+_MODE_TOOLTIPS = {
+    "fg": ("Aciertos/Intentos", "% acierto"),
+    "vs_league": ("Vs. liga", "Propio / liga"),
+}
+
+_EMPTY_STYLE = (_HEAT_EMPTY, "Sin tiros", "")
+
+
+def _diff_color(diff_pp) -> str:
+    """Color divergente del modo "vs. liga": rojo (por debajo) → neutro → verde (por encima)."""
+    if pd.isna(diff_pp):
+        return _HEAT_EMPTY
+    diff = float(diff_pp)
+    weight = min(abs(diff) / _DIFF_CAP, 1.0)
+    return _lerp_color(_HEAT_NEUTRAL, _HEAT_HIGH if diff >= 0 else _HEAT_LOW, weight)
+
+
+def _zone_styles(zone_df: pd.DataFrame, mode: str) -> dict:
+    """`zone_label` -> `(color, línea 1, línea 2)` de cada zona, según el modo.
+
+    Un solo sitio decide el color y el texto de una zona, y las dos formas de
+    pintarla —rectángulo (`zone_heatmap`) y banda partida por el arco
+    (`_wing_area_layers`)— lo consultan aquí. Antes cada una recalculaba el
+    color por su cuenta con los mismos límites pasados a mano, que era
+    exactamente la clase de duplicación que hace que un modo nuevo salga bien
+    en la mitad del mapa.
+
+    Los límites del modo `"fg"` se calculan sobre TODO `zone_df` (incluidas
+    las bandas de ala), para que el rojo/verde de "Ala izq. (2)" sea
+    comparable con el de cualquier otra zona del mismo gráfico.
+    """
+    if mode not in _MODE_TOOLTIPS:
+        raise ValueError(f"modo de mapa desconocido: {mode!r} (válidos: {tuple(_MODE_TOOLTIPS)})")
+    styles = {}
+    if zone_df is None or zone_df.empty:
+        return styles
+
+    if mode == "vs_league":
+        for row in zone_df.itertuples():
+            diff = getattr(row, "diff_pp", float("nan"))
+            if pd.isna(diff):
+                styles[row.zone_label] = _EMPTY_STYLE
+                continue
+            styles[row.zone_label] = (
+                _diff_color(diff),
+                f"{diff:+.1f} pp",
+                f"{row.fg_pct:.1f}% vs {row.league_fg_pct:.1f}%",
+            )
+        return styles
+
+    with_data = zone_df["fg_pct"].dropna()
+    lo, mid, hi = (with_data.min(), with_data.median(), with_data.max()) if not with_data.empty else (0, 0, 0)
+    for row in zone_df.itertuples():
+        if pd.isna(row.fg_pct):
+            styles[row.zone_label] = _EMPTY_STYLE
+            continue
+        styles[row.zone_label] = (
+            _heat_color(row.fg_pct, lo, mid, hi),
+            f"{int(row.made)} / {int(row.volume)}",
+            f"{row.fg_pct:.1f}%",
+        )
+    return styles
+
+
+def _wing_area_layers(zones: pd.DataFrame, styles: dict, tooltips: tuple) -> list:
     """Relleno coloreado de "Ala izq./der." partidas por la línea de triple, para `zone_heatmap`.
 
     Homólogo de `_wing_split_layers` (fondo de `shot_chart`) pero coloreado
@@ -560,15 +643,17 @@ def _wing_area_layers(zones: pd.DataFrame, zone_df: pd.DataFrame, lo: float, mid
     rectángulo no puede partirse por una curva sin que las dos mitades se
     solapen, `mark_area` sí admite un borde que sigue la elipse.
 
-    `lo`/`mid`/`hi` son los mismos límites de color que usa el resto del
-    mapa (calculados por `zone_heatmap` sobre TODO `zone_df`, incluidas estas
-    bandas) — para que el rojo/verde de "Ala izq. (2)" sea comparable con el
-    de cualquier otra zona del mismo gráfico, no una escala aparte.
+    `styles` es el mapa `zone_label -> (color, línea 1, línea 2)` que arma
+    `_zone_styles` sobre TODO `zone_df` (incluidas estas bandas) — para que el
+    color de "Ala izq. (2)" sea comparable con el de cualquier otra zona del
+    mismo gráfico y para que el modo ("fg"/"vs. liga") se decida en un solo
+    sitio, no una vez por forma de pintar. `tooltips` son los títulos de esas
+    dos líneas en el modo activo.
 
-    Cada banda busca su fila en `zone_df` por `zone_label` ("Ala izq. (2)",
-    etc. — las produce `queries.team_zone_profile`/`player_zone_profile` en
-    cuanto `shots.zone_id` está clasificado contra esa geometría, ver
-    `ingest/common/zones.py::classify_zone`). Sin esa fila (tiros aún sin
+    Cada banda busca su entrada por `zone_label` ("Ala izq. (2)", etc. — las
+    produce `queries.team_zone_profile`/`player_zone_profile` en cuanto
+    `shots.zone_id` está clasificado contra esa geometría, ver
+    `ingest/common/zones.py::classify_zone`). Sin esa entrada (tiros aún sin
     reclasificar, o sin volumen esa banda) sale en gris "Sin tiros", igual
     que cualquier otra zona del mapa sin dato — nunca como un hueco vacío.
     """
@@ -583,25 +668,21 @@ def _wing_area_layers(zones: pd.DataFrame, zone_df: pd.DataFrame, lo: float, mid
             continue
         for kind, xs, y_low, y_high in _wing_bands(zone_row, geom):
             sub_label = label_2 if kind == "2" else label_3
-            match = zone_df.loc[zone_df["zone_label"] == sub_label]
-            has_data = not match.empty
-            fg_pct = float(match["fg_pct"].iloc[0]) if has_data else float("nan")
-            line1 = f"{int(match['made'].iloc[0])} / {int(match['volume'].iloc[0])}" if has_data else "Sin tiros"
-            line2 = f"{fg_pct:.1f}%" if has_data else ""
+            color, line1, line2 = styles.get(sub_label, _EMPTY_STYLE)
 
             band = pd.DataFrame({"x": xs, "y_low": y_low, "y_high": y_high})
             band["label"], band["line1"], band["line2"] = sub_label, line1, line2
             layers.append(
                 alt.Chart(band)
-                .mark_area(stroke="#ffffff", strokeWidth=1.5, color=_heat_color(fg_pct, lo, mid, hi))
+                .mark_area(stroke="#ffffff", strokeWidth=1.5, color=color)
                 .encode(
                     x=alt.X("x:Q", scale=alt.Scale(domain=_DOMAIN), axis=None),
                     y=alt.Y("y_low:Q", scale=alt.Scale(domain=_DOMAIN), axis=None),
                     y2="y_high:Q",
                     tooltip=[
                         alt.Tooltip("label:N", title="Zona"),
-                        alt.Tooltip("line1:N", title="Aciertos/Intentos"),
-                        alt.Tooltip("line2:N", title="% acierto"),
+                        alt.Tooltip("line1:N", title=tooltips[0]),
+                        alt.Tooltip("line2:N", title=tooltips[1]),
                     ],
                 )
             )
@@ -634,8 +715,8 @@ def _wing_area_layers(zones: pd.DataFrame, zone_df: pd.DataFrame, lo: float, mid
     return layers
 
 
-def zone_heatmap(zone_df: pd.DataFrame, zones: pd.DataFrame) -> alt.LayerChart:
-    """Cancha coloreada por acierto de zona, con la fracción escrita encima de cada una.
+def zone_heatmap(zone_df: pd.DataFrame, zones: pd.DataFrame, mode: str = "fg") -> alt.LayerChart:
+    """Cancha coloreada por zona, con dos líneas de texto encima de cada una.
 
     Complementa a `shot_chart` (nube de tiros individuales) en vez de
     sustituirlo — de un vistazo dice QUÉ zonas van bien/mal, algo que un
@@ -645,8 +726,17 @@ def zone_heatmap(zone_df: pd.DataFrame, zones: pd.DataFrame) -> alt.LayerChart:
     Args:
         zone_df: salida de `queries.team_zone_profile` o
             `queries.player_zone_profile` (`zone_label, fg_pct, volume,
-            made`).
+            made`). En modo `"vs_league"`, la de
+            `analytics/shot_quality.py::zone_profile`, que añade
+            `league_fg_pct` y `diff_pp`.
         zones: salida de `queries.court_zones` (geometría de cada zona).
+        mode: `"fg"` (por defecto) colorea el acierto de cada zona **relativo
+            a las otras zonas de este mismo gráfico**; `"vs_league"` colorea
+            la diferencia contra lo que acierta toda la liga en esa zona
+            (escala absoluta y divergente, ver `_diff_color`). Son dos
+            preguntas distintas: "¿dónde acertamos más?" y "¿dónde somos
+            mejores que los demás?" — la segunda es la que distingue una zona
+            buena de una en la que tira bien todo el mundo.
 
     Returns:
         Gráfico Altair en capas (zonas coloreadas + fracción/% encima +
@@ -667,25 +757,24 @@ def zone_heatmap(zone_df: pd.DataFrame, zones: pd.DataFrame) -> alt.LayerChart:
     su propio fondo (`_zone_layers`/`_wing_split_layers`). Sin esa geometría
     caen al rectángulo único de siempre, sin romper nada.
     """
-    with_data = zone_df["fg_pct"].dropna() if not zone_df.empty else zone_df.get("fg_pct", pd.Series(dtype=float))
-    lo, mid, hi = (with_data.min(), with_data.median(), with_data.max()) if not with_data.empty else (0, 0, 0)
-    wing_layers = _wing_area_layers(zones, zone_df, lo, mid, hi)
+    styles = _zone_styles(zone_df, mode)
+    tooltips = _MODE_TOOLTIPS[mode]
+    wing_layers = _wing_area_layers(zones, styles, tooltips)
 
     excluded = {"Mate", "Ala izq.", "Ala der."} if wing_layers else {"Mate"}
     boxes = zones.loc[
         (~zones["label"].isin(excluded)) & (zones["x_min"] != zones["x_max"]) & (zones["y_min"] != zones["y_max"])
-    ].merge(zone_df, left_on="label", right_on="zone_label", how="left")
+    ].copy()
     if boxes.empty and not wing_layers:
         return alt.LayerChart()
 
     layers = [*_court_line_layers(zones), *wing_layers]
     if not boxes.empty:
+        styled = boxes["label"].map(lambda label: styles.get(label, _EMPTY_STYLE))
         boxes = boxes.assign(
-            fill_color=boxes["fg_pct"].apply(lambda p: _heat_color(p, lo, mid, hi)),
-            line1=boxes.apply(
-                lambda r: "Sin tiros" if pd.isna(r["fg_pct"]) else f"{int(r['made'])} / {int(r['volume'])}", axis=1
-            ),
-            line2=boxes["fg_pct"].apply(lambda p: "" if pd.isna(p) else f"{p:.1f}%"),
+            fill_color=[style[0] for style in styled],
+            line1=[style[1] for style in styled],
+            line2=[style[2] for style in styled],
             cx=(boxes["x_min"] + boxes["x_max"]) / 2,
             cy=(boxes["y_min"] + boxes["y_max"]) / 2,
         )
@@ -700,8 +789,8 @@ def zone_heatmap(zone_df: pd.DataFrame, zones: pd.DataFrame) -> alt.LayerChart:
                 color=alt.Color("fill_color:N", scale=None),
                 tooltip=[
                     alt.Tooltip("label:N", title="Zona"),
-                    alt.Tooltip("line1:N", title="Aciertos/Intentos"),
-                    alt.Tooltip("line2:N", title="% acierto"),
+                    alt.Tooltip("line1:N", title=tooltips[0]),
+                    alt.Tooltip("line2:N", title=tooltips[1]),
                 ],
             )
         )
@@ -727,10 +816,18 @@ def zone_heatmap(zone_df: pd.DataFrame, zones: pd.DataFrame) -> alt.LayerChart:
     return chart.properties(height=360, width=360).configure_view(strokeWidth=0)
 
 
-def zone_heatmap_caption(zone_df: pd.DataFrame) -> str:
-    """Pie de gráfico de `zone_heatmap` — deja claro que el color es relativo, no un baremo."""
+def zone_heatmap_caption(zone_df: pd.DataFrame, mode: str = "fg") -> str:
+    """Pie de gráfico de `zone_heatmap` — qué significa exactamente el color en cada modo."""
     if zone_df.empty:
         return "Sin tiros con zona registrados — todo el mapa sale en gris."
+    if mode == "vs_league":
+        return (
+            f"Diferencia de acierto contra la media de la liga EN ESA MISMA ZONA, en puntos "
+            f"porcentuales (verde = por encima, rojo = por debajo; el color satura a ±{_DIFF_CAP:.0f} pp). "
+            "Es un baremo absoluto, no relativo a las otras zonas del gráfico: responde \"¿aquí "
+            "somos buenos?\" y no \"¿aquí acertamos más que en la pintura?\". \"Línea de fondo\" va "
+            "sumada a \"Pintura\" (96 tiros en toda la liga, ver `analytics/shot_quality.py`)."
+        )
     return (
         "Color relativo a las propias zonas de este gráfico (roja = la de peor acierto AQUÍ, "
         "verde = la de mejor, no un baremo fijo tipo \"45% es bueno\") — compara zonas entre sí, "

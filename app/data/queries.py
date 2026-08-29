@@ -11,6 +11,7 @@ tabulares, `Optional[dict]`/`Optional[str]` para resultados de una sola fila
 o un escalar.
 """
 import datetime as dt
+import math
 from typing import Optional
 
 import pandas as pd
@@ -1054,3 +1055,550 @@ def player_zone_profile(_engine: Engine, player_id: str, season_id: int) -> pd.D
         ORDER BY volume DESC
     """)
     return pd.read_sql(sql, _engine, params={"player_id": player_id, "season_id": season_id})
+
+
+# ---------------------------------------------------------------------------
+# Rotaciones y parciales — pestaña "Rotaciones" de "Partidos anteriores"
+# (`doc/features/propuestas/01_rotaciones_y_parciales.md`).
+#
+# Las tres piezas que la pantalla junta —quién estaba en pista, cómo iba el
+# marcador y qué pasó en ese segundo— ya están cargadas y **en la misma escala
+# de tiempo**: `lineup_stints.start_seconds`/`end_seconds` y
+# `play_events.seconds` son los dos segundos desde el inicio del partido
+# (`ingest/common/game_clock.py::game_clock_to_seconds`), así que cruzarlas es
+# un `BETWEEN` y no una conversión con supuestos.
+#
+# El marcador NO sale de `score_progression`: según `schema.sql` esa tabla es
+# hoy una interpolación sintética entre 0 y el resultado final, o sea una
+# recta que no dice nada de cuándo se decidió el partido. El marcador real es
+# el que viaja en cada fila del play-by-play (`play_events.home_score`/
+# `away_score`), y se trata como ESCALERA: entre dos eventos el marcador no
+# "sube un poco", se queda quieto hasta el siguiente.
+# ---------------------------------------------------------------------------
+
+#: Duración del tiempo reglamentario y de cada prórroga, en segundos. Se usan
+#: para saber dónde ACABA el partido: el último evento del play-by-play no es
+#: el final del partido (ver `_score_steps`).
+_REGULATION_SECONDS = 2400.0
+_OVERTIME_SECONDS = 300.0
+
+
+def game_end_seconds(last_seconds: float) -> float:
+    """Segundo en el que acaba el partido, dado el último instante con dato.
+
+    Redondea hacia arriba al final del tiempo reglamentario o de la prórroga
+    en curso: 2384 → 2400 (partido normal), 2694 → 2700 (una prórroga). Es lo
+    que permite que el eje del gráfico llegue hasta el final y que la escalera
+    del marcador no se corte quince segundos antes.
+    """
+    if last_seconds <= _REGULATION_SECONDS:
+        return _REGULATION_SECONDS
+    overtimes = math.ceil((last_seconds - _REGULATION_SECONDS) / _OVERTIME_SECONDS)
+    return _REGULATION_SECONDS + _OVERTIME_SECONDS * overtimes
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def game_stints(_engine: Engine, game_id: str, team_id: str) -> pd.DataFrame:
+    """Tramos de quinteto de un equipo en un partido, una fila por (tramo, jugador).
+
+    No se agrega por combinación de cinco a propósito —a diferencia de
+    `game_lineups`—: el timeline de rotaciones necesita cada tramo situado en
+    el reloj, que es justo lo que `lineups` funde al persistir (§2.3 del
+    diseño del asistente).
+
+    Returns:
+        `stint_id, start_seconds, end_seconds, points_for, points_against,
+        margin_start, player_id, player_name`, en orden de aparición. Vacío
+        si el partido se ingirió antes de la fase 3 (sin tramos).
+    """
+    sql = text("""
+        SELECT s.id AS stint_id, s.start_seconds, s.end_seconds,
+               s.points_for, s.points_against, s.margin_start,
+               p.id AS player_id, p.name AS player_name
+        FROM lineup_stints s
+        JOIN lineup_stint_players sp ON sp.stint_id = s.id
+        JOIN players p ON p.id = sp.player_id
+        WHERE s.game_id = :game_id AND s.team_id = :team_id
+        ORDER BY s.start_seconds, p.name
+    """)
+    return pd.read_sql(sql, _engine, params={"game_id": game_id, "team_id": team_id})
+
+
+def _score_steps(engine: Engine, game_id: str, team_id: Optional[str]) -> pd.DataFrame:
+    """Implementación sin cachear de `game_score_steps` (ver su docstring).
+
+    Vive aparte para que `game_runs` la pueda reutilizar sin llamar a otra
+    función cacheada desde dentro de una función cacheada: encadenar dos
+    cachés de `st.cache_data` complica la invalidación sin ganar nada aquí
+    (la consulta es una sola lectura de un partido).
+    """
+    columns = ["seconds", "quarter", "game_clock", "score_for", "score_against", "margin"]
+
+    header = pd.read_sql(
+        text("SELECT home_team_id, home_score, away_score FROM games WHERE id = :game_id"),
+        engine,
+        params={"game_id": game_id},
+    )
+    if header.empty:
+        return pd.DataFrame(columns=columns)
+
+    # Un mismo segundo trae varios eventos (un robo y la pérdida que lo
+    # acompaña son dos filas con el mismo reloj): la escalera quiere UN
+    # escalón por segundo. `MAX` sobre el marcador es exacto porque el
+    # marcador solo sube, y `quarter`/`game_clock` son función del segundo
+    # (la ingesta deriva `seconds` de ellos), así que agregarlos no mezcla
+    # valores distintos.
+    sql = text("""
+        SELECT pe.seconds,
+               MIN(pe.quarter)     AS quarter,
+               MIN(pe.game_clock)  AS game_clock,
+               MAX(pe.home_score)  AS home_score,
+               MAX(pe.away_score)  AS away_score
+        FROM play_events pe
+        WHERE pe.game_id = :game_id
+        GROUP BY pe.seconds
+        ORDER BY pe.seconds
+    """)
+    steps = pd.read_sql(sql, engine, params={"game_id": game_id})
+    if steps.empty:
+        return pd.DataFrame(columns=columns)
+
+    is_home = team_id is None or team_id == header["home_team_id"].iloc[0]
+    for_col, against_col = ("home_score", "away_score") if is_home else ("away_score", "home_score")
+    steps = steps.rename(columns={for_col: "score_for", against_col: "score_against"})
+
+    last_stint = pd.read_sql(
+        text("SELECT MAX(end_seconds) AS end_seconds FROM lineup_stints WHERE game_id = :game_id"),
+        engine,
+        params={"game_id": game_id},
+    )["end_seconds"].iloc[0]
+    end = game_end_seconds(max(float(steps["seconds"].max()), float(last_stint or 0.0)))
+
+    # Cierre de la escalera en el final del partido con el marcador OFICIAL.
+    # No es cosmético: los eventos tipados no incluyen los tiros, así que la
+    # última canasta puede caer después del último evento tipado y la
+    # escalera se quedaría corta (caso real: `acb-105371`, 102-75 final
+    # contra 102-72 en el último evento del play-by-play).
+    closing = pd.DataFrame([{
+        "seconds": end,
+        "quarter": "OT" if end > _REGULATION_SECONDS else f"Q{int(end // 600)}",
+        "game_clock": "00:00",
+        "score_for": int(header[for_col].iloc[0]),
+        "score_against": int(header[against_col].iloc[0]),
+    }])
+    # Origen 0-0: sin él, un parcial de salida (los primeros tres minutos) no
+    # tiene contra qué medirse.
+    opening = pd.DataFrame([
+        {"seconds": 0.0, "quarter": "Q1", "game_clock": "10:00", "score_for": 0, "score_against": 0}
+    ])
+    steps = pd.concat([opening, steps, closing], ignore_index=True)
+    steps = steps.drop_duplicates(subset="seconds", keep="last").sort_values("seconds").reset_index(drop=True)
+    steps["margin"] = steps["score_for"] - steps["score_against"]
+    return steps[columns]
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def game_score_steps(_engine: Engine, game_id: str, team_id: Optional[str] = None) -> pd.DataFrame:
+    """Marcador real de un partido como ESCALERA, visto desde `team_id`.
+
+    Args:
+        team_id: desde qué equipo se mira el marcador. `None` = el local.
+
+    Returns:
+        `seconds, quarter, game_clock, score_for, score_against, margin`, un
+        escalón por segundo con evento, más el 0-0 de salida y el marcador
+        final. Vacío si el partido no tiene play-by-play tipado (fase 2 sin
+        reingerir) o no existe.
+
+    Ojo con la granularidad: `play_events` no tipa los tiros (ver §5 de la
+    propuesta), así que el marcador se OBSERVA en los eventos que sí están
+    (rebotes, faltas, pérdidas...). Los puntos aparecen igual —el marcador
+    que viaja con cada evento ya los lleva— pero el escalón se sitúa en el
+    siguiente evento tipado, no en el segundo exacto de la canasta.
+    """
+    return _score_steps(_engine, game_id, team_id)
+
+
+def detect_runs(steps: pd.DataFrame, window_s: float = 180.0, min_swing: int = 8) -> pd.DataFrame:
+    """Parciales de un partido: ventanas cortas en las que el marcador se movió mucho.
+
+    Un parcial es una ventana de duración ≤ `window_s` en la que el margen se
+    mueve ≥ `min_swing` puntos, en cualquiera de los dos sentidos. Los dos
+    umbrales son parámetros y no constantes porque cada entrenador tiene su
+    idea de "parcial preocupante": 8 puntos en 3 minutos es el punto de
+    partida, no la definición.
+
+    El algoritmo, en tres pasos:
+
+    1. Para cada escalón `i`, la ventana `[i, j]` que cabe en `window_s`, y el
+       escalón de dentro que más aleja el margen de `margin[i]`.
+    2. Se recorta la ventana por los dos extremos hasta el último/primer
+       escalón que mantiene el mismo swing, para que el parcial no arrastre
+       los segundos planos de antes y de después.
+    3. Se ordena por magnitud y se descartan los candidatos que solapan con
+       uno ya aceptado: dos ventanas que describen el mismo arreón son un
+       parcial, no dos.
+
+    Args:
+        steps: salida de `game_score_steps` (la escalera, ya orientada a un
+            equipo — el signo del swing es desde ESE equipo).
+
+    Returns:
+        `start_seconds, end_seconds, duration_s, margin_start, margin_end,
+        swing, points_for, points_against, direction ('favor'|'contra'),
+        quarter_start, clock_start, quarter_end, clock_end, label`, del
+        parcial más grande al más pequeño. Vacío si ninguno cumple los
+        umbrales.
+    """
+    columns = [
+        "start_seconds", "end_seconds", "duration_s", "margin_start", "margin_end",
+        "swing", "points_for", "points_against", "direction",
+        "quarter_start", "clock_start", "quarter_end", "clock_end", "label",
+    ]
+    if steps is None or len(steps) < 2:
+        return pd.DataFrame(columns=columns)
+
+    seconds = steps["seconds"].to_numpy(dtype=float)
+    margin = steps["margin"].to_numpy(dtype=float)
+    n = len(seconds)
+
+    candidates = []
+    for i in range(n - 1):
+        best_k, best_swing = None, 0.0
+        for k in range(i + 1, n):
+            if seconds[k] - seconds[i] > window_s:
+                break
+            swing = margin[k] - margin[i]
+            if abs(swing) > abs(best_swing):
+                best_k, best_swing = k, swing
+        if best_k is None or abs(best_swing) < min_swing:
+            continue
+        # Recorte: el parcial empieza en el ÚLTIMO escalón con el margen de
+        # partida y acaba en el PRIMERO con el de llegada. Sin esto, los
+        # segundos planos de antes del arreón entran dentro del parcial y lo
+        # alargan sin aportarle un punto.
+        start = i
+        while start + 1 < best_k and margin[start + 1] == margin[i]:
+            start += 1
+        end = best_k
+        while end - 1 > start and margin[end - 1] == margin[best_k]:
+            end -= 1
+        candidates.append((abs(best_swing), -(seconds[end] - seconds[start]), start, end, best_swing))
+
+    # Magnitud primero y, a igualdad, el parcial más corto (más concentrado).
+    candidates.sort(reverse=True)
+    accepted = []
+    for _, _, start, end, swing in candidates:
+        if any(seconds[start] < seconds[b] and seconds[a] < seconds[end] for a, b, _ in accepted):
+            continue
+        accepted.append((start, end, swing))
+
+    rows = []
+    for start, end, swing in accepted:
+        head, tail = steps.iloc[start], steps.iloc[end]
+        points_for = int(tail["score_for"] - head["score_for"])
+        points_against = int(tail["score_against"] - head["score_against"])
+        rows.append({
+            "start_seconds": float(head["seconds"]),
+            "end_seconds": float(tail["seconds"]),
+            "duration_s": float(tail["seconds"] - head["seconds"]),
+            "margin_start": int(head["margin"]),
+            "margin_end": int(tail["margin"]),
+            "swing": int(swing),
+            "points_for": points_for,
+            "points_against": points_against,
+            "direction": "favor" if swing > 0 else "contra",
+            "quarter_start": head["quarter"],
+            "clock_start": head["game_clock"],
+            "quarter_end": tail["quarter"],
+            "clock_end": tail["game_clock"],
+            # Sin flecha "→" a propósito: esta etiqueta viaja también al
+            # `tool_result` del asistente y de ahí al log del servidor, y una
+            # consola Windows en cp1252 revienta con cualquier carácter fuera
+            # de esa página (mismo motivo que en `tools/__init__.py::summarize`).
+            "label": (
+                f"{head['quarter']} {head['game_clock']} a {tail['quarter']} {tail['game_clock']} · "
+                f"{points_for}-{points_against} ({int(swing):+d})"
+            ),
+        })
+    runs = pd.DataFrame(rows, columns=columns)
+    if runs.empty:
+        return runs
+    return runs.sort_values("swing", key=lambda s: s.abs(), ascending=False).reset_index(drop=True)
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def game_runs(
+    _engine: Engine,
+    game_id: str,
+    team_id: Optional[str] = None,
+    window_s: float = 180.0,
+    min_swing: int = 8,
+) -> pd.DataFrame:
+    """Parciales de un partido vistos desde `team_id` (`detect_runs` sobre la escalera)."""
+    return detect_runs(_score_steps(_engine, game_id, team_id), window_s, min_swing)
+
+
+def window_lineup(stints: pd.DataFrame, start_seconds: float, end_seconds: float) -> pd.DataFrame:
+    """El quinteto de un parcial: el tramo que más segundos aporta a la ventana.
+
+    Solo cuenta el TROZO del tramo que cae dentro de la ventana —el mismo
+    recorte que ya hace `queries_assistant.clutch_lineups`—: un tramo que
+    empieza en el minuto 20 y llega al final no son veinte minutos de un
+    parcial de tres.
+
+    Los segundos que se devuelven por jugador son los suyos DENTRO de la
+    ventana sumando todos sus tramos, no solo el del quinteto elegido: en un
+    parcial con un cambio por medio, un jugador puede llevar los tres minutos
+    en pista aunque su quinteto solo dure dos.
+
+    Args:
+        stints: salida de `game_stints` (una fila por tramo y jugador).
+
+    Returns:
+        `player_id, player_name, seconds, minutes, share` (share = % de la
+        ventana que el jugador ha estado en pista), de más a menos minutos.
+        Vacío si el partido no tiene tramos o si ninguno solapa la ventana.
+    """
+    columns = ["player_id", "player_name", "seconds", "minutes", "share"]
+    if stints is None or stints.empty:
+        return pd.DataFrame(columns=columns)
+
+    clipped = stints.assign(
+        clipped_seconds=(
+            stints["end_seconds"].clip(upper=end_seconds) - stints["start_seconds"].clip(lower=start_seconds)
+        ).clip(lower=0.0)
+    )
+    clipped = clipped[clipped["clipped_seconds"] > 0]
+    if clipped.empty:
+        return pd.DataFrame(columns=columns)
+
+    # El quinteto del parcial: el tramo con más segundos dentro de la ventana.
+    main_stint = clipped.groupby("stint_id")["clipped_seconds"].first().idxmax()
+    five = set(clipped.loc[clipped["stint_id"] == main_stint, "player_id"])
+
+    per_player = (
+        clipped[clipped["player_id"].isin(five)]
+        .groupby(["player_id", "player_name"], as_index=False)["clipped_seconds"]
+        .sum()
+        .rename(columns={"clipped_seconds": "seconds"})
+    )
+    window = max(float(end_seconds) - float(start_seconds), 1.0)
+    per_player["minutes"] = per_player["seconds"] / 60.0
+    per_player["share"] = 100.0 * per_player["seconds"] / window
+    return per_player.sort_values("seconds", ascending=False).reset_index(drop=True)[columns]
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def game_window_events(
+    _engine: Engine,
+    game_id: str,
+    start_seconds: float,
+    end_seconds: float,
+    team_id: Optional[str] = None,
+) -> pd.DataFrame:
+    """Play-by-play tipado de UNA ventana del partido, con el marcador en cada evento.
+
+    Es la segunda capa de la vista de parciales: sin ella el timeline dice
+    cuándo se fue el partido, pero no qué pasó. Los tiros NO aparecen —
+    `shots` no guarda ni cuarto ni reloj (§5 de la propuesta)—, así que los
+    puntos se leen por el salto del marcador y no como un evento más; es la
+    mayor carencia de esta vista y la interfaz la dice en voz alta en vez de
+    dejar que el entrenador la deduzca.
+
+    Args:
+        team_id: equipo desde el que se orienta el marcador y se marca
+            `is_own`. `None` = el local.
+
+    Returns:
+        `seconds, quarter, game_clock, event_type, event_detail, team_id,
+        team_name, player_name, score_for, score_against, is_own`, en orden
+        cronológico. Vacío si la ventana no tiene eventos tipados.
+    """
+    columns = [
+        "seconds", "quarter", "game_clock", "event_type", "event_detail",
+        "team_id", "team_name", "player_name", "score_for", "score_against", "is_own",
+    ]
+    sql = text("""
+        SELECT pe.seconds, pe.quarter, pe.game_clock, pe.event_type, pe.event_detail,
+               pe.team_id, t.name AS team_name, p.name AS player_name,
+               pe.home_score, pe.away_score, g.home_team_id
+        FROM play_events pe
+        JOIN games g ON g.id = pe.game_id
+        JOIN teams t ON t.id = pe.team_id
+        LEFT JOIN players p ON p.id = pe.player_id
+        WHERE pe.game_id = :game_id
+          AND pe.seconds BETWEEN :start_seconds AND :end_seconds
+        ORDER BY pe.seconds, pe.id
+    """)
+    df = pd.read_sql(
+        sql,
+        _engine,
+        params={"game_id": game_id, "start_seconds": start_seconds, "end_seconds": end_seconds},
+    )
+    if df.empty:
+        return pd.DataFrame(columns=columns)
+
+    own = team_id if team_id is not None else df["home_team_id"].iloc[0]
+    is_home = own == df["home_team_id"].iloc[0]
+    df["score_for"] = df["home_score"] if is_home else df["away_score"]
+    df["score_against"] = df["away_score"] if is_home else df["home_score"]
+    df["is_own"] = df["team_id"] == own
+    return df[columns]
+
+
+# ---------------------------------------------------------------------------
+# Calidad de tiro (xPPS) — `doc/features/propuestas/02_calidad_de_tiro.md`.
+#
+# Las cuatro consultas de esta sección devuelven lo MISMO con distinto corte:
+# recuentos de tiros agregados por (competición, zona, `located`), nunca tiros
+# fila a fila. En la v1 por zonas el valor esperado es constante dentro de una
+# zona, así que agregar en SQL no pierde un solo decimal y evita arrastrar
+# 92.000 filas hasta la interfaz para volver a agruparlas en pandas.
+#
+# `located` viaja SIN filtrar a propósito, en vez de descartarse aquí: quien
+# calcula (`app/analytics/shot_quality.py::split_usable`) necesita poder
+# contar lo que se queda fuera para declararlo en pantalla. Una consulta que
+# filtra en silencio deja a la interfaz sin forma de decir "el 2% de los tiros
+# no entra en este número".
+#
+# ATRIBUCIÓN DE EQUIPO: como en `game_shots`/`team_shots_season`, el equipo de
+# un tiro es el equipo ACTUAL del tirador (`players.team_id`) — el esquema no
+# guarda a qué club pertenecía en cada partido. Aquí se acota además a los
+# partidos del equipo y a los dos equipos de cada partido
+# (`p.team_id IN (g.home_team_id, g.away_team_id)`), que corrige el caso más
+# molesto: los tiros que un jugador traspasado hizo en OTRO club ya no cuentan
+# ni como nuestros ni como concedidos. Lo que sigue sin poder corregirse es el
+# jugador que se fue a mitad de temporada: sus tiros en nuestros partidos
+# pasan a contarse en el bando contrario. Se documenta en vez de disimularlo.
+# ---------------------------------------------------------------------------
+
+#: Columnas comunes a las cuatro consultas de recuentos. `COALESCE(s.located,
+#: 1)` replica el criterio del resto del módulo (fila anterior a esa columna =
+#: localizada, ver `game_shots`).
+_SHOT_COUNT_COLUMNS = """
+               g.competition_id, s.zone_id, cz.label AS zone_label,
+               COALESCE(s.located, 1) AS located,
+               COUNT(*) AS shots, SUM(s.made) AS made
+"""
+_SHOT_COUNT_GROUP = "GROUP BY g.competition_id, s.zone_id, cz.label, COALESCE(s.located, 1)"
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def league_shot_counts(_engine: Engine, season_id: int) -> pd.DataFrame:
+    """Todos los tiros de la temporada, agregados por competición y zona.
+
+    Es la materia prima de la línea base de liga
+    (`analytics/shot_quality.py::league_baseline`): con qué se compara cada
+    tiro del Baskonia o de un rival. Son TODOS los equipos, no solo los
+    nuestros — esa es exactamente la referencia que hace falta.
+
+    No se materializa en ninguna tabla: agregado en SQL son unas decenas de
+    filas (competiciones x zonas x `located`), así que cabe de sobra en
+    `st.cache_data`. La tabla precalculada que menciona §6 del documento solo
+    haría falta para la v2 por posición, que no está implementada.
+
+    Returns:
+        `competition_id, zone_id, zone_label, located, shots, made`.
+        `zone_id`/`zone_label` son `NULL` en los tiros que la ingesta no pudo
+        clasificar. Vacío si la temporada no tiene tiros.
+    """
+    sql = text(f"""
+        SELECT {_SHOT_COUNT_COLUMNS}
+        FROM shots s
+        JOIN games g ON g.id = s.game_id
+        LEFT JOIN court_zones cz ON cz.id = s.zone_id
+        WHERE g.season_id = :season_id
+        {_SHOT_COUNT_GROUP}
+    """)
+    return pd.read_sql(sql, _engine, params={"season_id": season_id})
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def team_shot_counts(_engine: Engine, team_id: str, season_id: int, conceded: bool = False) -> pd.DataFrame:
+    """Tiros de un equipo en la temporada (o los que CONCEDE), por competición y zona.
+
+    Args:
+        conceded: `False` (por defecto) para los tiros del propio equipo;
+            `True` para los del rival en los partidos de ese equipo — que es
+            lo que hace posible la lectura defensiva honesta del documento
+            (§2.3): el xPPS concedido no premia que el rival falle tiros
+            abiertos, a diferencia del %TC en contra.
+
+    Returns:
+        Mismas columnas que `league_shot_counts`. Vacío si el equipo no tiene
+        partidos con tiros en esa temporada.
+    """
+    side = (
+        "p.team_id <> :team_id AND p.team_id IN (g.home_team_id, g.away_team_id)"
+        if conceded
+        else "p.team_id = :team_id"
+    )
+    sql = text(f"""
+        SELECT {_SHOT_COUNT_COLUMNS}
+        FROM shots s
+        JOIN players p ON p.id = s.player_id
+        JOIN games g ON g.id = s.game_id
+        LEFT JOIN court_zones cz ON cz.id = s.zone_id
+        WHERE g.season_id = :season_id
+          AND (g.home_team_id = :team_id OR g.away_team_id = :team_id)
+          AND ({side})
+        {_SHOT_COUNT_GROUP}
+    """)
+    return pd.read_sql(sql, _engine, params={"team_id": team_id, "season_id": season_id})
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def game_shot_counts(_engine: Engine, game_id: str) -> pd.DataFrame:
+    """Tiros de UN partido, por equipo, competición y zona.
+
+    Los dos equipos en la misma consulta (no una llamada por bando): la
+    lectura de §2.1 del documento es comparativa —lo que generamos contra lo
+    que concedimos— y separarla en dos consultas solo obligaría a la página a
+    volver a juntarlas.
+
+    Returns:
+        `team_id, season_id` más las columnas de `league_shot_counts`.
+        `season_id` viaja para que quien pida los tiros de un partido pueda
+        pedir la línea base de SU temporada sin una consulta más (un partido
+        de hace dos años no se juzga contra la liga de este año). Vacío si el
+        partido no tiene tiros cargados.
+    """
+    sql = text(f"""
+        SELECT p.team_id, g.season_id, {_SHOT_COUNT_COLUMNS}
+        FROM shots s
+        JOIN players p ON p.id = s.player_id
+        JOIN games g ON g.id = s.game_id
+        LEFT JOIN court_zones cz ON cz.id = s.zone_id
+        WHERE s.game_id = :game_id
+          AND p.team_id IN (g.home_team_id, g.away_team_id)
+        GROUP BY p.team_id, g.season_id, g.competition_id, s.zone_id, cz.label, COALESCE(s.located, 1)
+    """)
+    return pd.read_sql(sql, _engine, params={"game_id": game_id})
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def player_shot_counts(_engine: Engine, team_id: str, season_id: int) -> pd.DataFrame:
+    """Tiros de cada jugador de un equipo en la temporada, por competición y zona.
+
+    Alimenta el ranking de §2.2 del documento: quién ELIGE bien (xPPS) y quién
+    ACIERTA por encima de lo que valen sus tiros (PPS − xPPS). Son dos
+    habilidades distintas que hoy se mezclan en una sola columna de %.
+
+    Returns:
+        `player_id, player_name` más las columnas de `league_shot_counts`.
+        Solo jugadores hoy en la plantilla del equipo (`players.team_id`),
+        con sus tiros en los partidos de ese equipo. Vacío si no hay tiros.
+    """
+    sql = text(f"""
+        SELECT p.id AS player_id, p.name AS player_name, {_SHOT_COUNT_COLUMNS}
+        FROM shots s
+        JOIN players p ON p.id = s.player_id
+        JOIN games g ON g.id = s.game_id
+        LEFT JOIN court_zones cz ON cz.id = s.zone_id
+        WHERE g.season_id = :season_id
+          AND (g.home_team_id = :team_id OR g.away_team_id = :team_id)
+          AND p.team_id = :team_id
+        GROUP BY p.id, p.name, g.competition_id, s.zone_id, cz.label, COALESCE(s.located, 1)
+    """)
+    return pd.read_sql(sql, _engine, params={"team_id": team_id, "season_id": season_id})

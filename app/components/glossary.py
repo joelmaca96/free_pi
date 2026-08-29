@@ -1,0 +1,258 @@
+"""Glosario de siglas: qué significa cada abreviatura y qué mide de verdad.
+
+Una pantalla de scouting está llena de siglas —ORtg, eFG%, TOV%, PIR, xPPS—
+y cada una de ellas es una barrera de entrada para quien no las usa a diario.
+Peor: una sigla mal entendida no se nota, se malinterpreta en silencio (eFG%
+y TS% no son lo mismo, y confundirlas cambia la conclusión sobre un tirador).
+
+Este módulo es la ÚNICA definición de cada término en la interfaz, y se
+sirve por tres vías, según lo que se esté pintando:
+
+- `help_text(clave)` para el argumento `help=` de `st.column_config.*` y de
+  `st.metric`. Es el hover nativo de Streamlit: la sigla se explica donde
+  está, sin ocupar sitio en la pantalla ni desviar la mirada.
+- `abbr(clave)` para el texto suelto, donde no hay `help=` que valga. Pinta
+  un `<abbr title="...">` de HTML, que es el mismo gesto (pasar por encima)
+  con el tooltip del navegador.
+- `glossary_expander(claves)` para el desplegable del pie de una sección: la
+  lista entera de lo que sale EN ESA pantalla, para leerla de corrido cuando
+  el hover uno a uno se hace pesado.
+
+Las claves son, siempre que se puede, **el nombre de la columna en la base de
+datos** (`efg_pct`, `pir`, `tov`): así el mismo diccionario sirve para poner
+el `help` y para poner la etiqueta, y no hay forma de que la sigla de una
+pantalla se desincronice de la de otra.
+
+Cuando la misma columna significa cosas distintas según el sujeto, son dos
+entradas y no una (`minutes` de un jugador contra `lineup_minutes` de un
+quinteto, `plus_minus` de un jugador contra `lineup_plus_minus`): fundirlas
+sería justo el tipo de ambigüedad que este módulo existe para quitar.
+"""
+import html
+from dataclasses import dataclass
+from typing import Dict, Iterable, List, Optional
+
+import streamlit as st
+
+
+@dataclass(frozen=True)
+class Term:
+    """Una sigla: cómo se pinta, cómo se lee y qué mide."""
+
+    sigla: str
+    nombre: str
+    descripcion: str
+
+
+#: Todas las siglas de la interfaz. El orden importa: es el del desplegable,
+#: agrupado por familia (básicas, avanzadas, tiro, quintetos), que es como se
+#: leen y no como se ordenarían alfabéticamente.
+TERMS: Dict[str, Term] = {
+    # -------------------------------------------------- boxscore y medias --
+    "gp": Term("PJ", "Partidos jugados", "Cuántos partidos ha disputado en el corte que se está mirando."),
+    "minutes": Term("Min", "Minutos jugados", "Minutos en pista. En las medias, minutos por partido."),
+    "pts": Term(
+        "Pts", "Puntos",
+        "Puntos anotados. En un boxscore son los de ESE partido; en las medias de la ficha de "
+        "jugador, los de por partido.",
+    ),
+    "reb": Term(
+        "Reb", "Rebotes totales",
+        "Rebotes ofensivos más defensivos. El desglose ofensivo/defensivo va aparte cuando la fuente lo da.",
+    ),
+    "oreb": Term(
+        "RO", "Rebote ofensivo",
+        "Rebotes capturados en el aro contrario: cada uno es una posesión extra para el ataque.",
+    ),
+    "dreb": Term("RD", "Rebote defensivo", "Rebotes capturados en el propio aro: cierran la posesión del rival."),
+    "ast": Term("Ast", "Asistencias", "Pases que acaban directamente en canasta."),
+    "stl": Term("Rob", "Robos", "Balones robados al rival."),
+    "blk": Term("Tap", "Tapones", "Tiros del rival bloqueados."),
+    "tov": Term(
+        "PP", "Pérdidas",
+        "Balones perdidos: posesiones que se van sin llegar a tirar. Cuanto más bajo, mejor.",
+    ),
+    "pf": Term("Faltas", "Faltas personales", "Faltas cometidas. A la quinta, el jugador queda eliminado."),
+    "plus_minus": Term(
+        "+/-", "Más/menos",
+        "Diferencia de puntos del equipo mientras ESE jugador estaba en pista. +8 = el equipo ganó "
+        "esos minutos por 8. No es mérito solo suyo: depende de con quién juegue y contra quién.",
+    ),
+    "pir": Term(
+        "PIR", "Valoración",
+        "Índice oficial de ACB y Euroliga: suma lo positivo (puntos, rebotes, asistencias, robos, "
+        "tapones, faltas recibidas) y resta lo negativo (tiros fallados, pérdidas, faltas cometidas, "
+        "tapones recibidos). Un número para ordenar de un vistazo, no un juicio.",
+    ),
+    # ------------------------------------------------------------ avanzadas --
+    "ortg": Term(
+        "ORtg", "Rating ofensivo",
+        "Puntos anotados por cada 100 posesiones. Es el ataque ya limpio de ritmo: un equipo lento "
+        "que anota poco puede tener mejor ORtg que uno rápido que anota mucho.",
+    ),
+    "drtg": Term(
+        "DRtg", "Rating defensivo",
+        "Puntos encajados por cada 100 posesiones. Cuanto más bajo, mejor defensa.",
+    ),
+    "net_rating": Term(
+        "Net", "Net rating",
+        "ORtg menos DRtg: cuántos puntos por 100 posesiones se le sacan al rival. Es el resumen de "
+        "una temporada en un número.",
+    ),
+    "pace": Term(
+        "Ritmo", "Posesiones por partido",
+        "Cuántas posesiones se juegan. No es bueno ni malo: dice si el partido se va a decidir en "
+        "un intercambio de golpes o en pocas posesiones muy trabajadas.",
+    ),
+    "efg_pct": Term(
+        "eFG%", "Porcentaje de tiro efectivo",
+        "Como el porcentaje de tiros de campo, pero contando que un triple vale 1,5 veces un tiro de "
+        "dos. Es la forma correcta de comparar a un tirador exterior con un interior.",
+    ),
+    "ts_pct": Term(
+        "TS%", "True Shooting",
+        "Acierto real teniendo en cuenta TODO lo que produce puntos: dos, triples y tiros libres. "
+        "A diferencia del eFG%, premia a quien vive en la línea de personal.",
+    ),
+    "fg_pct": Term("FG%", "Porcentaje de tiros de campo", "Tiros anotados sobre tiros intentados, sin contar libres."),
+    "ft_pct": Term("FT%", "Porcentaje de tiros libres", "Tiros libres anotados sobre intentados."),
+    "ft_rate": Term(
+        "Tasa TL", "Tasa de tiros libres",
+        "Tiros libres intentados por cada tiro de campo. Mide cuánto se ataca el aro y se provoca "
+        "falta, no si se acierta desde la línea.",
+    ),
+    "tov_pct": Term(
+        "TOV%", "Porcentaje de pérdidas",
+        "Qué parte de las posesiones acaba en pérdida. Cuanto más bajo, mejor cuidado del balón.",
+    ),
+    "orb_pct": Term(
+        "ORB%", "Porcentaje de rebote ofensivo",
+        "Qué parte de los rebotes ofensivos disponibles se captura. Mide segundas oportunidades.",
+    ),
+    "ast_pct": Term(
+        "% Asistidas", "Canastas asistidas",
+        "Qué parte de las canastas del equipo llega tras un pase de asistencia. Alto = juego "
+        "colectivo; bajo = mucho uno contra uno.",
+    ),
+    "stl_pct": Term("% Robo", "Tasa de robo", "Qué parte de las posesiones del rival acaba en robo."),
+    "blk_pct": Term("% Tapón", "Tasa de tapón", "Qué parte de los tiros del rival acaba taponada."),
+    "ast_to_ratio": Term(
+        "AST/TOV", "Asistencias por pérdida",
+        "Asistencias divididas por pérdidas. Por encima de 2 se considera buen cuidado del balón.",
+    ),
+    # ---------------------------------------------------------- calidad de tiro --
+    "pps": Term(
+        "PPS", "Puntos por tiro",
+        "Puntos que se sacaron de verdad por cada tiro intentado. Es el ACIERTO.",
+    ),
+    "xpps": Term(
+        "xPPS", "Puntos por tiro esperados",
+        "Lo que valían los tiros que se generaron, según desde dónde se tiraron y lo que la liga "
+        "entera saca desde ahí. Es la DECISIÓN, independiente de si entraron.",
+    ),
+    "diff_shrunk": Term(
+        "Acierto sobre lo esperado", "PPS menos xPPS, regularizado",
+        "Cuánto se acertó por encima (o por debajo) de lo que valían esos tiros. Va regularizado "
+        "hacia cero con pocos tiros: con muestra pequeña, el acierto es sobre todo suerte.",
+    ),
+    "shots": Term("Tiros", "Tiros intentados", "Tiros de campo intentados (los libres no cuentan)."),
+    "zone_label": Term("Zona", "Zona de cancha", "Zona desde la que se tira, según el mapa de `court_zones`."),
+    # ----------------------------------------------- quintetos y rotaciones --
+    "lineup_minutes": Term(
+        "Min. juntos", "Minutos del quinteto",
+        "Minutos que esos cinco han coincidido en pista, no los de cada jugador por su cuenta.",
+    ),
+    "lineup_plus_minus": Term(
+        "+/- del quinteto", "Más/menos del quinteto",
+        "Diferencia de puntos mientras esos cinco estaban juntos en pista.",
+    ),
+    "stints": Term(
+        "Tramos", "Tramos en pista",
+        "Cuántas veces esos cinco han saltado juntos a la pista. Diez minutos en un tramo y diez en "
+        "seis tramos sueltos no dicen lo mismo.",
+    ),
+    "run_swing": Term(
+        "Swing", "Puntos que se mueve el marcador",
+        "Cuánto cambia la diferencia en el marcador durante el parcial. +10 = se le sacaron diez "
+        "puntos al rival en esos minutos.",
+    ),
+    "run_share": Term(
+        "% del parcial", "Presencia en el parcial",
+        "Qué parte de los minutos del parcial estuvo ese jugador en pista. 100% = lo jugó entero.",
+    ),
+    "run_minutes": Term(
+        "Min", "Minutos dentro del parcial",
+        "Minutos de ese jugador DENTRO de la ventana del parcial, no los del partido.",
+    ),
+    "margin": Term(
+        "Margen", "Diferencia en el marcador",
+        "Puntos a favor menos puntos en contra en ese instante. Positivo = ganando.",
+    ),
+}
+
+
+def term(key: str) -> Term:
+    """El término de `key`.
+
+    Raises:
+        KeyError: la clave no está en el glosario. Es un error de programación
+            —una sigla que se pinta sin haberla definido— y conviene verlo al
+            cargar la página y no como un hueco silencioso en un tooltip.
+    """
+    return TERMS[key]
+
+
+def help_text(key: str) -> str:
+    """Texto para el `help=` de `st.column_config.*` y de `st.metric`.
+
+    Nombre completo primero y descripción después: al pasar por encima, lo
+    primero que se lee es qué es la sigla, y solo después qué mide.
+    """
+    entry = TERMS[key]
+    return f"{entry.nombre} — {entry.descripcion}"
+
+
+def abbr(key: str, text: Optional[str] = None) -> str:
+    """`<abbr>` HTML con el significado en el tooltip del navegador.
+
+    Para el texto suelto (títulos, pies, listas de métricas hechas a mano),
+    donde no hay ningún `help=` de Streamlit al que agarrarse. Se escapa el
+    contenido porque acaba en un `unsafe_allow_html=True`: el texto sale de
+    este módulo, pero la regla de no concatenar HTML sin escapar no admite
+    excepciones "porque este dato es de confianza".
+
+    Args:
+        text: qué se pinta; por defecto, la sigla del glosario.
+    """
+    entry = TERMS[key]
+    shown = html.escape(text if text is not None else entry.sigla)
+    title = html.escape(f"{entry.nombre} — {entry.descripcion}")
+    return (
+        f'<abbr title="{title}" style="text-decoration:underline dotted;'
+        f'text-underline-offset:3px;cursor:help">{shown}</abbr>'
+    )
+
+
+def rows(keys: Iterable[str]) -> List[Term]:
+    """Los términos de `keys`, en el orden del glosario y sin repetidos."""
+    wanted = set(keys)
+    return [entry for key, entry in TERMS.items() if key in wanted]
+
+
+def glossary_expander(keys: Iterable[str], *, title: str = "¿Qué significa cada sigla?") -> None:
+    """Desplegable con la lista de siglas de ESTA sección.
+
+    Se pasa qué siglas salen en la pantalla en vez de volcar el glosario
+    entero: una lista de treinta términos de los que solo ocho están en
+    pantalla se deja de leer a la segunda vez.
+    """
+    entries = rows(keys)
+    if not entries:
+        return
+    with st.expander(title):
+        st.markdown(
+            "\n".join(
+                ["| Sigla | Significado | Qué mide |", "|---|---|---|"]
+                + [f"| **{e.sigla}** | {e.nombre} | {e.descripcion} |" for e in entries]
+            )
+        )

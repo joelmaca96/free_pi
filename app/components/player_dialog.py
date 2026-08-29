@@ -27,6 +27,7 @@ import streamlit as st
 from components.ask_assistant import ask_assistant_button
 from components.avatar import player_avatar_html
 from components.court import shot_chart, shot_chart_caption, zone_breakdown, zone_heatmap, zone_heatmap_caption
+from components.glossary import glossary_expander, help_text
 from data import queries, queries_assistant
 from data.db import get_read_engine
 
@@ -121,32 +122,61 @@ def player_detail(player_id: str) -> None:
         tabs = st.tabs(averages_df["competition"].tolist())
         for tab, row in zip(tabs, averages_df.itertuples()):
             with tab:
+                # Todas las medias con `help=`: es la ficha que se abre desde
+                # la galería de plantilla, o sea la primera pantalla donde un
+                # ojeador nuevo se encuentra eFG% sin nadie al lado que se lo
+                # explique. El texto sale del glosario (`components/glossary.py`).
                 cols = st.columns(7)
-                cols[0].metric("PJ", int(row.gp))
-                cols[1].metric("Min", f"{row.min_avg:.1f}" if pd.notna(row.min_avg) else "—")
-                cols[2].metric("Pts", f"{row.pts_avg:.1f}" if pd.notna(row.pts_avg) else "—")
-                cols[3].metric("Reb", f"{row.reb_avg:.1f}" if pd.notna(row.reb_avg) else "—")
-                cols[4].metric("Ast", f"{row.ast_avg:.1f}" if pd.notna(row.ast_avg) else "—")
-                cols[5].metric("eFG%", f"{row.efg_pct:.1f}" if pd.notna(row.efg_pct) else "—")
+                cols[0].metric("PJ", int(row.gp), help=help_text("gp"))
+                cols[1].metric(
+                    "Min", f"{row.min_avg:.1f}" if pd.notna(row.min_avg) else "—", help=help_text("minutes")
+                )
+                cols[2].metric("Pts", f"{row.pts_avg:.1f}" if pd.notna(row.pts_avg) else "—", help=help_text("pts"))
+                cols[3].metric("Reb", f"{row.reb_avg:.1f}" if pd.notna(row.reb_avg) else "—", help=help_text("reb"))
+                cols[4].metric("Ast", f"{row.ast_avg:.1f}" if pd.notna(row.ast_avg) else "—", help=help_text("ast"))
+                cols[5].metric(
+                    "eFG%", f"{row.efg_pct:.1f}" if pd.notna(row.efg_pct) else "—", help=help_text("efg_pct")
+                )
                 # `ft_pct` puede ser NaN con `gp` > 0 (partidos sin `ftm`/`fta`
                 # cargados, ver el docstring de `queries.player_averages_all`).
-                cols[6].metric("FT%", f"{row.ft_pct:.1f}" if pd.notna(row.ft_pct) else "—")
+                cols[6].metric(
+                    "FT%", f"{row.ft_pct:.1f}" if pd.notna(row.ft_pct) else "—", help=help_text("ft_pct")
+                )
 
                 # Boxscore ampliado (Fase 1): mismo criterio "NaN = sin dato,
                 # no cero" que arriba — `gp_box_extras` viaja en `row` pero no
                 # se pinta, es solo la señal de cobertura parcial.
                 if pd.notna(getattr(row, "stl_avg", None)):
                     extra_cols = st.columns(8)
-                    extra_cols[0].metric("Rob", f"{row.stl_avg:.1f}")
-                    extra_cols[1].metric("Tap", f"{row.blk_avg:.1f}" if pd.notna(row.blk_avg) else "—")
-                    extra_cols[2].metric("PP", f"{row.tov_avg:.1f}" if pd.notna(row.tov_avg) else "—")
-                    extra_cols[3].metric("Reb.Of", f"{row.oreb_avg:.1f}" if pd.notna(row.oreb_avg) else "—")
-                    extra_cols[4].metric("Reb.Def", f"{row.dreb_avg:.1f}" if pd.notna(row.dreb_avg) else "—")
-                    extra_cols[5].metric("Faltas", f"{row.pf_avg:.1f}" if pd.notna(row.pf_avg) else "—")
-                    extra_cols[6].metric(
-                        "+/-", f"{row.plus_minus_avg:+.1f}" if pd.notna(row.plus_minus_avg) else "—"
+                    extra_cols[0].metric("Rob", f"{row.stl_avg:.1f}", help=help_text("stl"))
+                    extra_cols[1].metric(
+                        "Tap", f"{row.blk_avg:.1f}" if pd.notna(row.blk_avg) else "—", help=help_text("blk")
                     )
-                    extra_cols[7].metric("PIR", f"{row.pir_avg:.1f}" if pd.notna(row.pir_avg) else "—")
+                    extra_cols[2].metric(
+                        "PP", f"{row.tov_avg:.1f}" if pd.notna(row.tov_avg) else "—", help=help_text("tov")
+                    )
+                    extra_cols[3].metric(
+                        "Reb.Of", f"{row.oreb_avg:.1f}" if pd.notna(row.oreb_avg) else "—", help=help_text("oreb")
+                    )
+                    extra_cols[4].metric(
+                        "Reb.Def", f"{row.dreb_avg:.1f}" if pd.notna(row.dreb_avg) else "—", help=help_text("dreb")
+                    )
+                    extra_cols[5].metric(
+                        "Faltas", f"{row.pf_avg:.1f}" if pd.notna(row.pf_avg) else "—", help=help_text("pf")
+                    )
+                    extra_cols[6].metric(
+                        "+/-",
+                        f"{row.plus_minus_avg:+.1f}" if pd.notna(row.plus_minus_avg) else "—",
+                        help=help_text("plus_minus"),
+                    )
+                    extra_cols[7].metric(
+                        "PIR", f"{row.pir_avg:.1f}" if pd.notna(row.pir_avg) else "—", help=help_text("pir")
+                    )
+
+                glossary_expander([
+                    "gp", "minutes", "pts", "reb", "ast", "efg_pct", "ft_pct",
+                    "stl", "blk", "tov", "oreb", "dreb", "pf", "plus_minus", "pir",
+                ])
 
     # ---------------------------------------------------------- partido a partido --
     log_df = queries.player_game_log(engine, player_id, stats_season_id)

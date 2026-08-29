@@ -1,9 +1,9 @@
 # Propuestas de nuevas funciones para el cuerpo técnico
 
 Índice de las ideas propuestas el **2026-08-28**. Cada una tiene su propio documento, en el
-orden en que se presentaron (impacto/esfuerzo descendente). **Son propuestas, no estado**: nada
-de lo que hay aquí está implementado. El estado real del proyecto vive en
-`doc/features/ingestor/01_estado.md` y en el código.
+orden en que se presentaron (impacto/esfuerzo descendente). **Son propuestas, no estado**, salvo
+donde el propio documento diga otra cosa (la 01 ya está implementada). El estado real del
+proyecto vive en `doc/features/ingestor/01_estado.md` y en el código.
 
 ## El criterio
 
@@ -25,8 +25,8 @@ accionable pesa menos que una peor pero exportable.
 
 | # | Documento | En una línea | Datos que necesita |
 |---|-----------|--------------|--------------------|
-| 01 | [Rotaciones y parciales explicados](01_rotaciones_y_parciales.md) | Timeline de rotaciones con el margen detrás; clic en un parcial → qué quinteto había y qué pasó | Completos |
-| 02 | [Calidad de tiro (xPPS)](02_calidad_de_tiro.md) | Separar la decisión (qué tiro se genera) del acierto (si entra), en ataque y en defensa | Completos |
+| 01 ✅ | [Rotaciones y parciales explicados](01_rotaciones_y_parciales.md) | Timeline de rotaciones con el margen detrás; clic en un parcial → qué quinteto había y qué pasó | Completos |
+| 02 ✅ | [Calidad de tiro (xPPS)](02_calidad_de_tiro.md) | Separar la decisión (qué tiro se genera) del acierto (si entra), en ataque y en defensa | Completos |
 | 03 | [Dossier de scouting del rival](03_dossier_scouting_rival.md) | Un botón → `.pptx` de prepartido con perfil, jugadores clave y claves del partido | Completos |
 | 04 | [Fatiga y calendario ACB+Euroliga](04_fatiga_y_calendario.md) | Descanso real, semanas dobles y carga de minutos, nuestra y del rival | Completos |
 | 05 | [Perfil arbitral](05_perfil_arbitral.md) | Qué pita cada árbitro: faltas, tiros libres, sesgo local, efecto sobre jugadores concretos | Completos |
@@ -45,6 +45,20 @@ pérdidas del rival en los últimos 5 minutos") es técnicamente trivial y serí
 función más usada a diario. **Aparcada porque hoy no se puede enganchar con el sistema de vídeo
 del club** — sin conocer el formato que traga su editor, exportar es adivinar. Queda escrita
 aquí para no perderla: el día que se sepa el formato destino, es de las más baratas de la lista.
+
+## Hallazgos de datos al preparar estas propuestas
+
+Dos cosas que aparecieron al verificar las cifras y que conviene arreglar al margen de lo que se
+implemente:
+
+- **El Barça está duplicado.** `barca` ("Barça", 42 partidos de ACB + 2 de Copa) y `fcb` ("FC
+  Barcelona", 40 de Euroliga) son el mismo club, y el puente de identidad no los une. Real Madrid,
+  Valencia y Baskonia sí están unificados: solo falla el Barça. Bloquea la propuesta
+  [04](04_fatiga_y_calendario.md) y falsea cualquier agregado por club de ese equipo. Ver
+  `tests/ingest/test_identity_collision.py`.
+- **La ficha biográfica está casi vacía**: `height_cm` es NULL en los 968 jugadores, `birth_date`
+  solo existe en 12 y 452 jugadores tienen la posición en blanco. Limita sobre todo a
+  [11](11_similitud_de_jugadores.md).
 
 ## Lo que falta en la ingesta para el siguiente escalón
 

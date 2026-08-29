@@ -499,3 +499,126 @@ def game_play_events(ctx: ToolContext, game_id: str, event_type: str = None) -> 
         gp=len(rows),
         artifact=artifact("table", rows, title="Play-by-play"),
     )
+
+
+# Tope de eventos que se detallan por parcial. El play-by-play de tres
+# minutos son ~20 filas y tres parciales agotarían el presupuesto de filas
+# (`MAX_ROWS`) sin que el modelo necesite el detalle entero para redactar: lo
+# que hace falta es el patrón (tres pérdidas seguidas), no el acta.
+_RUN_EVENTS = 12
+
+
+@register(
+    "game_runs",
+    family="team",
+    description=(
+        "Dónde se decidió un partido: los parciales (ventanas cortas en las que el marcador se "
+        "movió mucho), cada uno con el quinteto que estaba en pista y qué pasó en esos minutos. "
+        "Para '¿en qué momento se fue el partido?'. Necesita game_id: sácalo antes con resolve_game."
+    ),
+    parameters=schema(
+        {
+            "game_id": {"type": "string"},
+            "team_id": {
+                "type": "string",
+                "description": "Desde qué equipo se mira el parcial (por defecto, el equipo propio).",
+            },
+            "window_minutes": {
+                "type": "number",
+                "description": "Duración máxima del parcial en minutos (3 por defecto).",
+            },
+            "min_swing": {
+                "type": "integer",
+                "description": "Puntos que como mínimo se mueve el marcador para llamarlo parcial (8 por defecto).",
+            },
+            "limit": {"type": "integer", "description": "Cuántos parciales detallar (3 por defecto)."},
+        },
+        required=["game_id"],
+    ),
+    artifact="table",
+    requires="play_events",
+)
+def game_runs(
+    ctx: ToolContext,
+    game_id: str,
+    team_id: str = None,
+    window_minutes: float = 3.0,
+    min_swing: int = 8,
+    limit: int = 3,
+) -> dict:
+    """Los parciales de un partido, con quinteto y eventos — la misma lógica que la pantalla.
+
+    Comparte `queries.game_runs`/`window_lineup` con la pestaña "Rotaciones"
+    de "Partidos anteriores" a propósito: dos definiciones distintas de
+    "parcial" —una en el gráfico y otra en el chat— es la forma más rápida de
+    que el asistente y la pantalla se contradigan delante del entrenador.
+    """
+    header = queries_assistant.game_header(ctx.engine, game_id)
+    if header is None:
+        return fail("partido desconocido", detail=f"No existe el partido {game_id!r}.",
+                    suggestion="Usa resolve_game para obtener un game_id válido.")
+
+    sides = (header["home_team_id"], header["away_team_id"])
+    if team_id is not None and team_id not in sides:
+        return fail(
+            "equipo ajeno al partido",
+            detail=f"{team_id!r} no juega el partido {game_id}.",
+            suggestion=f"Los dos equipos de ese partido son {sides[0]!r} y {sides[1]!r}.",
+        )
+    # Por defecto, el punto de vista del equipo propio; si el Baskonia no juega
+    # ese partido (scouting de un rival), el del local. El signo del parcial
+    # ("a favor"/"en contra") solo significa algo con un equipo delante.
+    team = team_id or (ctx.own_team_id if ctx.own_team_id in sides else sides[0])
+
+    runs = queries.game_runs(ctx.engine, game_id, team, float(window_minutes) * 60.0, int(min_swing))
+    if runs.empty:
+        return fail(
+            "sin parciales",
+            detail=(
+                f"En {game_id} no hay ninguna ventana de {window_minutes:g} minutos o menos en la "
+                f"que el marcador se mueva {min_swing} puntos o más."
+            ),
+            suggestion="Baja min_swing o sube window_minutes, o usa game_boxscore para el resumen del partido.",
+        )
+
+    stints = queries.game_stints(ctx.engine, game_id, team)
+    detailed = []
+    for run in runs.head(max(int(limit), 1)).to_dict("records"):
+        # `clean_dict` antes de tocar nada: los valores salen de pandas como
+        # escalares de numpy y el JSON del `tool_result` los serializaría como
+        # texto ("2085.0"), que es justo lo que el modelo acabaría citando.
+        run = clean_dict(run)
+        lineup = queries.window_lineup(stints, run["start_seconds"], run["end_seconds"])
+        events = queries.game_window_events(
+            ctx.engine, game_id, run["start_seconds"], run["end_seconds"], team
+        )
+        run["quinteto"] = " · ".join(lineup["player_name"]) if not lineup.empty else None
+        run["eventos"] = [
+            f"{event['quarter']} {event['game_clock']} · {event['score_for']}-{event['score_against']} · "
+            f"{event['team_name']}: {event['event_type']}"
+            + (f" ({event['player_name']})" if event["player_name"] else "")
+            for event in records(events, limit=_RUN_EVENTS)
+        ]
+        detailed.append(run)
+
+    rows = records(runs)
+    warnings = [
+        "En la lista de eventos de un parcial NO hay tiros: `shots` no guarda ni cuarto ni reloj. "
+        "Los puntos se ven por el salto del marcador — no digas que un parcial fue 'sin canastas'."
+    ]
+    if stints.empty:
+        warnings.append(
+            f"Este partido no tiene tramos de quinteto de {team}: hay parciales, pero no se puede "
+            "decir quién estaba en pista."
+        )
+    return ok(
+        {"game": clean_dict(header), "team_id": team, "parciales": detailed},
+        source="play_events + lineup_stints",
+        scope=(
+            f"{game_id} · {header['game_date']} · visto desde {team} · "
+            f"ventana {window_minutes:g} min · swing >= {min_swing}"
+        ),
+        gp=1,
+        warnings=warnings,
+        artifact=artifact("table", rows, title="Parciales del partido"),
+    )

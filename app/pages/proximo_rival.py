@@ -24,11 +24,19 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
+from analytics import shot_quality
 from components.ask_assistant import ask_assistant_button
 from components.avatar import player_avatar_html, team_crest_html
 from components.court import shot_chart, shot_chart_caption, zone_breakdown, zone_heatmap, zone_heatmap_caption
+from components.glossary import glossary_expander, help_text
 from components.header import page_header
 from components.player_dialog import player_detail
+from components.shot_quality import (
+    league_reference_expander,
+    player_quality_table,
+    quality_caveat,
+    quality_metrics,
+)
 from data import queries
 from data.db import get_read_engine
 
@@ -220,48 +228,79 @@ else:
     tabs = st.tabs(profile_df["competition"].tolist())
     for tab, row in zip(tabs, profile_df.itertuples()):
         with tab:
+            # `help=` en todas: esta fila es la más densa en siglas de la app
+            # (ocho seguidas, cuatro de ellas avanzadas) y es donde antes había
+            # que salir a buscar qué significaba cada una. El texto sale del
+            # glosario (`components/glossary.py`).
             cols = st.columns(8)
-            cols[0].metric("PJ", int(row.gp))
-            cols[1].metric("Ritmo", f"{row.pace:.1f}" if pd.notna(row.pace) else "—")
-            cols[2].metric("ORtg", f"{row.ortg:.1f}" if pd.notna(row.ortg) else "—")
-            cols[3].metric("DRtg", f"{row.drtg:.1f}" if pd.notna(row.drtg) else "—")
-            cols[4].metric("Net", f"{row.net_rating:+.1f}" if pd.notna(row.net_rating) else "—")
-            cols[5].metric("eFG%", f"{row.efg_pct:.1f}" if pd.notna(row.efg_pct) else "—")
-            cols[6].metric("TS%", f"{row.ts_pct:.1f}" if pd.notna(row.ts_pct) else "—")
+            cols[0].metric("PJ", int(row.gp), help=help_text("gp"))
+            cols[1].metric("Ritmo", f"{row.pace:.1f}" if pd.notna(row.pace) else "—", help=help_text("pace"))
+            cols[2].metric("ORtg", f"{row.ortg:.1f}" if pd.notna(row.ortg) else "—", help=help_text("ortg"))
+            cols[3].metric("DRtg", f"{row.drtg:.1f}" if pd.notna(row.drtg) else "—", help=help_text("drtg"))
+            cols[4].metric(
+                "Net", f"{row.net_rating:+.1f}" if pd.notna(row.net_rating) else "—", help=help_text("net_rating")
+            )
+            cols[5].metric("eFG%", f"{row.efg_pct:.1f}" if pd.notna(row.efg_pct) else "—", help=help_text("efg_pct"))
+            cols[6].metric("TS%", f"{row.ts_pct:.1f}" if pd.notna(row.ts_pct) else "—", help=help_text("ts_pct"))
             # `ft_pct` puede ser NaN con `gp` > 0 (partidos sin `ftm`/`fta`
             # cargados, ver el docstring de `team_advanced_profile`) — se
             # distingue de "0%", no se disimula el hueco de cobertura.
-            cols[7].metric("FT%", f"{row.ft_pct:.1f}" if pd.notna(row.ft_pct) else "—")
+            cols[7].metric("FT%", f"{row.ft_pct:.1f}" if pd.notna(row.ft_pct) else "—", help=help_text("ft_pct"))
 
             # Fase 0 (quick win, 2026-08-27): tasas de equipo ya cargadas que
             # ninguna query seleccionaba — % de canastas asistidas, presión
             # defensiva (robos/tapones por posesión rival), ratio AST/TOV.
             if pd.notna(getattr(row, "ast_pct", None)) or pd.notna(getattr(row, "stl_pct", None)):
                 rate_cols = st.columns(5)
-                rate_cols[0].metric("% Asistidas", f"{row.ast_pct:.1f}" if pd.notna(row.ast_pct) else "—")
-                rate_cols[1].metric("% Robo", f"{row.stl_pct:.1f}" if pd.notna(row.stl_pct) else "—")
-                rate_cols[2].metric("% Tapón", f"{row.blk_pct:.1f}" if pd.notna(row.blk_pct) else "—")
-                rate_cols[3].metric("Tasa TL", f"{row.ft_rate:.1f}" if pd.notna(row.ft_rate) else "—")
-                rate_cols[4].metric("AST/TOV", f"{row.ast_to_ratio:.2f}" if pd.notna(row.ast_to_ratio) else "—")
+                rate_cols[0].metric(
+                    "% Asistidas", f"{row.ast_pct:.1f}" if pd.notna(row.ast_pct) else "—", help=help_text("ast_pct")
+                )
+                rate_cols[1].metric(
+                    "% Robo", f"{row.stl_pct:.1f}" if pd.notna(row.stl_pct) else "—", help=help_text("stl_pct")
+                )
+                rate_cols[2].metric(
+                    "% Tapón", f"{row.blk_pct:.1f}" if pd.notna(row.blk_pct) else "—", help=help_text("blk_pct")
+                )
+                rate_cols[3].metric(
+                    "Tasa TL", f"{row.ft_rate:.1f}" if pd.notna(row.ft_rate) else "—", help=help_text("ft_rate")
+                )
+                rate_cols[4].metric(
+                    "AST/TOV",
+                    f"{row.ast_to_ratio:.2f}" if pd.notna(row.ast_to_ratio) else "—",
+                    help=help_text("ast_to_ratio"),
+                )
 
             # Boxscore ampliado de equipo (Fase 1): propio y CONCEDIDO.
             if pd.notna(getattr(row, "stl_avg", None)):
+                # El "(propio·rival)" de la etiqueta dice CÓMO se lee la cifra
+                # pero no qué es; el `help` añade lo segundo, con el mismo
+                # texto que la columna equivalente del boxscore.
+                def _pair_help(key: str) -> str:
+                    return (
+                        f"{help_text(key)} Por partido: primero la media del rival, después la que "
+                        "le hacen a él sus contrarios."
+                    )
+
                 box_cols = st.columns(4)
                 box_cols[0].metric(
                     "Robos (propio·rival)",
                     f"{row.stl_avg:.1f} · {row.opp_stl_avg:.1f}" if pd.notna(row.opp_stl_avg) else f"{row.stl_avg:.1f}",
+                    help=_pair_help("stl"),
                 )
                 box_cols[1].metric(
                     "Tapones (propio·rival)",
                     f"{row.blk_avg:.1f} · {row.opp_blk_avg:.1f}" if pd.notna(row.opp_blk_avg) else f"{row.blk_avg:.1f}",
+                    help=_pair_help("blk"),
                 )
                 box_cols[2].metric(
                     "Pérdidas (propio·rival)",
                     f"{row.tov_avg:.1f} · {row.opp_tov_avg:.1f}" if pd.notna(row.opp_tov_avg) else f"{row.tov_avg:.1f}",
+                    help=_pair_help("tov"),
                 )
                 box_cols[3].metric(
                     "Faltas (propio·rival)",
                     f"{row.pf_avg:.1f} · {row.opp_pf_avg:.1f}" if pd.notna(row.opp_pf_avg) else f"{row.pf_avg:.1f}",
+                    help=_pair_help("pf"),
                 )
             # La procedencia de ORtg/DRtg/ritmo NO es la misma en las dos fuentes y
             # eso cambia cómo hay que leer la cifra — se dice, no se disimula (ver
@@ -279,6 +318,12 @@ else:
                 )
             else:
                 st.caption("ORtg/DRtg/ritmo oficiales de acb.com.")
+
+            glossary_expander([
+                "gp", "pace", "ortg", "drtg", "net_rating", "efg_pct", "ts_pct", "ft_pct",
+                "ast_pct", "stl_pct", "blk_pct", "ft_rate", "ast_to_ratio",
+                "stl", "blk", "tov", "pf",
+            ])
 
 st.divider()
 
@@ -352,9 +397,11 @@ else:
         column_order=["jugadores", "minutes", "plus_minus", "stints"],
         column_config={
             "jugadores": st.column_config.TextColumn("Quinteto", width="large"),
-            "minutes": st.column_config.NumberColumn("Min. juntos", format="%.1f"),
-            "plus_minus": st.column_config.NumberColumn("+/-"),
-            "stints": st.column_config.NumberColumn("Tramos"),
+            "minutes": st.column_config.NumberColumn(
+                "Min. juntos", format="%.1f", help=help_text("lineup_minutes")
+            ),
+            "plus_minus": st.column_config.NumberColumn("+/-", help=help_text("lineup_plus_minus")),
+            "stints": st.column_config.NumberColumn("Tramos", help=help_text("stints")),
         },
     )
 
@@ -476,3 +523,77 @@ else:
         st.altair_chart(zone_heatmap(zone_df, zones_df))
         st.caption(zone_heatmap_caption(zone_df))
     zone_breakdown(zone_df, len(shots_df), scope="team")
+
+st.divider()
+
+# ------------------------------------------------------- calidad de tiro --
+# xPPS del rival, en sus dos lados — propuesta 02
+# (`doc/features/propuestas/02_calidad_de_tiro.md`).
+#
+# Preparando un partido, las dos preguntas son distintas y las dos importan:
+#   - Lo que GENERA: si su %TC alto viene de generar buenos tiros o de estar
+#     acertando por encima de lo que valen (lo segundo se corrige solo, y
+#     defender esperando que siga entrando todo es prepararse mal).
+#   - Lo que CONCEDE: el xPPS que le sacan los demás, por zona. Es la lectura
+#     que dice dónde se le puede castigar sin que la respuesta dependa de si
+#     sus rivales estaban acertados esa noche.
+st.subheader("Calidad de tiro (xPPS)")
+
+if scouting_season_id is None:
+    st.info(f"Sin partidos de {rival_name} cargados: no hay calidad de tiro que medir.")
+else:
+    quality_zones_df = queries.court_zones(engine)
+    rival_counts = queries.team_shot_counts(engine, rival_team_id, scouting_season_id)
+    rival_conceded_counts = queries.team_shot_counts(
+        engine, rival_team_id, scouting_season_id, conceded=True
+    )
+    baseline = shot_quality.league_baseline(queries.league_shot_counts(engine, scouting_season_id))
+    rival_valued = shot_quality.with_expected(rival_counts, baseline)
+    rival_conceded_valued = shot_quality.with_expected(rival_conceded_counts, baseline)
+
+    if rival_valued.empty and rival_conceded_valued.empty:
+        st.info(
+            f"Sin tiros de {rival_name} localizados y clasificados por zona en esa temporada: "
+            "no hay calidad de tiro que medir."
+        )
+    else:
+        attack_col, defense_col = st.columns(2)
+        with attack_col:
+            st.markdown(f"**Ataque de {rival_name}**")
+            quality_metrics(shot_quality.summarize(rival_valued), subject="su ataque")
+        with defense_col:
+            st.markdown(f"**Lo que concede {rival_name}**")
+            quality_metrics(
+                shot_quality.summarize(rival_conceded_valued),
+                subject=f"la defensa de {rival_name}",
+                conceded=True,
+            )
+
+        map_col, table_col = st.columns([1, 1])
+        with map_col:
+            side = st.radio(
+                "Lado",
+                options=["Ataque", "Defensa"],
+                index=1,  # "Defensa" por defecto: es la mitad que dice dónde castigarle
+                horizontal=True,
+                key="rival_quality_side",
+                label_visibility="collapsed",
+            )
+            side_valued = rival_valued if side == "Ataque" else rival_conceded_valued
+            side_zones = shot_quality.zone_profile(side_valued)
+            st.altair_chart(zone_heatmap(side_zones, quality_zones_df, mode="vs_league"))
+            st.caption(zone_heatmap_caption(side_zones, mode="vs_league"))
+        with table_col:
+            st.markdown("**Quién elige bien y quién acierta**")
+            # Desde `player_shot_counts`, no desde `rival_valued`: el corte
+            # por equipo no trae `player_id` (agrega antes de llegar aquí).
+            rival_player_valued = shot_quality.with_expected(
+                queries.player_shot_counts(engine, rival_team_id, scouting_season_id), baseline
+            )
+            player_quality_table(
+                shot_quality.summarize_by(rival_player_valued, ["player_id"], extra=["player_name"])
+            )
+
+        _, coverage = shot_quality.split_usable(rival_counts)
+        quality_caveat(coverage)
+        league_reference_expander(baseline)

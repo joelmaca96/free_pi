@@ -5,6 +5,7 @@ un gráfico Altair a partir de un DataFrame, sin `st.*`), así que se puede
 comprobar directamente el objeto que devuelve sin levantar Streamlit.
 """
 import pandas as pd
+import pytest
 
 from app.components.court import shot_chart, shot_chart_caption
 
@@ -89,3 +90,68 @@ def test_caption_stays_quiet_when_every_shot_is_located():
     caption = shot_chart_caption(_shots([(200.0, 400.0, 1, 1, "Base")]))
 
     assert "sin ubicación exacta" not in caption
+
+
+# ---------------------------------------------------- mapa de zonas: modos --
+# `zone_heatmap` tiene dos escalas de color que contestan preguntas distintas:
+# "¿dónde acertamos más?" (relativa a las zonas del propio gráfico) y "¿dónde
+# somos mejores que los demás?" (absoluta, contra la línea base de liga de
+# `app/analytics/shot_quality.py`). Propuesta 02, §2.
+
+from app.components.court import _diff_color, _HEAT_EMPTY, _zone_styles, zone_heatmap, zone_heatmap_caption
+
+
+def _zone_df(rows):
+    return pd.DataFrame(rows, columns=["zone_label", "volume", "made", "fg_pct", "league_fg_pct", "diff_pp"])
+
+
+def test_vs_league_mode_colors_by_the_distance_to_the_league_not_by_the_own_spread():
+    """Dos zonas que aciertan lo mismo que la liga salen igual de neutras aunque
+    una acierte mucho más que la otra: ese es justo el punto del modo. En modo
+    "fg" la de más acierto saldría verde y la otra roja."""
+    zone_df = _zone_df([
+        ("Pintura", 200, 120, 60.0, 60.0, 0.0),
+        ("Triple exterior", 100, 35, 35.0, 35.0, 0.0),
+    ])
+
+    vs_league = _zone_styles(zone_df, "vs_league")
+    by_fg = _zone_styles(zone_df, "fg")
+
+    assert vs_league["Pintura"][0] == vs_league["Triple exterior"][0]
+    assert by_fg["Pintura"][0] != by_fg["Triple exterior"][0]
+
+
+def test_vs_league_mode_writes_the_difference_in_percentage_points_with_its_sign():
+    styles = _zone_styles(_zone_df([("Pintura", 200, 130, 65.0, 58.9, 6.1)]), "vs_league")
+
+    assert styles["Pintura"][1] == "+6.1 pp"
+    assert styles["Pintura"][2] == "65.0% vs 58.9%"
+
+
+def test_diff_color_saturates_instead_of_letting_a_tiny_sample_dominate_the_map():
+    """Un +30 pp de doce tiros no puede aplastar visualmente al resto del mapa:
+    la escala satura donde satura y ahí se queda."""
+    assert _diff_color(10.0) == _diff_color(45.0)
+    assert _diff_color(-10.0) == _diff_color(-45.0)
+    assert _diff_color(0.0) not in (_diff_color(10.0), _diff_color(-10.0))
+    assert _diff_color(float("nan")) == _HEAT_EMPTY
+
+
+def test_a_zone_without_data_stays_grey_in_both_modes():
+    zone_df = _zone_df([("Pintura", 0, 0, float("nan"), float("nan"), float("nan"))])
+
+    for mode in ("fg", "vs_league"):
+        assert _zone_styles(zone_df, mode)["Pintura"] == (_HEAT_EMPTY, "Sin tiros", "")
+
+
+def test_an_unknown_mode_fails_loudly_instead_of_drawing_the_wrong_map():
+    with pytest.raises(ValueError):
+        zone_heatmap(_zone_df([("Pintura", 10, 5, 50.0, 55.0, -5.0)]), ZONES, mode="liga")
+
+
+def test_zone_heatmap_draws_both_modes_and_says_which_one_it_is_in_the_caption():
+    zone_df = _zone_df([("Pintura", 200, 130, 65.0, 58.9, 6.1)])
+
+    assert zone_heatmap(zone_df, ZONES, mode="vs_league").layer
+    assert "media de la liga" in zone_heatmap_caption(zone_df, mode="vs_league")
+    assert "media de la liga" not in zone_heatmap_caption(zone_df)

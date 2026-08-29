@@ -10,10 +10,14 @@ import datetime as dt
 import altair as alt
 import streamlit as st
 
+from analytics import shot_quality
 from assistant.llm import LLMError, build_llm_client
 from components.ask_assistant import ask_assistant_button
 from components.court import shot_chart, shot_chart_caption
+from components.glossary import abbr, glossary_expander, help_text
 from components.header import page_header
+from components.rotation_chart import event_label, rotation_chart
+from components.shot_quality import quality_caveat, quality_metrics
 from data import queries, queries_assistant
 from data.db import get_read_engine
 from reports import postgame_ppt
@@ -178,8 +182,8 @@ with detail_col:
             width="stretch",
         )
 
-    tab_resumen, tab_box, tab_tiros, tab_quintetos = st.tabs(
-        ["Resumen", "Boxscore", "Tiros", "Quintetos"]
+    tab_resumen, tab_box, tab_tiros, tab_quintetos, tab_rotaciones = st.tabs(
+        ["Resumen", "Boxscore", "Tiros", "Quintetos", "Rotaciones"]
     )
 
     with tab_resumen:
@@ -255,12 +259,18 @@ with detail_col:
                 us_val = us_row[key].iloc[0] if not us_row.empty and us_row[key].notna().iloc[0] else None
                 them_val = them_row[key].iloc[0] if not them_row.empty and them_row[key].notna().iloc[0] else None
                 c1, c2 = st.columns([1, 3])
-                c1.caption(label)
+                # `abbr` y no el `help=` de `st.caption`: ese argumento es
+                # reciente y `app/requirements.txt` admite Streamlit desde la
+                # 1.36. El `<abbr>` es el tooltip del navegador y funciona en
+                # cualquier versión — y aquí, además, el subrayado punteado
+                # avisa de que la sigla se puede consultar.
+                c1.caption(abbr(key, label), unsafe_allow_html=True)
                 c2.markdown(
                     f"**{us_val:.1f}**&nbsp;&nbsp;·&nbsp;&nbsp;:gray[{them_val:.1f}]"
                     if us_val is not None and them_val is not None
                     else "—"
                 )
+            glossary_expander([key for key, _ in metrics])
 
     with tab_box:
         def _render_boxscore(box_df):
@@ -276,20 +286,24 @@ with detail_col:
                     "stl", "blk", "tov", "pf", "plus_minus", "pir",
                 ],
                 column_config={
+                    # `help=` en cada columna: es el hover de la cabecera, que
+                    # explica la sigla donde está y sin ocupar sitio. El texto
+                    # sale del glosario (`components/glossary.py`), única
+                    # definición de cada sigla en toda la interfaz.
                     "player_name": st.column_config.TextColumn("Jugador"),
-                    "minutes": st.column_config.NumberColumn("Min", format="%.1f"),
-                    "pts": st.column_config.NumberColumn("Pts"),
-                    "reb": st.column_config.NumberColumn("Reb"),
-                    "ast": st.column_config.NumberColumn("Ast"),
-                    "efg_pct": st.column_config.NumberColumn("eFG%", format="%.1f"),
+                    "minutes": st.column_config.NumberColumn("Min", format="%.1f", help=help_text("minutes")),
+                    "pts": st.column_config.NumberColumn("Pts", help=help_text("pts")),
+                    "reb": st.column_config.NumberColumn("Reb", help=help_text("reb")),
+                    "ast": st.column_config.NumberColumn("Ast", help=help_text("ast")),
+                    "efg_pct": st.column_config.NumberColumn("eFG%", format="%.1f", help=help_text("efg_pct")),
                     # Boxscore ampliado (Fase 1) — columnas vacías en vez de
                     # ausentes si el partido no lo trae (NULL real en la BD).
-                    "stl": st.column_config.NumberColumn("Rob"),
-                    "blk": st.column_config.NumberColumn("Tap"),
-                    "tov": st.column_config.NumberColumn("PP"),
-                    "pf": st.column_config.NumberColumn("Faltas"),
-                    "plus_minus": st.column_config.NumberColumn("+/-"),
-                    "pir": st.column_config.NumberColumn("PIR"),
+                    "stl": st.column_config.NumberColumn("Rob", help=help_text("stl")),
+                    "blk": st.column_config.NumberColumn("Tap", help=help_text("blk")),
+                    "tov": st.column_config.NumberColumn("PP", help=help_text("tov")),
+                    "pf": st.column_config.NumberColumn("Faltas", help=help_text("pf")),
+                    "plus_minus": st.column_config.NumberColumn("+/-", help=help_text("plus_minus")),
+                    "pir": st.column_config.NumberColumn("PIR", help=help_text("pir")),
                     "player_id": None,
                     "team_id": None,
                     "blk_against": None,
@@ -305,8 +319,62 @@ with detail_col:
         st.divider()
         st.markdown(f"**{rival_name}**")
         _render_boxscore(queries.game_boxscore(engine, game_id, rival_team_id))
+        glossary_expander(
+            ["minutes", "pts", "reb", "ast", "efg_pct", "stl", "blk", "tov", "pf", "plus_minus", "pir"]
+        )
 
     with tab_tiros:
+        # Calidad de tiro (xPPS) — propuesta 02. Va ARRIBA del mapa a
+        # propósito: es lo que separa las dos conversaciones distintas de
+        # después de una derrota ("tiramos bien y no entró" contra "tiramos
+        # mal"), y el mapa de puntos de debajo es el detalle de esa respuesta,
+        # no al revés.
+        #
+        # Los dos bandos juntos, no solo el nuestro: el xPPS CONCEDIDO es la
+        # métrica defensiva honesta del partido, porque no premia que el rival
+        # fallara tiros abiertos — que es justo lo que hace el %TC en contra.
+        game_counts = queries.game_shot_counts(engine, game_id)
+        baseline = shot_quality.league_baseline(queries.league_shot_counts(engine, games_season_id))
+        valued = shot_quality.with_expected(game_counts, baseline)
+        if valued.empty:
+            st.caption(
+                "Sin tiros localizados y clasificados por zona en este partido: no hay calidad "
+                "de tiro que medir."
+            )
+        else:
+            # Referencia con la que comparar la generación de ESTE partido: la
+            # media de la temporada del propio equipo (en ataque y en defensa).
+            # Sin ella, un 1,04 xPPS no dice nada; con ella dice si el partido
+            # se salió de lo normal, que es la pregunta real.
+            season_own = shot_quality.summarize(
+                shot_quality.with_expected(queries.team_shot_counts(engine, team_id, games_season_id), baseline)
+            )
+            season_conceded = shot_quality.summarize(
+                shot_quality.with_expected(
+                    queries.team_shot_counts(engine, team_id, games_season_id, conceded=True), baseline
+                )
+            )
+            own_col, rival_col = st.columns(2)
+            with own_col:
+                st.markdown("**Lo que generamos**")
+                quality_metrics(
+                    shot_quality.summarize(valued.loc[valued["team_id"] == team_id]),
+                    reference_xpps=season_own["xpps"] if season_own["shots"] else None,
+                    subject="nuestro ataque",
+                )
+            with rival_col:
+                st.markdown(f"**Lo que le concedimos a {rival_name}**")
+                quality_metrics(
+                    shot_quality.summarize(valued.loc[valued["team_id"] == rival_team_id]),
+                    reference_xpps=season_conceded["xpps"] if season_conceded["shots"] else None,
+                    subject="nuestra defensa",
+                    conceded=True,
+                )
+            _, coverage = shot_quality.split_usable(game_counts)
+            quality_caveat(coverage)
+            glossary_expander(["xpps", "pps", "diff_shrunk", "shots"])
+        st.divider()
+
         shots_df = queries.game_shots(engine, game_id, team_id)
         if shots_df.empty:
             st.info("Sin tiros con coordenadas para este partido.")
@@ -336,8 +404,13 @@ with detail_col:
                 column_order=["jugadores", "minutes", "plus_minus"],
                 column_config={
                     "jugadores": st.column_config.TextColumn("Quinteto", width="large"),
-                    "minutes": st.column_config.NumberColumn("Min", format="%.1f"),
-                    "plus_minus": st.column_config.NumberColumn("+/-"),
+                    # Claves de quinteto y no de jugador: los mismos minutos y
+                    # el mismo +/- significan otra cosa cuando el sujeto son
+                    # cinco y no uno (ver `components/glossary.py`).
+                    "minutes": st.column_config.NumberColumn(
+                        "Min", format="%.1f", help=help_text("lineup_minutes")
+                    ),
+                    "plus_minus": st.column_config.NumberColumn("+/-", help=help_text("lineup_plus_minus")),
                     "lineup_id": None,
                 },
             )
@@ -365,3 +438,162 @@ with detail_col:
             for row in fouls_df.itertuples():
                 who = f" — {row.player_name}" if row.player_name else ""
                 st.caption(f"{row.quarter} · {row.game_clock} — {row.team_name}{who}")
+
+    with tab_rotaciones:
+        # Rotaciones y parciales explicados
+        # (`doc/features/propuestas/01_rotaciones_y_parciales.md`). La vista es
+        # siempre de UN partido, así que su sitio es esta pantalla y no "Estado
+        # del equipo": lo que responde es "¿dónde se fue ESTE partido, y quién
+        # estaba en pista cuando se fue?".
+        stints_df = queries.game_stints(engine, game_id, team_id)
+        steps_df = queries.game_score_steps(engine, game_id, team_id)
+
+        if stints_df.empty and steps_df.empty:
+            st.info(
+                "Este partido no tiene ni tramos de quinteto ni play-by-play tipado: se ingirió "
+                "antes de las fases que los cargan."
+            )
+        else:
+            if steps_df.empty:
+                st.warning(
+                    "Sin play-by-play tipado en este partido: se ven las rotaciones, pero no el "
+                    "margen de fondo ni los parciales."
+                )
+            if stints_df.empty:
+                st.warning(
+                    "Sin tramos de quinteto en este partido: se ve el marcador, pero no quién "
+                    "estaba en pista."
+                )
+
+            # Los dos umbrales van en la interfaz y no en el código: cada
+            # entrenador tiene su idea de "parcial preocupante", y 8 puntos en
+            # 3 minutos es el punto de partida, no la definición.
+            c_window, c_swing = st.columns(2)
+            window_min = c_window.slider(
+                "Duración máxima del parcial (min)", 1.0, 6.0, 3.0, 0.5,
+                key=f"run_window_{game_id}",
+            )
+            min_swing = c_swing.slider(
+                "Diferencia mínima del parcial (puntos)", 4, 20, 8,
+                key=f"run_swing_{game_id}",
+            )
+            runs_df = queries.game_runs(engine, game_id, team_id, window_min * 60.0, min_swing)
+
+            st.altair_chart(
+                rotation_chart(stints_df, steps_df, runs_df, title="Baskonia"),
+                width="stretch",
+            )
+            st.caption(
+                "Barras = minutos en pista · fondo = margen del marcador (🟢 a favor, 🔴 en contra) · "
+                "franjas sombreadas = parciales detectados con los umbrales de arriba."
+            )
+
+            if runs_df.empty:
+                st.info(
+                    f"Ningún parcial de {min_swing} puntos o más en {window_min:g} minutos o menos. "
+                    "Baja los umbrales para ver movimientos más pequeños."
+                )
+            else:
+                choice = st.selectbox(
+                    f"Parciales detectados ({len(runs_df)}), del mayor al menor",
+                    options=runs_df["label"].tolist(),
+                    key=f"run_pick_{game_id}",
+                    # La propia etiqueta es una sigla más ("Q4 05:15 a Q4
+                    # 03:20 · 13-3 (+10)") y no se explica sola.
+                    help=(
+                        "Se lee: desde qué reloj hasta qué reloj, los puntos del parcial "
+                        "(a favor-en contra) y, entre paréntesis, cuánto se movió la diferencia "
+                        "en el marcador. Positivo = a favor del Baskonia."
+                    ),
+                )
+                run = runs_df[runs_df["label"] == choice].iloc[0]
+
+                lineup_col, events_col = st.columns([1, 2], gap="medium")
+                with lineup_col:
+                    st.markdown("**Quinteto del parcial**")
+                    lineup_df = queries.window_lineup(stints_df, run["start_seconds"], run["end_seconds"])
+                    if lineup_df.empty:
+                        st.caption("Sin tramos de quinteto que solapen esta ventana.")
+                    else:
+                        st.dataframe(
+                            lineup_df,
+                            hide_index=True,
+                            width="stretch",
+                            column_order=["player_name", "minutes", "share"],
+                            column_config={
+                                "player_name": st.column_config.TextColumn("Jugador"),
+                                "minutes": st.column_config.NumberColumn(
+                                    "Min", format="%.1f", help=help_text("run_minutes")
+                                ),
+                                "share": st.column_config.NumberColumn(
+                                    "% del parcial", format="%.0f", help=help_text("run_share")
+                                ),
+                                "player_id": None,
+                                "seconds": None,
+                            },
+                        )
+                        st.caption(
+                            f"Los cinco del tramo que más pesa en la ventana; los minutos son los "
+                            f"suyos DENTRO del parcial ({run['duration_s'] / 60:.1f} min)."
+                        )
+
+                with events_col:
+                    st.markdown("**Qué pasó en esos minutos**")
+                    events_df = queries.game_window_events(
+                        engine, game_id, run["start_seconds"], run["end_seconds"], team_id
+                    )
+                    if events_df.empty:
+                        st.caption("Sin eventos tipados en esta ventana.")
+                    else:
+                        display_events = events_df.assign(
+                            reloj=events_df["quarter"] + " " + events_df["game_clock"],
+                            evento=events_df["event_type"].map(event_label),
+                            quien=events_df["player_name"].fillna(""),
+                            equipo=events_df["is_own"].map({True: "Baskonia", False: rival_name}),
+                            marcador=(
+                                events_df["score_for"].astype(str) + "-" + events_df["score_against"].astype(str)
+                            ),
+                        )
+                        st.dataframe(
+                            display_events,
+                            hide_index=True,
+                            width="stretch",
+                            column_order=["reloj", "marcador", "equipo", "evento", "quien"],
+                            column_config={
+                                "reloj": st.column_config.TextColumn("Reloj"),
+                                "marcador": st.column_config.TextColumn("Marcador"),
+                                "equipo": st.column_config.TextColumn("Equipo"),
+                                "evento": st.column_config.TextColumn("Evento"),
+                                "quien": st.column_config.TextColumn("Jugador"),
+                            },
+                        )
+                    # Limitación que el entrenador tiene que ver AQUÍ y no
+                    # deducir (§5 de la propuesta): `shots` no guarda ni cuarto
+                    # ni reloj, así que ningún tiro puede salir en esta lista.
+                    st.caption(
+                        "⚠ Los tiros no salen en esta lista: la fuente no les guarda ni cuarto ni "
+                        "reloj. Los puntos se leen por el salto del marcador."
+                    )
+
+            with st.expander(f"Rotaciones de {rival_name}"):
+                rival_stints = queries.game_stints(engine, game_id, rival_team_id)
+                rival_steps = queries.game_score_steps(engine, game_id, rival_team_id)
+                if rival_stints.empty and rival_steps.empty:
+                    st.info("Sin tramos ni play-by-play del rival en este partido.")
+                else:
+                    st.altair_chart(
+                        rotation_chart(
+                            rival_stints,
+                            rival_steps,
+                            queries.game_runs(engine, game_id, rival_team_id, window_min * 60.0, min_swing),
+                            is_own_team=False,
+                            title=rival_name,
+                        ),
+                        width="stretch",
+                    )
+                    st.caption(
+                        "El mismo gráfico visto desde el rival, para preparar sus patrones de "
+                        "rotación: cuándo descansa a su base, con qué quinteto abre el último cuarto."
+                    )
+
+            glossary_expander(["margin", "run_swing", "run_minutes", "run_share"])

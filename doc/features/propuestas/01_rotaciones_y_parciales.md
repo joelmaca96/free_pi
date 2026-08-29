@@ -1,6 +1,15 @@
 # 01. Gráfico de rotaciones y parciales explicados
 
-**Estado:** propuesta, sin implementar · **Fecha:** 2026-08-28 · **Índice:** [00_indice.md](00_indice.md)
+**Estado:** IMPLEMENTADA (2026-08-28) · **Fecha de la propuesta:** 2026-08-28 · **Índice:** [00_indice.md](00_indice.md)
+
+Vive en la pestaña **Rotaciones** de `app/pages/partidos_anteriores.py`, con el gráfico en
+`app/components/rotation_chart.py`, las consultas en `app/data/queries.py` (`game_stints`,
+`game_score_steps`, `detect_runs`/`game_runs`, `window_lineup`, `game_window_events`) y la
+herramienta `game_runs` del asistente en `app/assistant/tools/team.py`. Se implementó tal como
+está descrita abajo, con dos ajustes: la escalera del marcador se cierra con el resultado
+oficial de `games` (los tiros no son eventos tipados, así que la última canasta puede caer
+después del último evento) y las barras del timeline van en tinta neutra, no en verde, para no
+competir con el verde del margen a favor.
 
 Cifras verificadas contra `data/baskonia.db` el 2026-08-28.
 

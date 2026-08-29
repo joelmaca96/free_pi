@@ -1,9 +1,34 @@
 # 02. Calidad de tiro (xPPS): separar la decisión del acierto
 
-**Estado:** propuesta, sin implementar · **Fecha:** 2026-08-28 · **Índice:** [00_indice.md](00_indice.md)
+**Estado:** IMPLEMENTADA la v1 por zonas (2026-08-28) · **Fecha de la propuesta:** 2026-08-28 ·
+**Índice:** [00_indice.md](00_indice.md)
+
+El cálculo vive en `app/analytics/shot_quality.py` (paquete nuevo, sin Streamlit ni SQLAlchemy),
+las consultas en `app/data/queries.py` (`league_shot_counts`, `team_shot_counts`,
+`game_shot_counts`, `player_shot_counts`), el mapa "vs. liga" en
+`app/components/court.py::zone_heatmap(..., mode="vs_league")`, el pintado compartido en
+`app/components/shot_quality.py` y las herramientas `shot_quality_*` del asistente en
+`app/assistant/tools/shot_quality.py`. Se ve en las tres pantallas: la fila de métricas por
+partido en **Partidos anteriores → Tiros**, y la sección **Calidad de tiro (xPPS)** en *Estado del
+equipo* y *Próximo rival*.
+
+Se implementó tal como está descrita abajo, con tres ajustes:
+
+- **Solo la v1 por zonas.** La v2 por posición (§4.2, rejilla/hexbin suavizado) no está hecha; con
+  ella tampoco haría falta todavía la tabla `shot_quality_grid` de §6, porque la línea base por
+  zonas agregada en SQL son unas decenas de filas y cabe de sobra en `@st.cache_data`.
+- **Referencia con red de seguridad.** La separación por competición es la del documento, pero una
+  celda (competición, zona) con menos de 200 tiros —Copa del Rey y Supercopa casi enteras— toma
+  prestada la referencia agrupada de todas las competiciones en vez de juzgar a nadie con veinte
+  tiros. Se marca (`is_pooled`).
+- **La lectura defensiva cambia los verbos.** Una defensa no "genera" ni "saca" xPPS: lo *concede*
+  y lo *encaja*, y quien acierta es el rival. Con los verbos de ataque la frase se lee justo al
+  revés de lo que dice.
 
 Cifras calculadas sobre `data/baskonia.db` el 2026-08-28 (92.046 tiros localizados y clasificados
-por zona, de 95.263 totales).
+por zona, de 95.263 totales) y reproducidas por el código: la tabla de §3 es literalmente lo que
+devuelve `shot_quality.league_zone_table` (`Pintura` 58,9% / 1,18; esquinas 39,1% / 1,17; media
+distancia central 40,9% / 0,82).
 
 ## 1. El problema del entrenador
 

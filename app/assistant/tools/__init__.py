@@ -31,6 +31,7 @@ from . import context as _context  # noqa: F401  (importar registra sus herramie
 from . import league as _league  # noqa: F401
 from . import lineups as _lineups  # noqa: F401
 from . import player as _player  # noqa: F401
+from . import shot_quality as _shot_quality  # noqa: F401
 from . import sql_escape as _sql_escape  # noqa: F401
 from . import team as _team  # noqa: F401
 from .base import MAX_ROWS, REGISTRY, Tool, ToolContext, ToolInvocation, fail
