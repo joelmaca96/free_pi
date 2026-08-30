@@ -38,6 +38,13 @@ _RIVAL_BAR = "#8f8d86"  # el mismo gris apagado del resto de la interfaz
 _POS = "#008300"        # margen a favor (verde Baskonia)
 _NEG = "#c0392b"        # margen en contra
 _GRID = "#c9c7bf"       # líneas de cuarto, mismo tono tenue que las zonas de `court.py`
+# Faltas (propuesta 06, `doc/features/propuestas/06_gestion_de_faltas.md`
+# §2c): un ámbar propio, ni el verde de "a favor" ni el rojo de "en contra"
+# — una falta no es buena ni mala en sí misma, es un aviso. El bonus usa el
+# MISMO color con otro trazo (raya en vez de marca) porque es la misma cosa
+# acumulada: la 4.ª marca de ese color en el cuarto.
+_FOUL_MARK = "#b5651d"
+_BONUS_LINE = "#b5651d"
 
 #: Un cuarto son 10 minutos y una prórroga 5. Se usan solo para pintar las
 #: líneas divisorias del eje: el dato ya viene situado en segundos absolutos.
@@ -209,6 +216,44 @@ def _stint_layer(stints: pd.DataFrame, order: List[str], bar_color: str, x_scale
     )
 
 
+def _foul_marks_layer(fouls: pd.DataFrame, order: List[str], x_scale: alt.Scale) -> alt.Chart:
+    """Una marca por falta personal, sobre la fila de su jugador.
+
+    Es el "cuándo" que ningún boxscore da (§1 de la propuesta 06): un
+    `mark_tick` corto, no un punto, para que no se confunda con el final de
+    una barra de tramo cuando cae justo encima.
+    """
+    data = fouls.assign(minute=fouls["seconds"] / 60.0, reloj=fouls["quarter"] + " " + fouls["game_clock"])
+    return (
+        alt.Chart(data)
+        .mark_tick(color=_FOUL_MARK, thickness=2, size=16)
+        .encode(
+            x=alt.X("minute:Q", scale=x_scale),
+            y=alt.Y("player_name:N", sort=order, title=None),
+            tooltip=[
+                alt.Tooltip("player_name:N", title="Jugador"),
+                alt.Tooltip("reloj:N", title="Falta"),
+            ],
+        )
+    )
+
+
+def _bonus_layer(bonus: pd.DataFrame, x_scale: alt.Scale) -> alt.Chart:
+    """Raya vertical en el minuto en que el equipo entra en bonus, por cuarto (§4 de la propuesta 06)."""
+    data = bonus.assign(minute=bonus["bonus_seconds"] / 60.0)
+    return (
+        alt.Chart(data)
+        .mark_rule(color=_BONUS_LINE, strokeDash=[2, 2], strokeWidth=1.5)
+        .encode(
+            x=alt.X("minute:Q", scale=x_scale),
+            tooltip=[
+                alt.Tooltip("quarter:N", title="Cuarto"),
+                alt.Tooltip("bonus_clock:N", title="Entra en bonus"),
+            ],
+        )
+    )
+
+
 def rotation_chart(
     stints: pd.DataFrame,
     steps: pd.DataFrame,
@@ -216,8 +261,10 @@ def rotation_chart(
     *,
     is_own_team: bool = True,
     title: Optional[str] = None,
+    fouls: Optional[pd.DataFrame] = None,
+    bonus: Optional[pd.DataFrame] = None,
 ) -> alt.LayerChart:
-    """Timeline de rotaciones + margen de fondo + franjas de parcial.
+    """Timeline de rotaciones + margen de fondo + franjas de parcial + faltas.
 
     Args:
         stints: `queries.game_stints` del equipo que se pinta (una fila por
@@ -231,6 +278,12 @@ def rotation_chart(
         is_own_team: solo cambia el color de las barras (Baskonia en tinta,
             rival en gris) — el resto del gráfico es idéntico, que es lo que
             permite compararlos de un vistazo.
+        fouls: `queries_assistant.foul_timeline` ya filtrado a
+            `event_type == 'foul_personal'` y a ESTE equipo (propuesta 06,
+            §2c). Sin tramos (`stints` vacío) no hay fila donde ponerla, así
+            que se ignora en ese caso aunque venga rellena.
+        bonus: `queries_assistant.foul_bonus_minutes` ya filtrado a ESTE
+            equipo. Opcional — sin él el gráfico sigue siendo legible.
     """
     layers: List[alt.Chart] = []
     end_minutes = 40.0
@@ -250,6 +303,8 @@ def rotation_chart(
         layers += _margin_layers(steps, _margin_domain(steps), x_scale)
     if runs is not None and not runs.empty:
         layers.append(_run_layer(runs, x_scale))
+    if bonus is not None and not bonus.empty:
+        layers.append(_bonus_layer(bonus, x_scale))
 
     marks = _quarter_marks(end_minutes)
     if marks:
@@ -265,6 +320,10 @@ def rotation_chart(
         layers.append(
             _stint_layer(stints, order, _OWN_BAR if is_own_team else _RIVAL_BAR, x_scale)
         )
+        if fouls is not None and not fouls.empty:
+            own_fouls = fouls[fouls["player_name"].isin(order)]
+            if not own_fouls.empty:
+                layers.append(_foul_marks_layer(own_fouls, order, x_scale))
 
     return (
         alt.layer(*layers)

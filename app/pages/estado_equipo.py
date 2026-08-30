@@ -20,7 +20,7 @@ from components.shot_quality import (
     quality_caveat,
     quality_metrics,
 )
-from data import queries
+from data import queries, queries_assistant
 from data.db import get_read_engine
 
 engine = get_read_engine()
@@ -282,6 +282,112 @@ else:
         "reconstruidos ha aparecido (sustituciones incluidas)."
     )
     glossary_expander(["lineup_minutes", "lineup_plus_minus", "stints"])
+
+st.divider()
+
+# ------------------------------------------------------ gestión de faltas --
+# Propuesta 06 (`doc/features/propuestas/06_gestion_de_faltas.md`), parte
+# (a): perfil de faltas de la plantilla. Después de "Quintetos" y antes de
+# "Mapa de tiros" — es lectura de rotación, como lo de arriba, no de tiro.
+st.subheader("Gestión de faltas")
+
+c_n1, c_min1, c_n2, c_min2 = st.columns(4)
+early_n1 = c_n1.number_input("Faltas (regla 1)", min_value=1, max_value=5, value=2, key="foul_early_n1")
+early_min1 = c_min1.number_input("Antes del minuto", min_value=1, max_value=40, value=10, key="foul_early_min1")
+early_n2 = c_n2.number_input("Faltas (regla 2)", min_value=1, max_value=5, value=3, key="foul_early_n2")
+early_min2 = c_min2.number_input("Antes del minuto", min_value=1, max_value=40, value=20, key="foul_early_min2")
+st.caption(
+    "\"Carga temprana\" = cumplir cualquiera de las dos reglas (§4 de la propuesta 06). Los valores "
+    "de fábrica (2 antes del 10, 3 antes del 20) son un punto de partida, no una definición fija."
+)
+
+foul_df = queries_assistant.foul_profile(
+    engine, team_id, season_id, int(early_n1), float(early_min1), int(early_n2), float(early_min2)
+)
+
+if foul_df.empty:
+    st.info(
+        "Sin boxscore ampliado o sin play-by-play tipado para el Baskonia en esta temporada: no hay "
+        "faltas que perfilar todavía."
+    )
+else:
+    baseline_margin = foul_df["team_margin_per_min_season"].dropna()
+    if not baseline_margin.empty:
+        st.metric(
+            "Margen habitual del equipo",
+            f"{baseline_margin.iloc[0]:+.2f} pts/min",
+            help=help_text("team_margin_per_min_season"),
+        )
+
+    display_foul = foul_df.sort_values(["early_trouble_games", "pf_per40"], ascending=False)
+    st.dataframe(
+        display_foul,
+        hide_index=True,
+        width="stretch",
+        column_order=[
+            "player_name", "gp", "pf_per40", "min_2nd_foul_avg", "min_3rd_foul_avg",
+            "early_trouble_games", "minutes_lost_avg", "bench_gap_avg_min", "bench_margin_per_min",
+        ],
+        column_config={
+            "player_name": st.column_config.TextColumn("Jugador"),
+            "gp": st.column_config.NumberColumn("PJ", help=help_text("gp")),
+            "pf_per40": st.column_config.NumberColumn("Faltas/40", format="%.1f", help=help_text("pf_per40")),
+            "min_2nd_foul_avg": st.column_config.NumberColumn(
+                "Min. 2.ª falta", format="%.1f", help=help_text("min_2nd_foul_avg")
+            ),
+            "min_3rd_foul_avg": st.column_config.NumberColumn(
+                "Min. 3.ª falta", format="%.1f", help=help_text("min_3rd_foul_avg")
+            ),
+            "early_trouble_games": st.column_config.NumberColumn(
+                "Cargas tempranas", help=help_text("early_trouble_games")
+            ),
+            "minutes_lost_avg": st.column_config.NumberColumn(
+                "Min. perdidos (aprox.)", format="%.1f", help=help_text("minutes_lost_avg")
+            ),
+            "bench_gap_avg_min": st.column_config.NumberColumn(
+                "Hueco real (min)", format="%.1f", help=help_text("bench_gap_avg_min")
+            ),
+            "bench_margin_per_min": st.column_config.NumberColumn(
+                "Margen en el hueco", format="%+.2f", help=help_text("bench_margin_per_min")
+            ),
+        },
+    )
+    st.caption(
+        "Ordenado por cargas tempranas y, a igualdad, por faltas/40. Min./Hueco/Margen en blanco = ese "
+        "jugador no tuvo ningún partido con carga temprana con los umbrales de arriba."
+    )
+    st.warning(
+        "⚠ El margen durante el hueco es DESCRIPTIVO, no una recomendación: el rival, el momento y el "
+        "marcador de esos minutos concretos no son comparables sin más con un minuto cualquiera de la "
+        "temporada. No leer como \"sentarlo cuesta X puntos\"."
+    )
+
+    with st.expander("Reparto de faltas por cuarto"):
+        st.dataframe(
+            foul_df.sort_values("pf_q1_share", ascending=False),
+            hide_index=True,
+            width="stretch",
+            column_order=["player_name", "pf_q1_share", "pf_q2_share", "pf_q3_share", "pf_q4_share", "pf_ot_share"],
+            column_config={
+                "player_name": st.column_config.TextColumn("Jugador"),
+                "pf_q1_share": st.column_config.NumberColumn("Q1 %", format="%.0f", help=help_text("pf_quarter_share")),
+                "pf_q2_share": st.column_config.NumberColumn("Q2 %", format="%.0f", help=help_text("pf_quarter_share")),
+                "pf_q3_share": st.column_config.NumberColumn("Q3 %", format="%.0f", help=help_text("pf_quarter_share")),
+                "pf_q4_share": st.column_config.NumberColumn("Q4 %", format="%.0f", help=help_text("pf_quarter_share")),
+                "pf_ot_share": st.column_config.NumberColumn("OT %", format="%.0f", help=help_text("pf_quarter_share")),
+            },
+        )
+        st.caption("Suman 100% por fila. Ordenado por quién más acumula en el primer cuarto.")
+
+    st.caption(
+        "No se distingue el tipo de falta (en tiro, antideportiva, técnica): la fuente no lo guarda con "
+        "fiabilidad, así que todas cuentan igual (§5 de la propuesta 06)."
+    )
+    glossary_expander([
+        "gp", "pf_per40", "min_2nd_foul_avg", "min_3rd_foul_avg", "early_trouble_games",
+        "minutes_lost_avg", "bench_gap_avg_min", "bench_margin_per_min", "team_margin_per_min_season",
+        "pf_quarter_share",
+    ])
 
 st.divider()
 

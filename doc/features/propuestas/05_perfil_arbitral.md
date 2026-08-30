@@ -1,6 +1,19 @@
 # 05. Perfil arbitral
 
-**Estado:** propuesta, sin implementar · **Fecha:** 2026-08-28 · **Índice:** [00_indice.md](00_indice.md)
+**Estado:** IMPLEMENTADA (2026-08-30) · **Fecha de la propuesta:** 2026-08-28 · **Índice:** [00_indice.md](00_indice.md)
+
+Tabla nueva `game_referees` (aditiva, poblada por `ingest/common/loader.py::_replace_game_referees`
+en cada partido nuevo y por `tools/backfill_game_referees.py --apply` para los 736 ya cargados —
+ejecutada sobre `data/baskonia.db`: 2.208 filas, 100 árbitros distintos tras canonicalizar). Nombres
+canonicalizados en `packages/baskonia_core/referees.py` (§5: revisados a mano los 104 nombres
+crudos, dos pares se fusionan solo por acento y dos más necesitan alias porque Euroliga da el
+nombre más corto que ACB para la misma persona). Consultas en `app/data/queries_assistant.py`
+(`referees_for_game`, `referee_rankings`, `referee_profile`, `referee_team_history`,
+`player_referee_effect`, `all_referee_names`). Interfaz: ficha por árbitro con selector manual en
+`app/pages/proximo_rival.py` (la terna de un partido futuro no vive en `games` hasta que se juega,
+así que se teclea en cuanto se anuncia) y ficha automática de la terna ya conocida en
+`app/pages/partidos_anteriores.py`, ambas detrás del interruptor `capabilities.game_metadata` (§6).
+Tests en `tests/test_referees.py`, `tests/ingest/test_loader.py` y `tests/app/test_referee_profile.py`.
 
 Cifras calculadas sobre `data/baskonia.db` el 2026-08-28 (736 partidos con terna).
 

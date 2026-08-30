@@ -505,6 +505,31 @@ CREATE TABLE play_events (
 CREATE INDEX idx_play_events_game_team ON play_events(game_id, team_id);
 CREATE INDEX idx_play_events_type ON play_events(game_id, event_type);
 
+-- Árbitros de un partido, una fila por árbitro (Fase 5, perfil arbitral —
+-- doc/features/propuestas/05_perfil_arbitral.md). `games.referees` guarda la
+-- terna cruda como una única cadena unida por " · " (§3 de ese documento);
+-- trocearla en SQL en cada consulta sería lento y frágil, así que se
+-- normaliza UNA VEZ en la ingesta (`ingest/common/loader.py::
+-- _replace_game_referees`) y se deja aquí, una fila por árbitro, dejando
+-- `games.referees` intacta como dato crudo de origen.
+--
+-- `referee_name` no es el texto crudo de la fuente: pasa antes por
+-- `packages/baskonia_core/referees.py::canonical_referee_name`, que a su vez
+-- usa `names.py::normalize_name` (acentos/mayúsculas) más un pequeño alias a
+-- mano para los casos que la normalización genérica no resuelve (Euroliga da
+-- nombres más cortos que ACB para la misma persona — verificado en vivo
+-- contra los 104 nombres distintos de `data/baskonia.db`, ver ese módulo).
+-- Sin esto, el mismo árbitro escrito de dos formas parte su muestra en dos y
+-- ningún ranking por árbitro individual (§3 del documento: la terna no tiene
+-- muestra, pero el árbitro suelto sí) es fiable.
+CREATE TABLE game_referees (
+  game_id       TEXT NOT NULL REFERENCES games(id),
+  referee_name  TEXT NOT NULL,               -- ya canonicalizado, ver referees.py
+  position      INTEGER NOT NULL CHECK (position BETWEEN 1 AND 3),
+  PRIMARY KEY (game_id, position)
+);
+CREATE INDEX idx_game_referees_name ON game_referees(referee_name);
+
 -- Progresión de marcador (hoy interpolada de forma sintética entre 0 y el
 -- resultado final; en producción, marcador real por posesión/minuto).
 CREATE TABLE score_progression (

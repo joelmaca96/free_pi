@@ -20,6 +20,8 @@ from typing import Dict, List, Set
 from sqlalchemy import bindparam, text
 from sqlalchemy.engine import Connection, Engine
 
+from packages.baskonia_core.referees import canonical_referee_name
+
 from .schema_types import NormalizedGame
 
 logger = logging.getLogger(__name__)
@@ -76,6 +78,7 @@ def load_game(conn: Connection, game: NormalizedGame) -> None:
     _replace_shots(conn, game.id, game.shots)
     _replace_zone_stats_from_shots(conn, game.id, game.shots)
     _replace_key_events(conn, game.id, game.key_events)
+    _replace_game_referees(conn, game.id, game.referees)
     _replace_score_progression(conn, game.id, game.score_progression)
     _replace_player_quarter_stats(conn, game.id, game.quarter_boxscore)
     _replace_player_advanced_stats(conn, game.id, game.player_advanced)
@@ -483,6 +486,35 @@ def _replace_key_events(conn: Connection, game_id: str, events: List) -> None:
                 "clock": event.game_clock,
                 "label": event.label,
             },
+        )
+
+
+def _replace_game_referees(conn: Connection, game_id: str, referees: object) -> None:
+    """Trocea `games.referees` (Fase 5, perfil arbitral) en filas de `game_referees`.
+
+    Mismo patrón "borrar por `game_id` y reinsertar" que `key_events`/`shots`:
+    tabla de detalle sin clave natural propia más allá de `(game_id,
+    position)`. `referees` llega ya unido por " · " (ver
+    `ingest/acb/adapter.py`/`ingest/euroleague/adapter.py`) — se separa por
+    "·" a secas y se recorta cada trozo, así que da igual si la fuente puso
+    espacios alrededor o no. `None`/cadena vacía = partido sin terna
+    registrada (1 de 737 en `data/baskonia.db`, ver
+    doc/features/propuestas/05_perfil_arbitral.md §3): no inserta nada, no
+    "tres árbitros en blanco".
+
+    Cada nombre pasa por `canonical_referee_name` ANTES de guardarse — es la
+    decisión de diseño central de esta tabla (§3/§6 del documento): sin
+    canonicalizar aquí, el mismo árbitro escrito de dos formas por fuentes
+    distintas partiría su muestra en dos en cualquier agregación posterior.
+    """
+    conn.execute(text("DELETE FROM game_referees WHERE game_id = :g"), {"g": game_id})
+    if not referees:
+        return
+    names = [name.strip() for name in referees.split("·") if name.strip()]
+    for position, name in enumerate(names, start=1):
+        conn.execute(
+            text("INSERT INTO game_referees (game_id, referee_name, position) VALUES (:g, :name, :position)"),
+            {"g": game_id, "name": canonical_referee_name(name), "position": position},
         )
 
 

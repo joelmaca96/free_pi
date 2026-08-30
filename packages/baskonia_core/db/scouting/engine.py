@@ -38,6 +38,7 @@ TABLE_NAMES = [
     "shots",
     "key_events",
     "play_events",  # Fase 2
+    "game_referees",  # Fase 5 (perfil arbitral)
     "score_progression",
     "upcoming_matchups",
 ]
@@ -70,6 +71,7 @@ _ADDITIVE_TABLES = [
     "play_events",              # Fase 2
     "player_game_quarter_stats",  # Fase 3, ACB-only
     "player_advanced_stats",    # Fase 4, ACB-only
+    "game_referees",            # Fase 5 (perfil arbitral)
 ]
 
 # Columnas añadidas a `schema.sql` DESPUÉS de que ya hubiera bases de datos

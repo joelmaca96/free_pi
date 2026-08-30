@@ -29,7 +29,7 @@ accionable pesa menos que una peor pero exportable.
 | 02 ✅ | [Calidad de tiro (xPPS)](02_calidad_de_tiro.md) | Separar la decisión (qué tiro se genera) del acierto (si entra), en ataque y en defensa | Completos |
 | 03 ✅ | [Dossier de scouting del rival](03_dossier_scouting_rival.md) | Un botón → `.pptx` de prepartido con perfil, jugadores clave y claves del partido | Completos |
 | 04 ✅ | [Fatiga y calendario ACB+Euroliga](04_fatiga_y_calendario.md) | Descanso real, semanas dobles y carga de minutos, nuestra y del rival | Completos |
-| 05 | [Perfil arbitral](05_perfil_arbitral.md) | Qué pita cada árbitro: faltas, tiros libres, sesgo local, efecto sobre jugadores concretos | Completos |
+| 05 ✅ | [Perfil arbitral](05_perfil_arbitral.md) | Qué pita cada árbitro: faltas, tiros libres, sesgo local, efecto sobre jugadores concretos | Completos |
 | 06 | [Gestión de faltas](06_gestion_de_faltas.md) | Minuto exacto de cada falta: quién se carga pronto, a quién no ponerle mano | Completos |
 | 07 | [On/Off y duplas](07_onoff_y_duplas.md) | Rendimiento del equipo con y sin cada jugador, y por parejas/tríos | Completos (parte ya existe en el asistente) |
 | 08 | [Dónde castigar al rival](08_donde_castigar_al_rival.md) | Cruce de lo que el rival concede por zona con lo que nosotros metemos | Completos |

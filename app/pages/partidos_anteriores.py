@@ -121,6 +121,52 @@ with detail_col:
         if meta_bits:
             st.caption(" · ".join(meta_bits))
 
+    # Ficha arbitral (propuesta 05, `doc/features/propuestas/05_perfil_arbitral.md`
+    # §6): a diferencia de "Próximo rival" (donde la terna todavía no se
+    # conoce y hay que teclearla), aquí el partido YA se jugó — `referees_for_game`
+    # da la terna exacta, ya canonicalizada, sin que el usuario tenga que
+    # buscarla a mano.
+    referees_df = queries_assistant.referees_for_game(engine, game_id)
+    if not referees_df.empty:
+        with st.expander(f"🧑‍⚖️ Ficha arbitral ({', '.join(referees_df['referee_name'])})"):
+            for referee_name in referees_df["referee_name"]:
+                st.markdown(f"**{referee_name}**")
+                profile = queries_assistant.referee_profile(engine, referee_name, games_season_id)
+                if profile is None:
+                    st.caption(
+                        f"Muestra insuficiente en la temporada (menos de "
+                        f"{queries_assistant.REFEREE_MIN_GAMES_TO_SHOW} partidos con datos completos)."
+                    )
+                    continue
+
+                metric_cols = st.columns(4)
+                metric_cols[0].metric("Partidos", int(profile["gp"]), help=help_text("gp"))
+                metric_cols[1].metric(
+                    "Faltas/partido", f"{profile['pf_residual']:+.1f}", help=help_text("referee_pf_residual")
+                )
+                metric_cols[2].metric(
+                    "Sesgo local (TL)", f"{profile['home_bias_fta']:+.1f}", help=help_text("referee_home_bias_fta")
+                )
+                metric_cols[3].metric(
+                    "Ritmo", f"{profile['pace_residual']:+.1f}", help=help_text("referee_pace_residual")
+                )
+                if profile["sample_size"] == "caution":
+                    st.caption(f"⚠ Solo {int(profile['gp'])} partidos esta temporada: tendencia gruesa.")
+
+                history = queries_assistant.referee_team_history(engine, referee_name, games_season_id, team_id)
+                if history is not None and history["pf_avg"] is not None:
+                    baseline_bit = (
+                        f" (media de temporada: {history['season_pf_avg']:.1f})"
+                        if history.get("season_pf_avg") is not None else ""
+                    )
+                    st.caption(
+                        f"Con el Baskonia esta temporada: {history['wins']}–{history['losses']}, "
+                        f"{history['pf_avg']:.1f} faltas señaladas/partido{baseline_bit}."
+                    )
+            glossary_expander(
+                ["referee_pf_residual", "referee_home_bias_fta", "referee_pace_residual"]
+            )
+
     # Entrada contextual al chat (ver `local/features/005-chatbot/01_design.md`
     # §9.4): se salta al asistente con la pregunta escrita y con el partido ya
     # dicho, para no tener que repetirlo en la conversación.
@@ -448,6 +494,18 @@ with detail_col:
         stints_df = queries.game_stints(engine, game_id, team_id)
         steps_df = queries.game_score_steps(engine, game_id, team_id)
 
+        # Faltas sobre el timeline (propuesta 06, §2c): momento exacto de
+        # cada falta personal, más el minuto en que cada equipo entra en
+        # bonus por cuarto. Se piden una vez para el partido entero y se
+        # filtran por equipo abajo — `foul_timeline`/`foul_bonus_minutes` no
+        # distinguen "propio" de "rival", igual que `game_stints`.
+        foul_events_df = queries_assistant.foul_timeline(engine, game_id)
+        personal_fouls_df = (
+            foul_events_df[foul_events_df["event_type"] == "foul_personal"]
+            if not foul_events_df.empty else foul_events_df
+        )
+        bonus_df = queries_assistant.foul_bonus_minutes(foul_events_df)
+
         if stints_df.empty and steps_df.empty:
             st.info(
                 "Este partido no tiene ni tramos de quinteto ni play-by-play tipado: se ingirió "
@@ -480,12 +538,17 @@ with detail_col:
             runs_df = queries.game_runs(engine, game_id, team_id, window_min * 60.0, min_swing)
 
             st.altair_chart(
-                rotation_chart(stints_df, steps_df, runs_df, title="Baskonia"),
+                rotation_chart(
+                    stints_df, steps_df, runs_df, title="Baskonia",
+                    fouls=personal_fouls_df[personal_fouls_df["team_id"] == team_id],
+                    bonus=bonus_df[bonus_df["team_id"] == team_id],
+                ),
                 width="stretch",
             )
             st.caption(
                 "Barras = minutos en pista · fondo = margen del marcador (🟢 a favor, 🔴 en contra) · "
-                "franjas sombreadas = parciales detectados con los umbrales de arriba."
+                "franjas sombreadas = parciales detectados con los umbrales de arriba · marca ámbar = "
+                "falta personal · raya ámbar discontinua = el equipo entra en bonus ese cuarto."
             )
 
             if runs_df.empty:
@@ -588,6 +651,8 @@ with detail_col:
                             queries.game_runs(engine, game_id, rival_team_id, window_min * 60.0, min_swing),
                             is_own_team=False,
                             title=rival_name,
+                            fouls=personal_fouls_df[personal_fouls_df["team_id"] == rival_team_id],
+                            bonus=bonus_df[bonus_df["team_id"] == rival_team_id],
                         ),
                         width="stretch",
                     )

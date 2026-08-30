@@ -350,6 +350,83 @@ def game_play_events(_engine: Engine, game_id: str, event_type: Optional[str] = 
 
 
 @st.cache_data(ttl=_TTL, show_spinner=False)
+def foul_timeline(_engine: Engine, game_id: str) -> pd.DataFrame:
+    """Faltas de un partido, cometidas y provocadas, con reloj exacto y equipo.
+
+    Gestión de faltas (`doc/features/propuestas/06_gestion_de_faltas.md`,
+    §2c): es `game_play_events` acotado a los dos tipos de falta, con
+    `team_id` añadido — que `game_play_events` no trae — porque la capa de
+    marcas sobre el timeline de rotaciones
+    ([01](../../doc/features/propuestas/01_rotaciones_y_parciales.md))
+    necesita saber de qué equipo es cada falta para pintarla sobre la barra
+    correcta, y `foul_bonus_minutes` necesita agrupar por (`team_id`,
+    `quarter`) para saber cuándo un equipo entra en bonus.
+
+    Returns:
+        `event_type` ('foul_personal'|'foul_drawn'), `team_id`, `team_name`,
+        `player_id`, `player_name`, `quarter`, `game_clock`, `seconds`, en
+        orden cronológico. Vacío si el partido no tiene play-by-play tipado
+        (fase 2 sin reingerir para ese partido).
+    """
+    sql = text("""
+        SELECT pe.event_type, pe.team_id, t.name AS team_name,
+               p.id AS player_id, p.name AS player_name,
+               pe.quarter, pe.game_clock, pe.seconds
+        FROM play_events pe
+        JOIN teams t ON t.id = pe.team_id
+        LEFT JOIN players p ON p.id = pe.player_id
+        WHERE pe.game_id = :game_id
+          AND pe.event_type IN ('foul_personal', 'foul_drawn')
+        ORDER BY pe.seconds
+    """)
+    return pd.read_sql(sql, _engine, params={"game_id": game_id})
+
+
+def foul_bonus_minutes(events: pd.DataFrame) -> pd.DataFrame:
+    """Minuto en que cada equipo entra en bonus, cuarto a cuarto.
+
+    Bonus = 4.ª falta de EQUIPO en el cuarto (§4 de la propuesta 06): a
+    partir de ahí, las siguientes faltas del mismo cuarto regalan tiros
+    libres, y es justo el dato que hoy no se ve en ningún sitio ("entramos
+    en bonus en el minuto 4 del tercer cuarto" — causa habitual de parcial).
+
+    Función PURA sobre la salida de `foul_timeline`, sin tocar la base de
+    datos — mismo patrón que `queries.detect_runs` sobre `game_score_steps`:
+    encadenar una consulta cacheada dentro de otra no gana nada aquí, la
+    entrada ya está en memoria.
+
+    Args:
+        events: salida de `foul_timeline` (de un único partido).
+
+    Returns:
+        `team_id, team_name, quarter, bonus_seconds, bonus_clock`, una fila
+        por (equipo, cuarto) que llegó a la 4.ª falta. Vacío si ninguno la
+        alcanzó. Como documenta §5 de la propuesta, `event_detail` no
+        distingue con fiabilidad falta en tiro/antideportiva/técnica, así
+        que TODAS las `foul_personal` cuentan igual para el bonus — es la
+        misma limitación, no una nueva.
+    """
+    columns = ["team_id", "team_name", "quarter", "bonus_seconds", "bonus_clock"]
+    if events is None or events.empty:
+        return pd.DataFrame(columns=columns)
+
+    personal = events[events["event_type"] == "foul_personal"].sort_values("seconds")
+    if personal.empty:
+        return pd.DataFrame(columns=columns)
+
+    personal = personal.assign(foul_no=personal.groupby(["team_id", "quarter"]).cumcount() + 1)
+    fourth = personal[personal["foul_no"] == 4]
+    if fourth.empty:
+        return pd.DataFrame(columns=columns)
+
+    return (
+        fourth.rename(columns={"seconds": "bonus_seconds", "game_clock": "bonus_clock"})[columns]
+        .sort_values(["quarter", "team_id"])
+        .reset_index(drop=True)
+    )
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
 def player_advanced_profile(_engine: Engine, player_id: str, season_id: int) -> pd.DataFrame:
     """Avanzadas oficiales por partido de un jugador (Fase 4, ACB-only).
 
@@ -951,3 +1028,698 @@ def compare_entities(
             WHERE t.id IN ({placeholders})
         """)
     return pd.read_sql(sql, _engine, params=params)
+
+
+# ---------- Perfil arbitral (Fase 5, doc/features/propuestas/05_perfil_arbitral.md) ----------
+# `game_referees` es ADITIVA (`packages/baskonia_core/db/scouting/engine.py::
+# _ADDITIVE_TABLES`): una base de datos ya inicializada la gana vacía hasta
+# que se reingiere o se corre `tools/backfill_game_referees.py` sobre lo que
+# ya hay — `inspect(_engine).has_table` protege ese caso, mismo criterio que
+# `player_advanced_profile`/`player_quarter_profile` un poco más arriba.
+
+# Umbrales de presentación (§4 del documento): por debajo de 15 partidos un
+# árbitro no entra en el RANKING (su media se compara mal con la de alguien
+# con 40), pero entre 8 y 14 sí se puede enseñar su ficha individual con
+# aviso; por debajo de 8, ni eso — demasiado poco para que la media diga algo.
+REFEREE_MIN_GAMES_TO_SHOW = 8
+REFEREE_MIN_GAMES_FOR_RANKING = 15
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def referees_for_game(_engine: Engine, game_id: str) -> pd.DataFrame:
+    """Terna de un partido, en orden (`game_referees`, ya canonicalizada).
+
+    Vacío si el partido no tiene terna registrada (1 de 737 en
+    `data/baskonia.db`, ver el documento §3) o si esta base de datos no tiene
+    `game_referees` todavía.
+    """
+    if not inspect(_engine).has_table("game_referees"):
+        return pd.DataFrame(columns=["position", "referee_name"])
+    sql = text("""
+        SELECT position, referee_name
+        FROM game_referees
+        WHERE game_id = :game_id
+        ORDER BY position
+    """)
+    return pd.read_sql(sql, _engine, params={"game_id": game_id})
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def referee_rankings(_engine: Engine, season_id: int) -> pd.DataFrame:
+    """Perfil de todos los árbitros con muestra (§4 del documento): faltas y
+    tiros libres AJUSTADOS por competición, sesgo local/visitante y ritmo.
+
+    El ajuste por competición es OBLIGATORIO, no opcional (§4): hay casi
+    cuatro faltas de diferencia entre ACB y Euroliga (verificado en vivo)
+    frente a un rango total entre árbitros de unas diez — sin corregirlo, el
+    "perfil" de un árbitro mide sobre todo dónde le designan. El residuo se
+    calcula PARTIDO A PARTIDO (faltas del partido - media de SU competición
+    esa temporada, sumando ambos equipos) y se promedia por árbitro, así que
+    un árbitro que reparte su temporada entre ACB y Euroliga no queda mal
+    parado solo por pitar la liga que más se pita.
+
+    Returns:
+        `referee_name, gp, pf_avg, fta_avg, pf_residual, fta_residual,
+        pf_residual_pct, home_bias_fta, pace_avg, pace_residual,
+        sample_size` (`'ok'` con >= `REFEREE_MIN_GAMES_FOR_RANKING` partidos,
+        si no `'caution'`), de más a menos pitado (`pf_residual` descendente).
+        `pf_residual_pct` es el percentil DENTRO del grupo `'ok'` únicamente
+        — compararlo contra árbitros de muestra corta movería el percentil de
+        todo el mundo cada vez que llega uno nuevo a mitad de temporada.
+        Vacío si esta base de datos no tiene `game_referees` todavía, o si
+        ningún árbitro llega al mínimo de partidos para mostrarse.
+    """
+    if not inspect(_engine).has_table("game_referees"):
+        return pd.DataFrame()
+
+    sql = text("""
+        WITH team_fouls AS (
+            SELECT game_id, team_id, pf, fta
+            FROM game_advanced_stats
+            WHERE pf IS NOT NULL AND fta IS NOT NULL
+        ),
+        game_fouls AS (
+            SELECT g.id AS game_id, g.competition_id, g.pace,
+                   SUM(tf.pf) AS total_pf,
+                   SUM(tf.fta) AS total_fta,
+                   MAX(CASE WHEN tf.team_id = g.home_team_id THEN tf.fta END) AS home_fta,
+                   MAX(CASE WHEN tf.team_id = g.away_team_id THEN tf.fta END) AS away_fta
+            FROM games g
+            JOIN team_fouls tf ON tf.game_id = g.id
+            WHERE g.season_id = :season_id
+            GROUP BY g.id
+            HAVING COUNT(*) = 2
+        ),
+        comp_avg AS (
+            SELECT competition_id,
+                   AVG(total_pf) AS avg_pf,
+                   AVG(total_fta) AS avg_fta,
+                   AVG(pace) AS avg_pace
+            FROM game_fouls
+            GROUP BY competition_id
+        )
+        SELECT gr.referee_name,
+               COUNT(*) AS gp,
+               AVG(gf.total_pf) AS pf_avg,
+               AVG(gf.total_fta) AS fta_avg,
+               AVG(gf.total_pf - ca.avg_pf) AS pf_residual,
+               AVG(gf.total_fta - ca.avg_fta) AS fta_residual,
+               AVG(gf.home_fta - gf.away_fta) AS home_bias_fta,
+               AVG(gf.pace) AS pace_avg,
+               AVG(gf.pace - ca.avg_pace) AS pace_residual
+        FROM game_referees gr
+        JOIN game_fouls gf ON gf.game_id = gr.game_id
+        JOIN comp_avg ca ON ca.competition_id = gf.competition_id
+        GROUP BY gr.referee_name
+    """)
+    df = pd.read_sql(sql, _engine, params={"season_id": season_id})
+    if df.empty:
+        return df
+
+    df["sample_size"] = df["gp"].apply(lambda gp: "ok" if gp >= REFEREE_MIN_GAMES_FOR_RANKING else "caution")
+    df = df[df["gp"] >= REFEREE_MIN_GAMES_TO_SHOW].copy()
+    if df.empty:
+        return df
+
+    # Mismo `PERCENT_RANK` que `team_style_percentiles`/`player_percentiles`
+    # en `schema.sql` ((posición - 1) / (n - 1)): con solo dos árbitros de
+    # muestra plena, el de más faltas tiene que quedar en el percentil 1.0 y
+    # el de menos en 0.0, no en 0.5/0.5 (que es lo que daría dividir entre
+    # `n` en vez de `n - 1`). Se calcula en pandas y no en SQL porque el
+    # tamaño del grupo "ok" es pequeño y variable (depende de cuántos
+    # árbitros lleguen al mínimo esta temporada), no una vista fija.
+    ranked_pool = df.loc[df["sample_size"] == "ok", "pf_residual"]
+    pool_size = len(ranked_pool)
+    if pool_size <= 1:
+        df["pf_residual_pct"] = pd.NA
+    else:
+        df["pf_residual_pct"] = df["pf_residual"].apply(lambda v: float((ranked_pool < v).sum()) / (pool_size - 1))
+    return df.sort_values("pf_residual", ascending=False).reset_index(drop=True)
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def referee_profile(_engine: Engine, referee_name: str, season_id: int) -> Optional[dict]:
+    """Ficha de UN árbitro (§2a del documento): una fila de `referee_rankings`.
+
+    `referee_name` debe llegar ya canonicalizado — `referees_for_game` ya lo
+    devuelve así; un nombre suelto con una variante de acento o apellido
+    distinta a la guardada en `game_referees` simplemente no encuentra nada
+    (ver `packages/baskonia_core/referees.py`).
+
+    Returns:
+        Dict con las columnas de `referee_rankings`, o `None` si el árbitro
+        no llega a `REFEREE_MIN_GAMES_TO_SHOW` partidos con datos completos
+        en esta temporada — quien pinte esto debe decir "muestra
+        insuficiente", nunca ocultar sin más al árbitro que le acaban de
+        asignar al próximo partido.
+    """
+    rankings = referee_rankings(_engine, season_id)
+    if rankings.empty:
+        return None
+    match = rankings[rankings["referee_name"] == referee_name]
+    return None if match.empty else match.iloc[0].to_dict()
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def referee_team_history(_engine: Engine, referee_name: str, season_id: int, team_id: str) -> Optional[dict]:
+    """Historial de UN equipo con UN árbitro ("historial con nosotros y con el
+    rival", §2a): se llama una vez con el equipo propio y otra con el rival
+    del próximo partido — nunca cruzando los dos a la vez, porque "nosotros
+    contra este rival con este árbitro" sería una muestra de como mucho un
+    par de partidos (§5: correlación gruesa, no afirmaciones finas).
+
+    Returns:
+        `gp, wins, losses, pf_avg, pf_drawn_avg, season_pf_avg,
+        season_pf_drawn_avg` — las dos últimas de CUALQUIER árbitro en la
+        temporada (`team_stats_combined`), para leer "con este árbitro le
+        pitan más o menos de lo habitual a este equipo". `None` si el equipo
+        no tiene ningún partido con este árbitro en la temporada, o si esta
+        base de datos no tiene `game_referees` todavía.
+    """
+    if not inspect(_engine).has_table("game_referees"):
+        return None
+
+    sql = text("""
+        SELECT CASE WHEN (g.home_team_id = :team_id AND g.home_score > g.away_score)
+                      OR (g.away_team_id = :team_id AND g.away_score > g.home_score)
+                    THEN 1 ELSE 0 END AS win,
+               gas.pf, gas.pf_drawn
+        FROM game_referees gr
+        JOIN games g ON g.id = gr.game_id
+        LEFT JOIN game_advanced_stats gas ON gas.game_id = g.id AND gas.team_id = :team_id
+        WHERE gr.referee_name = :referee_name AND g.season_id = :season_id
+          AND (g.home_team_id = :team_id OR g.away_team_id = :team_id)
+    """)
+    games = pd.read_sql(
+        sql, _engine, params={"referee_name": referee_name, "season_id": season_id, "team_id": team_id}
+    )
+    if games.empty:
+        return None
+
+    season_pf_avg = season_pf_drawn_avg = None
+    if {"pf_avg", "pf_drawn_avg"} <= _view_columns(_engine, "team_stats_combined"):
+        baseline = pd.read_sql(
+            text("SELECT pf_avg, pf_drawn_avg FROM team_stats_combined WHERE team_id = :team_id AND season_id = :season_id"),
+            _engine,
+            params={"team_id": team_id, "season_id": season_id},
+        )
+        if not baseline.empty:
+            season_pf_avg = float(baseline.iloc[0]["pf_avg"]) if pd.notna(baseline.iloc[0]["pf_avg"]) else None
+            season_pf_drawn_avg = (
+                float(baseline.iloc[0]["pf_drawn_avg"]) if pd.notna(baseline.iloc[0]["pf_drawn_avg"]) else None
+            )
+
+    wins = int(games["win"].sum())
+    return {
+        "gp": int(len(games)),
+        "wins": wins,
+        "losses": int(len(games)) - wins,
+        "pf_avg": float(games["pf"].mean()) if games["pf"].notna().any() else None,
+        "pf_drawn_avg": float(games["pf_drawn"].mean()) if games["pf_drawn"].notna().any() else None,
+        "season_pf_avg": season_pf_avg,
+        "season_pf_drawn_avg": season_pf_drawn_avg,
+    }
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def player_referee_effect(_engine: Engine, player_id: str, referee_name: str, season_id: int) -> Optional[dict]:
+    """Faltas por 40 minutos de UN jugador con UN árbitro, frente a su media de
+    temporada con cualquier árbitro (§2b: "¿a nuestro 5 le pitan más con
+    este árbitro?"). Muestra pequeña A PROPÓSITO (serán 2-5 partidos, §2b/§5
+    del documento): se devuelve igual que con cualquier muestra corta en esta
+    app — marcado con `gp` para que quien lo pinte muestre el aviso, no que
+    lo esconda.
+
+    Returns:
+        `gp, pf_per40, season_pf_per40, diff` (`diff = pf_per40 -
+        season_pf_per40`), o `None` si el jugador no tiene ningún partido con
+        ese árbitro y minutos jugados en la temporada.
+    """
+    if not inspect(_engine).has_table("game_referees"):
+        return None
+
+    with_ref = pd.read_sql(
+        text("""
+            SELECT pgs.pf, pgs.minutes
+            FROM game_referees gr
+            JOIN games g ON g.id = gr.game_id
+            JOIN player_game_stats pgs ON pgs.game_id = g.id AND pgs.player_id = :player_id
+            WHERE gr.referee_name = :referee_name AND g.season_id = :season_id
+              AND pgs.pf IS NOT NULL AND pgs.minutes > 0
+        """),
+        _engine,
+        params={"player_id": player_id, "referee_name": referee_name, "season_id": season_id},
+    )
+    if with_ref.empty:
+        return None
+
+    season = pd.read_sql(
+        text("""
+            SELECT pgs.pf, pgs.minutes
+            FROM player_game_stats pgs
+            JOIN games g ON g.id = pgs.game_id
+            WHERE pgs.player_id = :player_id AND g.season_id = :season_id
+              AND pgs.pf IS NOT NULL AND pgs.minutes > 0
+        """),
+        _engine,
+        params={"player_id": player_id, "season_id": season_id},
+    )
+
+    # Ponderado por minutos (SUM(pf)*40/SUM(minutos)), no la media de las
+    # razones de cada partido: un partido de 4 minutos con una falta no puede
+    # pesar lo mismo que uno de 30 con tres (mismo criterio que `ft_pct` en
+    # `schema.sql`).
+    pf_per40 = 40.0 * with_ref["pf"].sum() / with_ref["minutes"].sum()
+    season_pf_per40 = 40.0 * season["pf"].sum() / season["minutes"].sum() if not season.empty else None
+
+    return {
+        "gp": int(len(with_ref)),
+        "pf_per40": round(float(pf_per40), 2),
+        "season_pf_per40": round(float(season_pf_per40), 2) if season_pf_per40 is not None else None,
+        "diff": round(float(pf_per40 - season_pf_per40), 2) if season_pf_per40 is not None else None,
+    }
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def all_referee_names(_engine: Engine) -> List[str]:
+    """Todos los nombres de árbitro conocidos (ya canonicalizados), para un selector.
+
+    A diferencia de `referee_rankings`, SIN umbral de muestra: el cuerpo
+    técnico tiene que poder buscar al árbitro que le acaban de asignar aunque
+    lleve pocos partidos pitados — `referee_profile` es quien avisa de la
+    muestra insuficiente en ese caso, no este selector escondiéndolo.
+    """
+    if not inspect(_engine).has_table("game_referees"):
+        return []
+    df = pd.read_sql(text("SELECT DISTINCT referee_name FROM game_referees ORDER BY referee_name"), _engine)
+    return df["referee_name"].tolist()
+
+
+#: Columnas de reparto por cuarto de `foul_profile` — Q1..Q4 fijos y un
+#: cajón "OT" para cualquier prórroga: un jugador con faltas en dos
+#: prórrogas distintas no necesita dos columnas, solo saber que se cargó en
+#: tiempo extra. `foul_drawing_leaders` no lo necesita: esa solo pregunta
+#: CUÁNTO se carga, no EN QUÉ CUARTO.
+_FOUL_QUARTER_COLUMNS = ["pf_q1_share", "pf_q2_share", "pf_q3_share", "pf_q4_share", "pf_ot_share"]
+
+
+def _early_foul_events(
+    fouls: pd.DataFrame, early_n1: int, early_min1: float, early_n2: int, early_min2: float
+) -> pd.DataFrame:
+    """Las faltas concretas que disparan "carga temprana", de las dos reglas.
+
+    Args:
+        fouls: `game_id, player_id, seconds, foul_no` — todas las
+            `foul_personal` de los jugadores en cuestión, ya numeradas por
+            orden de aparición dentro de cada partido (ver `foul_profile`).
+
+    Returns:
+        El subconjunto de `fouls` que cumple la 1.ª regla (`early_n1` antes
+        de `early_min1`) o la 2.ª (`early_n2` antes de `early_min2`) —
+        puede tener las dos filas de un mismo (`game_id`, `player_id`) si
+        cumple ambas. Vacío si ninguna falta las cumple.
+    """
+    early1 = fouls[(fouls["foul_no"] == early_n1) & (fouls["seconds"] < early_min1 * 60)]
+    early2 = fouls[(fouls["foul_no"] == early_n2) & (fouls["seconds"] < early_min2 * 60)]
+    return pd.concat([early1, early2], ignore_index=True)
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def foul_profile(
+    _engine: Engine,
+    team_id: str,
+    season_id: int,
+    early_n1: int = 2,
+    early_min1: float = 10.0,
+    early_n2: int = 3,
+    early_min2: float = 20.0,
+) -> pd.DataFrame:
+    """Perfil de faltas de la plantilla (§2a de la propuesta 06).
+
+    Tres preguntas del entrenador en una tabla: quién se carga pronto,
+    cuánto le cuesta y en qué cuarto acumula. "Carga temprana" NO es una
+    constante en el código: son los cuatro parámetros de interfaz que pide
+    §4 — por defecto, `early_n1` faltas antes del minuto `early_min1` (2
+    antes del 10, todo el primer cuarto) o `early_n2` antes de `early_min2`
+    (3 antes del 20, el descanso).
+
+    El coste en minutos se calcula en DOS capas, a propósito (§4):
+
+    - `minutes_lost_avg`: minutos jugados esa noche frente a la media de
+      TEMPORADA del jugador (`player_stats_combined.min_avg`) — rápido,
+      pero mezcla el efecto de la falta con cualquier otro motivo por el
+      que jugara distinto esa noche (una lesión, una paliza ya decidida).
+    - `bench_gap_avg_min`: el hueco REAL en `lineup_stints`, desde la falta
+      que dispara el aviso hasta el siguiente tramo del jugador en pista (o
+      el final del partido si no vuelve a entrar). Es la medida honesta que
+      pide §4. `NaN` si esta base de datos no tiene `lineup_stints` (fase
+      3) o si ningún partido con carga temprana tiene tramos reconstruidos.
+
+    `bench_margin_per_min`/`team_margin_per_min_season` son la parte (d) de
+    la propuesta, LA MÁS DELICADA de presentar: diferencia de puntos del
+    EQUIPO durante esos huecos (prorrateada sobre los tramos de
+    `lineup_stints` que solapan la ventana, por tiempo de solape — no hay
+    forma más fina de partir el marcador sin datos de posesión) frente a su
+    diferencia habitual esa temporada (`SUM(points_for - points_against) /
+    SUM(minutos)` de TODOS sus tramos, no solo estos). Es **descriptivo, no
+    causal**: el rival, el momento y el marcador de esos minutos concretos
+    no son comparables sin más con un minuto cualquiera de la temporada.
+    Nunca se debe leer como "sentarlo costó X puntos" (§5 de la propuesta).
+
+    Returns:
+        Una fila por jugador con boxscore ampliado (`pf`) en `season_id`:
+        `player_id, player_name, gp, minutes_avg, pf_total, pf_per40,
+        min_2nd_foul_avg, min_3rd_foul_avg, pf_q1_share..pf_q4_share,
+        pf_ot_share, early_2_games, early_3_games, early_trouble_games,
+        minutes_lost_avg, bench_gap_avg_min, bench_margin_per_min,
+        team_margin_per_min_season`. Las columnas que dependen de
+        `play_events`/`lineup_stints` salen en `NaN` (o en 0 los contadores
+        de partidos) cuando esta base de datos no las tiene todavía — no se
+        rellenan con un valor inventado. Vacío si el equipo no tiene ningún
+        partido con boxscore ampliado en esa temporada.
+    """
+    if not inspect(_engine).has_table("play_events"):
+        return pd.DataFrame()
+
+    rate_sql = text("""
+        SELECT p.id AS player_id, p.name AS player_name,
+               SUM(pgs.pf) AS pf_total, SUM(pgs.minutes) AS minutes_total,
+               COUNT(pgs.pf) AS gp, AVG(pgs.minutes) AS minutes_avg
+        FROM player_game_stats pgs
+        JOIN players p ON p.id = pgs.player_id
+        JOIN games g ON g.id = pgs.game_id
+        WHERE p.team_id = :team_id AND g.season_id = :season_id AND pgs.pf IS NOT NULL
+        GROUP BY p.id, p.name
+    """)
+    profile = pd.read_sql(rate_sql, _engine, params={"team_id": team_id, "season_id": season_id})
+    if profile.empty:
+        return profile
+    profile["pf_per40"] = 40.0 * profile["pf_total"] / profile["minutes_total"].replace(0, pd.NA)
+
+    def _finalize(df: pd.DataFrame) -> pd.DataFrame:
+        """Garantiza el esquema completo aunque falten `play_events`/`lineup_stints` a mitad de cálculo."""
+        for col in (
+            "min_2nd_foul_avg", "min_3rd_foul_avg", *_FOUL_QUARTER_COLUMNS,
+            "minutes_lost_avg", "bench_gap_avg_min", "bench_margin_per_min", "team_margin_per_min_season",
+        ):
+            if col not in df.columns:
+                df[col] = pd.NA
+        for col in ("early_2_games", "early_3_games", "early_trouble_games"):
+            df[col] = df[col].fillna(0).astype(int) if col in df.columns else 0
+        return df
+
+    fouls_sql = text("""
+        SELECT pe.game_id, pe.player_id, pe.seconds, pe.quarter
+        FROM play_events pe
+        JOIN players p ON p.id = pe.player_id
+        JOIN games g ON g.id = pe.game_id
+        WHERE p.team_id = :team_id AND g.season_id = :season_id
+          AND pe.event_type = 'foul_personal'
+        ORDER BY pe.player_id, pe.game_id, pe.seconds
+    """)
+    fouls = pd.read_sql(fouls_sql, _engine, params={"team_id": team_id, "season_id": season_id})
+    if fouls.empty:
+        return _finalize(profile)
+
+    fouls["foul_no"] = fouls.groupby(["game_id", "player_id"]).cumcount() + 1
+
+    # -------------------------------------------- minuto de la 2.ª y 3.ª falta --
+    minute_2nd = (
+        (fouls[fouls["foul_no"] == 2].groupby("player_id")["seconds"].mean() / 60.0)
+        .rename("min_2nd_foul_avg").reset_index()
+    )
+    minute_3rd = (
+        (fouls[fouls["foul_no"] == 3].groupby("player_id")["seconds"].mean() / 60.0)
+        .rename("min_3rd_foul_avg").reset_index()
+    )
+
+    # ---------------------------------------------------- reparto por cuarto --
+    fouls["quarter_bucket"] = fouls["quarter"].where(fouls["quarter"].isin(["Q1", "Q2", "Q3", "Q4"]), "OT")
+    by_quarter = fouls.groupby(["player_id", "quarter_bucket"]).size().unstack(fill_value=0)
+    by_quarter = by_quarter.reindex(columns=["Q1", "Q2", "Q3", "Q4", "OT"], fill_value=0)
+    quarter_totals = by_quarter.sum(axis=1)
+    quarter_shares = (by_quarter.div(quarter_totals.replace(0, pd.NA), axis=0) * 100.0)
+    quarter_shares.columns = _FOUL_QUARTER_COLUMNS
+    quarter_shares = quarter_shares.reset_index()
+
+    # ------------------------------------------------------ carga temprana --
+    triggers = _early_foul_events(fouls, early_n1, early_min1, early_n2, early_min2)
+    early_n1_hits = fouls[(fouls["foul_no"] == early_n1) & (fouls["seconds"] < early_min1 * 60)]
+    early_n2_hits = fouls[(fouls["foul_no"] == early_n2) & (fouls["seconds"] < early_min2 * 60)]
+    early_1_games = early_n1_hits.groupby("player_id")["game_id"].nunique().rename("early_2_games").reset_index()
+    early_2_games = early_n2_hits.groupby("player_id")["game_id"].nunique().rename("early_3_games").reset_index()
+
+    profile = (
+        profile.merge(minute_2nd, on="player_id", how="left")
+        .merge(minute_3rd, on="player_id", how="left")
+        .merge(quarter_shares, on="player_id", how="left")
+        .merge(early_1_games, on="player_id", how="left")
+        .merge(early_2_games, on="player_id", how="left")
+    )
+    for col in ("early_2_games", "early_3_games"):
+        profile[col] = profile[col].fillna(0).astype(int)
+
+    if triggers.empty:
+        return _finalize(profile)
+
+    early_counts = (
+        triggers.drop_duplicates(subset=["game_id", "player_id"])
+        .groupby("player_id")["game_id"].nunique()
+        .rename("early_trouble_games").reset_index()
+    )
+    # La falta que dispara el aviso: la más temprana de las dos reglas, por
+    # (partido, jugador) — el instante desde el que se mide el coste real.
+    trigger_first = (
+        triggers.sort_values("seconds")
+        .drop_duplicates(subset=["game_id", "player_id"], keep="first")[["game_id", "player_id", "seconds"]]
+    )
+    profile = profile.merge(early_counts, on="player_id", how="left")
+    profile["early_trouble_games"] = profile["early_trouble_games"].fillna(0).astype(int)
+
+    # -------------------------------------------------- minutos perdidos (rápido) --
+    game_minutes = pd.read_sql(
+        text("""
+            SELECT pgs.game_id, pgs.player_id, pgs.minutes
+            FROM player_game_stats pgs
+            JOIN players p ON p.id = pgs.player_id
+            WHERE p.team_id = :team_id
+        """),
+        _engine, params={"team_id": team_id},
+    )
+    flagged_minutes = trigger_first.merge(game_minutes, on=["game_id", "player_id"], how="left")
+    flagged_minutes = flagged_minutes.merge(profile[["player_id", "minutes_avg"]], on="player_id", how="left")
+    flagged_minutes["lost"] = flagged_minutes["minutes_avg"] - flagged_minutes["minutes"]
+    minutes_lost_avg = (
+        flagged_minutes.groupby("player_id")["lost"].mean().rename("minutes_lost_avg").reset_index()
+    )
+    profile = profile.merge(minutes_lost_avg, on="player_id", how="left")
+
+    # ---------------------------------------- hueco real y coste de banquillo --
+    if not inspect(_engine).has_table("lineup_stints"):
+        return _finalize(profile)
+
+    game_ids = trigger_first["game_id"].unique().tolist()
+    placeholders = ", ".join(f":g{i}" for i in range(len(game_ids)))
+    params = {f"g{i}": gid for i, gid in enumerate(game_ids)}
+    params["team_id"] = team_id
+
+    # Tramos del EQUIPO (una fila por tramo, no por jugador) — hacen falta
+    # los dos: unidos a `lineup_stint_players` para saber cuándo vuelve a
+    # jugar CADA jugador (el hueco), y solos para prorratear el margen del
+    # equipo durante ese hueco (§2d).
+    team_stints = pd.read_sql(
+        text(f"""
+            SELECT s.id AS stint_id, s.game_id, s.start_seconds, s.end_seconds,
+                   s.points_for, s.points_against
+            FROM lineup_stints s
+            WHERE s.team_id = :team_id AND s.game_id IN ({placeholders})
+            ORDER BY s.game_id, s.start_seconds
+        """),
+        _engine, params=params,
+    )
+    player_stints = pd.read_sql(
+        text(f"""
+            SELECT s.game_id, sp.player_id, s.start_seconds, s.end_seconds
+            FROM lineup_stints s
+            JOIN lineup_stint_players sp ON sp.stint_id = s.id
+            WHERE s.team_id = :team_id AND s.game_id IN ({placeholders})
+            ORDER BY sp.player_id, s.game_id, s.start_seconds
+        """),
+        _engine, params=params,
+    )
+    if team_stints.empty or player_stints.empty:
+        return _finalize(profile)
+
+    game_end = team_stints.groupby("game_id")["end_seconds"].max()
+
+    # El hueco: desde la falta hasta el PRÓXIMO tramo del jugador (si vuelve
+    # a entrar) o hasta el final de sus propios tramos en ese partido (si no
+    # vuelve) — no hasta el final "oficial" del partido, que puede incluir
+    # prórroga que ese partido concreto no tuvo.
+    gaps = []
+    for row in trigger_first.itertuples():
+        own_stints = player_stints[
+            (player_stints["game_id"] == row.game_id) & (player_stints["player_id"] == row.player_id)
+        ]
+        if own_stints.empty:
+            continue
+        later = own_stints[own_stints["start_seconds"] >= row.seconds]
+        gap_end = float(later["start_seconds"].min()) if not later.empty else float(game_end[row.game_id])
+        if gap_end <= row.seconds:
+            continue
+        gaps.append(
+            {"player_id": row.player_id, "game_id": row.game_id, "gap_start": row.seconds, "gap_end": gap_end}
+        )
+
+    if not gaps:
+        return _finalize(profile)
+
+    gaps_df = pd.DataFrame(gaps)
+    gaps_df["gap_minutes"] = (gaps_df["gap_end"] - gaps_df["gap_start"]) / 60.0
+    bench_gap_avg = gaps_df.groupby("player_id")["gap_minutes"].mean().rename("bench_gap_avg_min").reset_index()
+    profile = profile.merge(bench_gap_avg, on="player_id", how="left")
+
+    # Margen del equipo durante cada hueco: los tramos de EQUIPO que solapan
+    # la ventana, prorrateados por el tiempo de solape — mismo recorte que
+    # `queries.window_lineup`, aplicado a puntos en vez de a jugadores. Es
+    # una aproximación (los puntos de un tramo no se reparten uniformemente
+    # en el tiempo) y se declara como tal arriba, en el docstring; no hay
+    # forma más fina de partir el marcador sin datos de posesión.
+    margin_rows = []
+    for gap in gaps_df.itertuples():
+        overlap = team_stints[
+            (team_stints["game_id"] == gap.game_id)
+            & (team_stints["end_seconds"] > gap.gap_start)
+            & (team_stints["start_seconds"] < gap.gap_end)
+        ]
+        if overlap.empty:
+            continue
+        overlap_seconds = (
+            overlap["end_seconds"].clip(upper=gap.gap_end) - overlap["start_seconds"].clip(lower=gap.gap_start)
+        )
+        stint_seconds = overlap["end_seconds"] - overlap["start_seconds"]
+        frac = (overlap_seconds / stint_seconds.replace(0, pd.NA)).clip(lower=0, upper=1)
+        margin = ((overlap["points_for"] - overlap["points_against"]) * frac).sum()
+        margin_rows.append({"player_id": gap.player_id, "margin": margin, "seconds": overlap_seconds.sum()})
+
+    if margin_rows:
+        margin_df = pd.DataFrame(margin_rows)
+        pooled = (
+            margin_df.groupby("player_id").agg(margin=("margin", "sum"), seconds=("seconds", "sum")).reset_index()
+        )
+        pooled["bench_margin_per_min"] = pooled["margin"] / (pooled["seconds"] / 60.0)
+        profile = profile.merge(pooled[["player_id", "bench_margin_per_min"]], on="player_id", how="left")
+
+    baseline = pd.read_sql(
+        text("""
+            SELECT SUM(s.points_for - s.points_against) AS margin_sum,
+                   SUM(s.end_seconds - s.start_seconds) AS seconds_sum
+            FROM lineup_stints s
+            JOIN games g ON g.id = s.game_id
+            WHERE s.team_id = :team_id AND g.season_id = :season_id
+        """),
+        _engine, params={"team_id": team_id, "season_id": season_id},
+    ).iloc[0]
+    if baseline["seconds_sum"]:
+        profile["team_margin_per_min_season"] = float(baseline["margin_sum"]) / (float(baseline["seconds_sum"]) / 60.0)
+
+    return _finalize(profile)
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def foul_drawing_leaders(
+    _engine: Engine,
+    team_id: str,
+    season_id: int,
+    min_minutes: float = 500.0,
+    early_n1: int = 2,
+    early_min1: float = 10.0,
+    early_n2: int = 3,
+    early_min2: float = 20.0,
+) -> pd.DataFrame:
+    """A quién no ponerle la mano: ranking de un equipo por faltas provocadas (§2b de la propuesta 06).
+
+    Pensada para "Próximo rival" con `team_id` del rival, pero no asume
+    nada sobre quién es "propio" — funciona igual para cualquier equipo
+    (mismo criterio que el resto de `queries.py`, ver su cabecera).
+
+    Args:
+        min_minutes: mínimo de minutos jugados en la temporada para entrar
+            en el ranking (§4: `40 · Σ pf_drawn / Σ minutes` con un jugador
+            de 40 minutos totales se dispara con una sola falta provocada —
+            el mínimo evita que se cuele). 500 es el de los ejemplos de §2,
+            no una regla fija.
+
+    Returns:
+        `player_id, player_name, gp, minutes_total, pf_drawn_total,
+        pf_drawn_per40, fta_total, fta_per40, ft_pct, early_trouble_games,
+        early_trouble_rate`, de más a menos `pf_drawn_per40`.
+        `early_trouble_rate` (`early_trouble_games / gp`) es la otra mitad
+        de la lectura: quién de la plantilla rival está a un aviso de
+        sentarse, con la misma regla de "carga temprana" que
+        `foul_profile` (mismos parámetros, mismo valor por defecto).
+
+        OJO: no hay `ft_rate` por jugador como en `queries.team_advanced_profile`
+        — esa tasa se define sobre tiros de campo intentados (`fga`), que
+        `player_game_stats` no guarda por jugador (solo `efg_pct` ya
+        calculado). `fta_per40` es la lectura equivalente disponible: cuánto
+        se planta en la línea, no relativizado a cuánto tira de campo.
+        Vacío si el equipo no tiene boxscore ampliado (`pf_drawn`) en esa
+        temporada, o si nadie llega a `min_minutes`.
+    """
+    if not inspect(_engine).has_table("play_events"):
+        return pd.DataFrame()
+
+    rate_sql = text("""
+        SELECT p.id AS player_id, p.name AS player_name,
+               SUM(pgs.pf_drawn) AS pf_drawn_total, SUM(pgs.minutes) AS minutes_total,
+               SUM(pgs.fta) AS fta_total, SUM(pgs.ftm) AS ftm_total,
+               COUNT(pgs.pf_drawn) AS gp
+        FROM player_game_stats pgs
+        JOIN players p ON p.id = pgs.player_id
+        JOIN games g ON g.id = pgs.game_id
+        WHERE p.team_id = :team_id AND g.season_id = :season_id AND pgs.pf_drawn IS NOT NULL
+        GROUP BY p.id, p.name
+        HAVING SUM(pgs.minutes) >= :min_minutes
+    """)
+    leaders = pd.read_sql(
+        rate_sql, _engine, params={"team_id": team_id, "season_id": season_id, "min_minutes": min_minutes}
+    )
+    if leaders.empty:
+        return leaders
+
+    leaders["pf_drawn_per40"] = 40.0 * leaders["pf_drawn_total"] / leaders["minutes_total"]
+    leaders["fta_per40"] = 40.0 * leaders["fta_total"] / leaders["minutes_total"]
+    leaders["ft_pct"] = 100.0 * leaders["ftm_total"] / leaders["fta_total"].replace(0, pd.NA)
+    leaders = leaders.drop(columns=["ftm_total"])
+
+    placeholders = ", ".join(f":p{i}" for i in range(len(leaders)))
+    fouls_sql = text(f"""
+        SELECT pe.game_id, pe.player_id, pe.seconds
+        FROM play_events pe
+        JOIN players p ON p.id = pe.player_id
+        JOIN games g ON g.id = pe.game_id
+        WHERE p.team_id = :team_id AND g.season_id = :season_id
+          AND pe.event_type = 'foul_personal' AND p.id IN ({placeholders})
+        ORDER BY pe.player_id, pe.game_id, pe.seconds
+    """)
+    params = {"team_id": team_id, "season_id": season_id}
+    params.update({f"p{i}": pid for i, pid in enumerate(leaders["player_id"])})
+    fouls = pd.read_sql(fouls_sql, _engine, params=params)
+
+    leaders["early_trouble_games"] = 0
+    if not fouls.empty:
+        fouls["foul_no"] = fouls.groupby(["game_id", "player_id"]).cumcount() + 1
+        triggers = _early_foul_events(fouls, early_n1, early_min1, early_n2, early_min2)
+        if not triggers.empty:
+            early_games = (
+                triggers.drop_duplicates(subset=["game_id", "player_id"])
+                .groupby("player_id")["game_id"].nunique()
+                .rename("early_trouble_games").reset_index()
+            )
+            leaders = leaders.drop(columns=["early_trouble_games"]).merge(early_games, on="player_id", how="left")
+            leaders["early_trouble_games"] = leaders["early_trouble_games"].fillna(0).astype(int)
+
+    leaders["early_trouble_rate"] = leaders["early_trouble_games"] / leaders["gp"].replace(0, pd.NA)
+
+    return leaders.sort_values("pf_drawn_per40", ascending=False).reset_index(drop=True)

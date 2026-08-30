@@ -161,6 +161,68 @@ def test_load_game_inserts_all_child_tables(engine):
             text("SELECT ts_pct, ppt, pace FROM player_advanced_stats WHERE game_id='acb-99001' AND player_id='howard'")
         ).first() == (61.2, 1.3, 345.0)
 
+        # Fase 5: terna trocedada de `games.referees`, una fila por árbitro y
+        # posición — sin alias que aplicar en este caso concreto (ver el test
+        # dedicado a la canonicalización más abajo).
+        assert conn.execute(
+            text("SELECT position, referee_name FROM game_referees WHERE game_id='acb-99001' ORDER BY position")
+        ).all() == [(1, "Antonio Conde"), (2, "Martín Caballero")]
+
+
+def test_load_game_canonicalizes_referee_names(engine):
+    """Un nombre corto de Euroliga y uno sin acento se guardan ya con su forma
+    canónica (`packages/baskonia_core/referees.py`) — no el texto crudo."""
+    game = _sample_game()
+    game.referees = "Emilio Perez · Arnau Padros · Carlos Peruga"
+    with engine.begin() as conn:
+        load_game(conn, game)
+
+    from sqlalchemy import text
+
+    with engine.connect() as conn:
+        assert conn.execute(
+            text("SELECT position, referee_name FROM game_referees WHERE game_id='acb-99001' ORDER BY position")
+        ).all() == [
+            (1, "Emilio Pérez Pizarro"),
+            (2, "Arnau Padrós"),
+            (3, "Carlos Peruga"),  # sin alias conocido: se guarda tal cual
+        ]
+
+
+def test_load_game_without_referees_inserts_nothing(engine):
+    """`referees=None` (1 de 737 partidos reales, ver el documento §3): sin
+    filas de `game_referees`, no "tres árbitros en blanco"."""
+    game = _sample_game()
+    game.referees = None
+    with engine.begin() as conn:
+        load_game(conn, game)
+
+    from sqlalchemy import text
+
+    with engine.connect() as conn:
+        assert conn.execute(
+            text("SELECT COUNT(*) FROM game_referees WHERE game_id='acb-99001'")
+        ).scalar_one() == 0
+
+
+def test_load_game_replaces_referees_on_rerun(engine):
+    """Igual que `key_events`/`shots`: una segunda carga con una terna DISTINTA
+    reemplaza la anterior entera, no la acumula."""
+    game = _sample_game()
+    with engine.begin() as conn:
+        load_game(conn, game)
+
+    game.referees = "Carlos Peruga"
+    with engine.begin() as conn:
+        load_game(conn, game)
+
+    from sqlalchemy import text
+
+    with engine.connect() as conn:
+        assert conn.execute(
+            text("SELECT position, referee_name FROM game_referees WHERE game_id='acb-99001'")
+        ).all() == [(1, "Carlos Peruga")]
+
 
 def test_load_game_is_idempotent_on_rerun(engine):
     game = _sample_game()
@@ -185,6 +247,7 @@ def test_load_game_is_idempotent_on_rerun(engine):
         assert conn.execute(text("SELECT COUNT(*) FROM play_events WHERE game_id='acb-99001'")).scalar_one() == 4
         assert conn.execute(text("SELECT COUNT(*) FROM player_game_quarter_stats WHERE game_id='acb-99001'")).scalar_one() == 1
         assert conn.execute(text("SELECT COUNT(*) FROM player_advanced_stats WHERE game_id='acb-99001'")).scalar_one() == 1
+        assert conn.execute(text("SELECT COUNT(*) FROM game_referees WHERE game_id='acb-99001'")).scalar_one() == 2
 
 
 def test_list_existing_external_ids_filtra_por_fuente_y_temporada(engine):

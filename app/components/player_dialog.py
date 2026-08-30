@@ -277,6 +277,58 @@ def player_detail(player_id: str) -> None:
             "(coste de red). 'win' se deduce del equipo actual del jugador."
         )
 
+    # -------------------------------------------------------------------- faltas --
+    # Propuesta 06 (`doc/features/propuestas/06_gestion_de_faltas.md`), parte
+    # (a) a nivel de UN jugador — el perfil de la plantilla entera, con los
+    # controles de "carga temprana", vive en "Estado del equipo"; aquí solo
+    # su fila, con los umbrales de fábrica (2 antes del 10, 3 antes del 20).
+    foul_profile_df = queries_assistant.foul_profile(engine, bio["team_id"], stats_season_id)
+    foul_row_df = foul_profile_df[foul_profile_df["player_id"] == player_id]
+    if not foul_row_df.empty:
+        foul_row = foul_row_df.iloc[0]
+        st.divider()
+        st.markdown("**Faltas**")
+        f1, f2, f3, f4 = st.columns(4)
+        f1.metric(
+            "Faltas/40",
+            f"{foul_row['pf_per40']:.1f}" if pd.notna(foul_row["pf_per40"]) else "—",
+            help=help_text("pf_per40"),
+        )
+        f2.metric(
+            "Min. 2.ª falta",
+            f"{foul_row['min_2nd_foul_avg']:.1f}" if pd.notna(foul_row["min_2nd_foul_avg"]) else "—",
+            help=help_text("min_2nd_foul_avg"),
+        )
+        f3.metric(
+            "Min. 3.ª falta",
+            f"{foul_row['min_3rd_foul_avg']:.1f}" if pd.notna(foul_row["min_3rd_foul_avg"]) else "—",
+            help=help_text("min_3rd_foul_avg"),
+        )
+        f4.metric("Cargas tempranas", int(foul_row["early_trouble_games"]), help=help_text("early_trouble_games"))
+
+        if foul_row["early_trouble_games"] > 0:
+            g1, g2 = st.columns(2)
+            g1.metric(
+                "Min. perdidos (aprox.)",
+                f"{foul_row['minutes_lost_avg']:+.1f}" if pd.notna(foul_row["minutes_lost_avg"]) else "—",
+                help=help_text("minutes_lost_avg"),
+            )
+            g2.metric(
+                "Hueco real en pista",
+                f"{foul_row['bench_gap_avg_min']:.1f} min" if pd.notna(foul_row["bench_gap_avg_min"]) else "—",
+                help=help_text("bench_gap_avg_min"),
+            )
+            if pd.notna(foul_row["bench_margin_per_min"]) and pd.notna(foul_row["team_margin_per_min_season"]):
+                st.caption(
+                    f"⚠ Margen del equipo durante esos huecos: {foul_row['bench_margin_per_min']:+.2f} pts/min "
+                    f"(habitual: {foul_row['team_margin_per_min_season']:+.2f} pts/min). Descriptivo, no "
+                    "causal — no leer como \"sentarlo cuesta X puntos\" (§5 de la propuesta 06)."
+                )
+        glossary_expander([
+            "pf_per40", "min_2nd_foul_avg", "min_3rd_foul_avg", "early_trouble_games",
+            "minutes_lost_avg", "bench_gap_avg_min", "bench_margin_per_min",
+        ])
+
     # -------------------------------------------------------------- mapa de tiros --
     shots_df = queries.player_shots_season(engine, player_id, stats_season_id)
     if shots_df.empty:

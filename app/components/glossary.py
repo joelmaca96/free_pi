@@ -209,6 +209,109 @@ TERMS: Dict[str, Term] = {
         "≤1, 2, 3-4 o ≥5 días desde el partido anterior. Con 78 partidos como mucho por temporada de "
         "doble competición, la muestra de cada tramo puede ser pequeña — mira siempre el PJ.",
     ),
+    # ------------------------------------------- gestión de faltas (propuesta 06) --
+    "pf_per40": Term(
+        "Faltas/40", "Faltas cometidas por 40 minutos",
+        "Faltas personales normalizadas a 40 minutos en pista. Compara a un titular y a un suplente en "
+        "las mismas condiciones — un total de temporada por sí solo premia a quien juega menos.",
+    ),
+    "pf_drawn_per40": Term(
+        "Provocadas/40", "Faltas provocadas por 40 minutos",
+        "Faltas del rival que provoca ese jugador, por 40 minutos en pista. Alto = a quien no conviene "
+        "ponerle la mano encima.",
+    ),
+    "fta_per40": Term(
+        "TL/40", "Tiros libres intentados por 40 minutos",
+        "Tiros libres que tira ese jugador, normalizados a 40 minutos. Dice si convierte las faltas que "
+        "provoca en viajes a la línea — no hay 'tasa de tiro libre' por jugador (esa se define sobre "
+        "tiros de campo intentados, que no se guardan por jugador; solo por equipo, ver ft_rate).",
+    ),
+    "min_2nd_foul_avg": Term(
+        "Min. 2.ª falta", "Minuto medio de la 2.ª falta",
+        "Minuto de partido en el que llega, de media, la segunda falta personal. Cuanto más bajo, antes "
+        "se carga — 'dos faltas en el minuto 6' es el caso que más banquillo cuesta.",
+    ),
+    "min_3rd_foul_avg": Term(
+        "Min. 3.ª falta", "Minuto medio de la 3.ª falta",
+        "Igual que el minuto de la 2.ª falta, pero de la tercera — el aviso relevante de cara al descanso.",
+    ),
+    "pf_quarter_share": Term(
+        "Reparto por cuarto", "% de faltas por cuarto",
+        "Qué parte de las faltas de la temporada de ese jugador cae en cada cuarto (suman 100% por fila). "
+        "Dice si se carga pronto (Q1 alto) o tarde (Q4 alto), no cuántas faltas hace en total.",
+    ),
+    "early_trouble_games": Term(
+        "Cargas tempranas", "Partidos con carga temprana",
+        "Partidos en los que llegó a la 2.ª falta antes del minuto o a la 3.ª antes del otro minuto que "
+        "marquen los controles de arriba (2 antes del 10 y 3 antes del 20, por defecto).",
+    ),
+    "early_trouble_rate": Term(
+        "% cargas tempranas", "Partidos con carga temprana, sobre el total",
+        "Cargas tempranas dividido entre partidos jugados. Compara a un jugador con pocos partidos con "
+        "otro que ha jugado toda la temporada sin que el total desnivele la lectura.",
+    ),
+    "minutes_lost_avg": Term(
+        "Min. perdidos (aprox.)", "Minutos por debajo de su media, en partidos con carga temprana",
+        "Minutos jugados esa noche frente a su media de temporada, en los partidos con carga temprana. "
+        "Aproximado a propósito: mezcla el efecto de la falta con cualquier otro motivo por el que "
+        "jugara distinto esa noche (lesión, partido ya decidido) — para la medida honesta, ver el hueco "
+        "real en pista.",
+    ),
+    "bench_gap_avg_min": Term(
+        "Hueco real en pista", "Minutos reales sentado tras la falta",
+        "Desde la falta que dispara el aviso hasta que ese jugador vuelve a pisar la pista (o el final "
+        "del partido, si no vuelve), medido en los tramos de quinteto reales — no una media, el hueco "
+        "de cada partido concreto.",
+    ),
+    "bench_margin_per_min": Term(
+        "Margen durante el hueco", "Diferencia de puntos del equipo, por minuto sentado",
+        "Diferencia de puntos del equipo mientras ese jugador estaba fuera por la falta, por minuto. "
+        "DESCRIPTIVO, no causal: el rival, el momento y el marcador de esos minutos concretos no son "
+        "comparables sin más con un minuto cualquiera — no leer como 'sentarlo costó X puntos'.",
+    ),
+    "team_margin_per_min_season": Term(
+        "Margen habitual", "Diferencia de puntos del equipo por minuto, toda la temporada",
+        "La referencia con la que comparar el margen durante el hueco: cómo le va al equipo por minuto "
+        "en un partido cualquiera, no solo cuando falta este jugador.",
+    ),
+    # -------------------------------------- perfil arbitral (propuesta 05) --
+    # Prefijo "referee_" a propósito, aunque casi todo son faltas/tiros libres:
+    # miden la SUMA de los dos equipos en el partido, no lo de un jugador o un
+    # equipo — fundirlas con "pf"/"fta" sería la ambigüedad que este módulo
+    # existe para evitar (ver la nota del docstring del fichero).
+    "referee_pf_avg": Term(
+        "Faltas/partido", "Faltas totales señaladas por partido (los dos equipos)",
+        "Suma de faltas personales de ambos equipos en los partidos que dirige. Sin ajustar por "
+        "competición — la que ordena el ranking es la ajustada (ver 'Faltas/partido (ajustado)').",
+    ),
+    "referee_pf_residual": Term(
+        "Faltas/partido (ajustado)", "Faltas totales frente a la media de su competición",
+        "Faltas del partido menos la media de faltas de ESA competición esa temporada, promediado por "
+        "árbitro. Es la métrica que ordena el ranking: ACB y Euroliga no se pitan igual (unas 4 faltas de "
+        "diferencia de media), así que comparar por la falta bruta mide sobre todo dónde le designan, no "
+        "cómo pita.",
+    ),
+    "referee_fta_avg": Term(
+        "TL/partido", "Tiros libres totales intentados por partido (los dos equipos)",
+        "Igual que 'Faltas/partido' pero en tiros libres concedidos, sin ajustar por competición.",
+    ),
+    "referee_home_bias_fta": Term(
+        "Sesgo local (TL)", "Diferencia de tiros libres entre el equipo local y el visitante",
+        "Tiros libres del equipo local menos los del visitante, de media en los partidos que dirige. La "
+        "media de la liga es positiva (favorece algo al local): un valor muy por encima o por debajo de "
+        "esa media es la señal, no el signo por sí solo.",
+    ),
+    "referee_pace_residual": Term(
+        "Ritmo (ajustado)", "Posesiones del partido frente a la media de su competición",
+        "Ritmo de los partidos que dirige, comparado con la media de su competición — los partidos muy "
+        "pitados suelen ser más lentos, y esta es la conexión entre 'pita mucho' y 'el partido se corta'.",
+    ),
+    "referee_sample_size": Term(
+        "Muestra", "Aviso de tamaño de muestra del árbitro",
+        "'ok' con 15 partidos o más esta temporada (entra en el ranking de la liga); 'caution' entre 8 y "
+        "14 (se enseña su ficha, pero como tendencia gruesa, no como afirmación fina). Por debajo de 8 no "
+        "se muestra ficha.",
+    ),
 }
 
 

@@ -568,11 +568,16 @@ def player_bio(_engine: Engine, player_id: str) -> Optional[dict]:
 
     Returns:
         `name, number, position, photo_url, photo_local_path, birth_date,
-        nationality, height_cm`, o `None` si el id no existe. Ver
-        `roster_cards` para qué es `photo_local_path`.
+        nationality, height_cm, team_id`, o `None` si el id no existe. Ver
+        `roster_cards` para qué es `photo_local_path`. `team_id` es el
+        equipo ACTUAL del jugador (mismo matiz de `players.team_id` que en
+        el resto de consultas: un traspaso a mitad de temporada lo ensucia
+        hacia atrás) — lo pide `player_dialog.player_detail` para poder
+        llamar a `queries_assistant.foul_profile`, que necesita `team_id`.
     """
     sql = text("""
-        SELECT name, number, position, photo_url, photo_local_path, birth_date, nationality, height_cm
+        SELECT name, number, position, photo_url, photo_local_path, birth_date, nationality, height_cm,
+               team_id
         FROM players
         WHERE id = :player_id
     """)

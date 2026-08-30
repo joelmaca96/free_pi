@@ -25,6 +25,7 @@ import pandas as pd
 import streamlit as st
 
 from analytics import shot_quality
+from assistant.capabilities import probe
 from assistant.llm import LLMError, build_llm_client
 from components.ask_assistant import ask_assistant_button
 from components.avatar import player_avatar_html, team_crest_html
@@ -652,6 +653,60 @@ else:
 
 st.divider()
 
+# ---------------------------------------------------- a quién no ponerle la mano --
+# Propuesta 06 (`doc/features/propuestas/06_gestion_de_faltas.md`), parte
+# (b): ranking del rival por faltas provocadas — entra sola en el dossier de
+# prepartido (§7 de la propuesta), por eso vive aquí y no en "Estado del
+# equipo" (que es la (a), sobre la plantilla propia).
+st.subheader("Faltas: a quién no ponerle la mano")
+min_minutes_fouls = st.slider(
+    "Mínimo de minutos jugados en la temporada", 0, 1500, 500, 50, key="rival_fouls_min_minutes"
+)
+leaders_df = queries_assistant.foul_drawing_leaders(engine, rival_team_id, scouting_season_id, float(min_minutes_fouls))
+
+if leaders_df.empty:
+    st.info(
+        f"Sin boxscore ampliado, sin play-by-play tipado, o nadie de {rival_name} llega a "
+        f"{min_minutes_fouls} minutos jugados en esa temporada: baja el mínimo o prueba otra temporada."
+    )
+else:
+    # `early_trouble_rate` llega como fracción (0-1) de la consulta — a 0-100
+    # aquí, mismo criterio que cualquier otro porcentaje de la interfaz
+    # (`ft_pct`, `efg_pct`...), que se calculan ya en esa escala.
+    display_leaders = leaders_df.assign(early_trouble_rate=leaders_df["early_trouble_rate"] * 100.0)
+    st.dataframe(
+        display_leaders,
+        hide_index=True,
+        width="stretch",
+        column_order=[
+            "player_name", "gp", "pf_drawn_per40", "fta_per40", "ft_pct",
+            "early_trouble_games", "early_trouble_rate",
+        ],
+        column_config={
+            "player_name": st.column_config.TextColumn("Jugador"),
+            "gp": st.column_config.NumberColumn("PJ", help=help_text("gp")),
+            "pf_drawn_per40": st.column_config.NumberColumn(
+                "Provocadas/40", format="%.1f", help=help_text("pf_drawn_per40")
+            ),
+            "fta_per40": st.column_config.NumberColumn("TL/40", format="%.1f", help=help_text("fta_per40")),
+            "ft_pct": st.column_config.NumberColumn("FT%", format="%.1f", help=help_text("ft_pct")),
+            "early_trouble_games": st.column_config.NumberColumn(
+                "Cargas tempranas", help=help_text("early_trouble_games")
+            ),
+            "early_trouble_rate": st.column_config.NumberColumn(
+                "% cargas tempranas", format="%.0f", help=help_text("early_trouble_rate")
+            ),
+        },
+    )
+    st.caption(
+        f"De más a menos faltas provocadas por 40 minutos, entre los jugadores de {rival_name} con al "
+        f"menos {min_minutes_fouls} minutos jugados. Provocadas/40 y TL/40 dicen a quién no ponerle la "
+        "mano; cargas tempranas dice quién de ellos está a un aviso de sentarse."
+    )
+    glossary_expander(["pf_drawn_per40", "fta_per40", "ft_pct", "early_trouble_games", "early_trouble_rate"])
+
+st.divider()
+
 # --------------------------------------------------------- tiros y zonas --
 st.subheader("Mapa de tiros de la temporada")
 shots_df = queries.team_shots_season(engine, rival_team_id, scouting_season_id)
@@ -775,3 +830,115 @@ else:
         _, coverage = shot_quality.split_usable(rival_counts)
         quality_caveat(coverage)
         league_reference_expander(baseline)
+
+st.divider()
+
+# ------------------------------------------------------- perfil arbitral --
+# Propuesta 05 (`doc/features/propuestas/05_perfil_arbitral.md`): la terna de
+# un partido FUTURO no vive en `games` (esa tabla solo guarda partidos ya
+# disputados, con marcador) — se suele anunciar 48h antes, fuera de lo que
+# este pipeline descarga. Por eso el bloque no la busca solo: el cuerpo
+# técnico teclea los nombres en cuanto se conocen y aquí sale la ficha de
+# cada uno, con el historial con el Baskonia y con este rival concreto (§2a
+# del documento). `capabilities.game_metadata` es el interruptor que ya
+# existe para "¿esta base de datos tiene árbitros/asistencia/pabellón?" (§6
+# del documento) — se reutiliza para el bloque entero en vez de asumir.
+if probe(engine).game_metadata:
+    st.subheader("Perfil arbitral")
+
+    referee_names = queries_assistant.all_referee_names(engine)
+    if not referee_names:
+        st.info("Sin árbitros cargados todavía en esta base de datos.")
+    else:
+        st.caption(
+            "La terna de este partido no se anuncia con antelación suficiente para tenerla cargada de "
+            "antemano — en cuanto se conozca, búscala aquí para ver su ficha."
+        )
+        selected_referees = st.multiselect(
+            "Árbitros de la terna",
+            options=referee_names,
+            max_selections=3,
+            key=f"rival_referee_picker_{rival_team_id}",
+        )
+        own_roster = queries_assistant.team_roster_production(engine, own_team_id, season_id)
+
+        for referee_name in selected_referees:
+            st.markdown(f"**{referee_name}**")
+            profile = queries_assistant.referee_profile(engine, referee_name, season_id)
+            if profile is None:
+                st.warning(
+                    f"Muestra insuficiente en la temporada seleccionada (menos de "
+                    f"{queries_assistant.REFEREE_MIN_GAMES_TO_SHOW} partidos con datos completos): "
+                    "sin ficha fiable todavía."
+                )
+                continue
+
+            metric_cols = st.columns(4)
+            metric_cols[0].metric("Partidos", int(profile["gp"]), help=help_text("gp"))
+            metric_cols[1].metric(
+                "Faltas/partido", f"{profile['pf_residual']:+.1f}", help=help_text("referee_pf_residual")
+            )
+            metric_cols[2].metric(
+                "Sesgo local (TL)", f"{profile['home_bias_fta']:+.1f}", help=help_text("referee_home_bias_fta")
+            )
+            metric_cols[3].metric(
+                "Ritmo", f"{profile['pace_residual']:+.1f}", help=help_text("referee_pace_residual")
+            )
+            if profile["sample_size"] == "caution":
+                st.caption(
+                    f"⚠ Solo {int(profile['gp'])} partidos esta temporada: tendencia gruesa, no una "
+                    "afirmación fina."
+                )
+            elif pd.notna(profile.get("pf_residual_pct")):
+                st.caption(
+                    f"Percentil {profile['pf_residual_pct'] * 100:.0f} en faltas señaladas, entre los "
+                    "árbitros con muestra plena de la liga (más alto = pita más de lo esperado)."
+                )
+
+            hist_own_col, hist_rival_col = st.columns(2)
+            for col, hist_team_id, hist_team_name in (
+                (hist_own_col, own_team_id, "el Baskonia"),
+                (hist_rival_col, rival_team_id, rival_name),
+            ):
+                with col:
+                    st.markdown(f"Historial con {hist_team_name}")
+                    history = queries_assistant.referee_team_history(engine, referee_name, season_id, hist_team_id)
+                    if history is None:
+                        st.caption(f"Sin partidos de {hist_team_name} con este árbitro esta temporada.")
+                    else:
+                        st.write(f"Balance: {history['wins']}–{history['losses']}")
+                        if history["pf_avg"] is not None:
+                            baseline_bit = (
+                                f" (media de temporada: {history['season_pf_avg']:.1f})"
+                                if history.get("season_pf_avg") is not None else ""
+                            )
+                            st.caption(f"Faltas señaladas: {history['pf_avg']:.1f}/partido{baseline_bit}")
+
+            if not own_roster.empty:
+                own_roster_names = own_roster.set_index("id")["name"].to_dict()
+                with st.expander(f"Efecto sobre un jugador del Baskonia con {referee_name}"):
+                    picked_player = st.selectbox(
+                        "Jugador",
+                        options=own_roster["id"].tolist(),
+                        format_func=lambda pid: own_roster_names.get(pid, pid),
+                        key=f"referee_player_effect_{rival_team_id}_{referee_name}",
+                    )
+                    effect = queries_assistant.player_referee_effect(engine, picked_player, referee_name, season_id)
+                    if effect is None:
+                        st.caption("Sin partidos de este jugador con este árbitro en la temporada.")
+                    else:
+                        st.write(
+                            f"{effect['pf_per40']:.1f} faltas/40 con este árbitro frente a "
+                            f"{effect['season_pf_per40']:.1f}/40 de su media de temporada "
+                            f"({effect['diff']:+.1f})."
+                        )
+                        st.caption(
+                            f"Muestra de {effect['gp']} partido(s): se enseña como indicio, no como hecho "
+                            "(§2b del documento)."
+                        )
+
+            st.divider()
+
+        glossary_expander(
+            ["referee_pf_avg", "referee_pf_residual", "referee_fta_avg", "referee_home_bias_fta", "referee_pace_residual"]
+        )
