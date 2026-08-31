@@ -1,6 +1,34 @@
 # 10. Señales semanales
 
-**Estado:** propuesta, sin implementar · **Fecha:** 2026-08-28 · **Índice:** [00_indice.md](00_indice.md)
+**Estado:** IMPLEMENTADA, incluida la señal de equipo por zona (2026-08-31) ·
+**Fecha de la propuesta:** 2026-08-28 · **Índice:** [00_indice.md](00_indice.md)
+
+El motor de detección (contrastes, corrección de Benjamini-Hochberg, tamaño de efecto mínimo,
+ranking por relevancia y redacción de dos capas) vive en `app/analytics/signals.py`, puro sobre
+`pandas`/`numpy`, sin dependencias nuevas. Las consultas nuevas están en `app/data/queries.py`
+(`team_player_game_log`, `team_game_advanced_log`, `team_game_zone_counts`) y
+`app/data/queries_assistant.py` (`pair_minutes_by_window`). La pantalla es el bloque superior de
+`app/pages/estado_equipo.py` (no `app/Home.py`, que es solo el punto de entrada de navegación y no
+pinta contenido propio — ver su docstring). Encaja con el asistente como herramienta
+`weekly_signals` (`app/assistant/tools/signals.py`).
+
+Se implementó tal como está descrita abajo, con dos matices de alcance v1:
+
+- **Rotación** cubre parejas, no tríos — mismo dato (`lineup_stints`), extenderlo a tríos es
+  mecánico si hiciera falta.
+- **Carga** reutiliza el umbral fijo de `app/pages/estado_equipo.py` (140 min en 7 días) en vez de
+  un contraste estadístico: es, por diseño, la única señal de calendario y no de hipótesis (§2).
+
+El tercer matiz de la v1 original ya está cerrado: **Equipo** ahora cubre también el reparto de
+tiro por zona (§2, "y reparto de tiro por zona"), no solo los cuatro factores + ritmo.
+`queries.team_game_zone_counts` extiende `team_shot_counts` con `game_id`/`game_date` en el
+`GROUP BY` (la misma consulta, no una tabla nueva), así que ya hay un desglose de zona
+PARTIDO A PARTIDO para toda la temporada de un equipo — lo que faltaba para no tener que repetir
+`zone_matchup.py` cada semana. `analytics.signals.detect_team_zone_signals` no compara contra la
+liga (eso sigue siendo la propuesta 08): compara el equipo CONSIGO MISMO, últimos K partidos
+contra el resto, con un `two_proportion_test` sobre qué parte del volumen de tiro sale de cada
+zona — mismo test que ya usan los porcentajes de tiro de jugador y el peso de una pareja en la
+rotación, aplicado aquí a "de todos los intentos, ¿qué parte salió de esta zona?".
 
 ## 1. El problema del entrenador
 

@@ -10,9 +10,11 @@ Se comprueban tres cosas por herramienta: el valor, la procedencia (`meta`) y
 la degradación cuando no hay dato.
 """
 import pytest
+from sqlalchemy import text
 
 from app.assistant.tools import ToolCatalog
-from tests.app.assistant.conftest import LEAGUE_SEASON_ID, add_stints
+from app.assistant.tools.base import ToolContext
+from tests.app.assistant.conftest import LEAGUE_SEASON_ID, TODAY, add_stints
 
 
 @pytest.fixture()
@@ -457,6 +459,111 @@ def test_clutch_lineups_clips_a_stint_to_the_window(engine, ctx):
     assert result["data"][0]["seconds"] == 300.0
 
 
+# --------------------------------------------------------- on/off y duplas --
+# Propuesta 07 (`doc/features/propuestas/07_onoff_y_duplas.md`). Dos tramos
+# con rosters distintos (solapan solo en "howard" y "moneke") para poder
+# afirmar con números exactos on/off, muestra suficiente/insuficiente y el
+# ranking de parejas/tríos, sin depender de una BD real.
+_ON_OFF_STARTERS = ["howard", "moneke", "codi", "sedekerskis", "kotsar"]
+_ON_OFF_BENCH = ["howard", "nikos", "moneke", "lutse", "costello"]
+
+
+def _add_on_off_stints(engine) -> None:
+    add_stints(
+        engine,
+        [
+            # 100 min con los titulares, +20 de diferencia -> +8.0 por 40.
+            ("g5", "bas", 0.0, 6000.0, 60, 40, 0, _ON_OFF_STARTERS),
+            # 200 min con el banquillo, -20 de diferencia -> -4.0 por 40.
+            ("g4", "bas", 0.0, 12000.0, 80, 100, 0, _ON_OFF_BENCH),
+        ],
+    )
+
+
+def test_player_on_off_is_not_registered_without_stints(ctx):
+    """Mismo criterio que clutch_lineups (§4.4): sin tramos, ni se enseña."""
+    assert "player_on_off" not in ToolCatalog(ctx).tools
+    assert "player_combos" not in ToolCatalog(ctx).tools
+
+
+def test_player_on_off_splits_context_and_flags_the_sample(engine, ctx):
+    """On/Off = diferencia por 40 CON el jugador menos SIN él (§4), con el aviso de muestra."""
+    _add_on_off_stints(engine)
+    from app.assistant.capabilities import probe
+
+    ctx.capabilities = probe(engine)
+    result = ToolCatalog(ctx).execute("1", "player_on_off", {"team_id": "bas"}).result
+    by_name = {row["player_name"]: row for row in result["data"]}
+
+    # Sedekerskis solo estuvo en los 100 minutos de titulares: no llega a los
+    # 200 minutos no negociables del §4, así que sale marcado como no fiable.
+    sede = by_name["Tadas Sedekerskis"]
+    assert sede["on_minutes"] == 100.0 and sede["on_per_40"] == 8.0
+    assert sede["off_minutes"] == 200.0 and sede["off_per_40"] == -4.0
+    assert sede["on_off"] == 12.0
+    assert sede["reliable"] is False
+
+    # Rogkavopoulos solo estuvo en los 200 minutos de banquillo: SÍ llega al
+    # mínimo, con el signo opuesto (el equipo rindió peor con el banquillo).
+    nikos = by_name["Nikos Rogkavopoulos"]
+    assert nikos["on_minutes"] == 200.0 and nikos["on_off"] == -12.0
+    assert nikos["reliable"] is True
+
+    # Howard jugó los DOS tramos: no le queda ningún minuto "sin él" con el
+    # que comparar, así que el On/Off no se puede calcular (huella NaN -> None
+    # tras `records`, no un 0 que sugiera "neutro").
+    howard = by_name["Marcus Howard"]
+    assert howard["on_minutes"] == 300.0
+    assert howard["off_minutes"] == 0.0
+    assert howard["on_off"] is None
+
+    assert any("no es una medida" in warning.lower() or "contexto" in warning.lower() for warning in result["meta"]["warnings"])
+    assert any("no llegan a" in warning for warning in result["meta"]["warnings"])
+
+
+def test_player_combos_ranks_pairs_by_plus_minus_per_40(engine, ctx):
+    """Mejor y peor pareja del §2b, entre TODAS las combinaciones posibles."""
+    _add_on_off_stints(engine)
+    from app.assistant.capabilities import probe
+
+    ctx.capabilities = probe(engine)
+    catalog = ToolCatalog(ctx)
+
+    best = catalog.execute("1", "player_combos", {"team_id": "bas", "size": 2, "order": "best"}).result
+    assert best["data"][0]["plus_minus_per_40"] == 8.0  # cualquier pareja SOLO de titulares
+
+    worst = catalog.execute("2", "player_combos", {"team_id": "bas", "size": 2, "order": "worst"}).result
+    assert worst["data"][0]["plus_minus_per_40"] == -4.0  # cualquier pareja SOLO de banquillo
+
+    # Howard+Moneke coincidieron en los dos tramos: se suman (300 min, +20-20=0).
+    combined = {row["player_ids"]: row for row in best["data"]}
+    howard_moneke = combined["howard,moneke"]
+    assert howard_moneke["minutes"] == 300.0
+    assert howard_moneke["plus_minus_per_40"] == 0.0
+    assert howard_moneke["stints"] == 2
+
+
+def test_player_combos_supports_trios(engine, ctx):
+    _add_on_off_stints(engine)
+    from app.assistant.capabilities import probe
+
+    ctx.capabilities = probe(engine)
+    result = ToolCatalog(ctx).execute("1", "player_combos", {"team_id": "bas", "size": 3}).result
+    assert result["data"]
+    assert all(row["jugadores"].count(" · ") == 2 for row in result["data"])
+    assert "tríos" in result["meta"]["scope"]
+
+
+def test_player_combos_fails_usefully_below_the_minimum_sample(engine, ctx):
+    """Un solo tramo de medio minuto no llega ni de lejos a los 100 minutos no negociables."""
+    add_stints(engine, [("g5", "bas", 0.0, 30.0, 1, 0, 0, _ON_OFF_STARTERS)])
+    from app.assistant.capabilities import probe
+
+    ctx.capabilities = probe(engine)
+    result = ToolCatalog(ctx).execute("1", "player_combos", {"team_id": "bas"}).result
+    assert result["error"] == "sin combinaciones con muestra"
+
+
 def test_team_foul_quarter_profile_is_not_registered_without_play_events(ctx):
     assert "team_foul_quarter_profile" not in ToolCatalog(ctx).tools
 
@@ -766,3 +873,207 @@ def test_game_runs_with_a_threshold_nothing_reaches_suggests_lowering_it(engine,
 
     assert result["error"] == "sin parciales"
     assert "min_swing" in result["suggestion"]
+
+
+# ------------------------------------------------------------- señales semanales --
+
+
+def _seed_weekly_signals_season(engine, season_id: int = 3) -> None:
+    """Temporada nueva y aislada con un cambio de rol claro: Howard pasa de 12 a 24 minutos.
+
+    5 partidos con estadísticas de asesor de baloncesto grandes (>= min_effect
+    de `analytics.signals`) y sin varianza dentro de cada ventana, para que el
+    contraste sea inequívoco sin depender de aleatoriedad ni de números
+    mágicos difíciles de verificar a mano.
+    """
+    from sqlalchemy import text
+
+    with engine.begin() as conn:
+        conn.execute(text("INSERT INTO seasons (id, label) VALUES (:id, 'Señales')"), {"id": season_id})
+        for i in range(1, 9):  # línea base: 8 partidos a 12 minutos
+            game_id = f"wkb{i}"
+            conn.execute(
+                text(
+                    "INSERT INTO games (id, season_id, competition_id, home_team_id, away_team_id,"
+                    " game_date, home_score, away_score, pace) VALUES"
+                    " (:id, :season_id, 1, 'bas', 'rm', :date, 80, 75, 70.0)"
+                ),
+                {"id": game_id, "season_id": season_id, "date": f"2026-09-{i:02d}"},
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO player_game_stats (game_id, player_id, minutes, pts, reb, ast, efg_pct)"
+                    " VALUES (:g, 'howard', 12.0, 6, 2, 1, 50.0)"
+                ),
+                {"g": game_id},
+            )
+        for i in range(1, 6):  # ventana reciente: 5 partidos a 24 minutos
+            game_id = f"wkr{i}"
+            conn.execute(
+                text(
+                    "INSERT INTO games (id, season_id, competition_id, home_team_id, away_team_id,"
+                    " game_date, home_score, away_score, pace) VALUES"
+                    " (:id, :season_id, 1, 'bas', 'rm', :date, 80, 75, 70.0)"
+                ),
+                {"id": game_id, "season_id": season_id, "date": f"2026-10-{i:02d}"},
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO player_game_stats (game_id, player_id, minutes, pts, reb, ast, efg_pct)"
+                    " VALUES (:g, 'howard', 24.0, 14, 3, 2, 50.0)"
+                ),
+                {"g": game_id},
+            )
+
+
+def test_weekly_signals_tool_finds_the_minutes_role_change(engine, catalog):
+    """El mismo motor que pinta `estado_equipo.py`, en JSON — un cambio de rol inequívoco pasa."""
+    _seed_weekly_signals_season(engine)
+
+    result = catalog.execute("1", "weekly_signals", {"team_id": "bas", "season_id": 3}).result
+
+    signals = result["data"]["signals"]
+    assert signals, "esperaba al menos la señal de minutos"
+    minutes_signal = next(s for s in signals if s["metric"] == "minutes")
+    assert minutes_signal["family"] == "player"
+    assert minutes_signal["subject_name"] == "Marcus Howard"
+    assert minutes_signal["effect"] == pytest.approx(12.0, abs=0.5)
+    assert minutes_signal["p_value"] is not None and minutes_signal["p_value"] < 0.10
+    assert minutes_signal["headline"]  # nunca vacío: la redacción por reglas siempre está
+    assert "context" not in minutes_signal and "headline_template" not in minutes_signal
+    assert result["data"]["window_games"] == 5
+    assert any("calidad de rival" in warning for warning in result["meta"]["warnings"])
+
+
+def test_weekly_signals_tool_never_errors_with_thin_data(catalog):
+    """Con el seed base (5 partidos) no hay ni K=5 + 3 de referencia: respuesta correcta, no un fallo."""
+    result = catalog.execute("1", "weekly_signals", {"team_id": "bas", "season_id": 1}).result
+
+    assert "error" not in result
+    assert isinstance(result["data"]["signals"], list)
+    assert len(result["data"]["signals"]) <= 5
+
+
+def test_weekly_signals_tool_is_registered_with_its_schema(catalog):
+    assert "weekly_signals" in catalog.tools
+    assert catalog.tools["weekly_signals"].parameters["required"] == ["team_id"]
+
+
+# ----------------------------------------------------- similitud de jugadores --
+# Propuesta 11 (`doc/features/propuestas/11_similitud_de_jugadores.md`). El
+# seed base y la liga sintética de `conftest.py` no traen boxscore de jugador
+# suficiente para el mínimo de la vista `player_percentiles` (5 partidos POR
+# COMPETICIÓN) ni minutos suficientes para `MIN_MINUTES_RECOMMENDED` (500,
+# inalcanzable en 5 partidos) — se siembra aquí una temporada propia con
+# partidos de sobra para las dos cosas.
+_SIMILARITY_SEASON_ID = 5
+_SIMILARITY_N_GAMES = 15
+_SIMILARITY_MINUTES_PER_GAME = 35.0
+
+
+def _seed_similarity_games(conn, team_a: str, team_b: str, player_a: str, player_b: str, pts_a: int, pts_b: int) -> None:
+    """`_SIMILARITY_N_GAMES` partidos entre `team_a`/`team_b`, con un jugador fijo por lado
+    anotando siempre `pts_a`/`pts_b` puntos — suficiente para que `player_percentiles`
+    (mínimo 5 partidos) y el filtro de minutos (mínimo 500) los acepten a los dos."""
+    for team, player in ((team_a, player_a), (team_b, player_b)):
+        conn.execute(
+            text("INSERT OR IGNORE INTO teams (id, name, is_own_team) VALUES (:t, :t, 0)"), {"t": team}
+        )
+        conn.execute(
+            text("INSERT OR IGNORE INTO players (id, team_id, name, number, position) VALUES (:p, :t, :p, 9, 'Base')"),
+            {"p": player, "t": team},
+        )
+    for g in range(_SIMILARITY_N_GAMES):
+        game_id = f"sim-{team_a}-{team_b}-{g}"
+        conn.execute(
+            text(
+                "INSERT INTO games (id, season_id, competition_id, home_team_id, away_team_id,"
+                " game_date, home_score, away_score, pace) VALUES"
+                " (:g, :season, 1, :a, :b, :date, 80, 75, 70.0)"
+            ),
+            {"g": game_id, "season": _SIMILARITY_SEASON_ID, "a": team_a, "b": team_b, "date": f"2027-01-{g + 1:02d}"},
+        )
+        for player, pts in ((player_a, pts_a), (player_b, pts_b)):
+            conn.execute(
+                text(
+                    "INSERT INTO player_game_stats (game_id, player_id, minutes, pts, reb, ast, efg_pct)"
+                    " VALUES (:g, :p, :min, :pts, 4, 3, 50.0)"
+                ),
+                {"g": game_id, "p": player, "min": _SIMILARITY_MINUTES_PER_GAME, "pts": pts},
+            )
+
+
+def _seed_similarity_league(conn) -> None:
+    """Tres equipos: `bas` se enfrenta a `sim-close` (perfil casi idéntico) pero NUNCA a
+    `sim-far` (perfil muy distinto, y el que debe desaparecer con `only_faced`)."""
+    conn.execute(
+        text("INSERT INTO seasons (id, label) VALUES (:id, '2027-2028')"), {"id": _SIMILARITY_SEASON_ID}
+    )
+    _seed_similarity_games(conn, "bas", "sim-close", "bas_star", "close_star", pts_a=20, pts_b=19)
+    _seed_similarity_games(conn, "sim-far-a", "sim-far", "far_a_star", "far_star", pts_a=20, pts_b=4)
+
+
+@pytest.fixture()
+def similarity_ctx(engine):
+    """Contexto sobre la temporada sintética de similitud, mismo patrón que `league_ctx`."""
+    from app.assistant.capabilities import probe
+
+    with engine.begin() as conn:
+        _seed_similarity_league(conn)
+    return ToolContext(
+        engine=engine, season_id=_SIMILARITY_SEASON_ID, own_team_id="bas", today=TODAY, capabilities=probe(engine),
+    )
+
+
+def test_similar_players_finds_the_closest_profile_and_explains_it(similarity_ctx):
+    catalog = ToolCatalog(similarity_ctx)
+    result = catalog.execute("1", "similar_players", {"player_id": "bas_star"}).result
+
+    assert "error" not in result
+    names = [row["name"] for row in result["data"]["similar"]]
+    assert "close_star" in names
+    # El perfil lejano (4 puntos frente a 20) tiene que quedar peor situado que el cercano.
+    scores = {row["name"]: row["similarity_score"] for row in result["data"]["similar"]}
+    if "far_star" in scores:
+        assert scores["close_star"] > scores["far_star"]
+    top = result["data"]["similar"][0]
+    assert top["name"] == "close_star"
+    assert top["closest"] and top["farthest"]
+    assert result["data"]["method"] == "cosine"
+    assert result["meta"]["source"]
+    assert any("altura" in warning.lower() for warning in result["meta"]["warnings"])
+
+
+def test_similar_players_only_faced_filters_out_teams_never_played(similarity_ctx):
+    catalog = ToolCatalog(similarity_ctx)
+    result = catalog.execute(
+        "1", "similar_players", {"player_id": "bas_star", "only_faced": True}
+    ).result
+
+    assert "error" not in result
+    names = {row["name"] for row in result["data"]["similar"]}
+    assert "close_star" in names
+    assert "far_star" not in names and "far_a_star" not in names
+
+
+def test_similar_players_fails_usefully_for_a_player_without_enough_games(similarity_ctx):
+    """`howard` existe (seed base) pero no tiene 5 partidos en UNA competición en esta temporada."""
+    catalog = ToolCatalog(similarity_ctx)
+    result = catalog.execute("1", "similar_players", {"player_id": "howard"}).result
+
+    assert result["error"] == "sin datos"
+    assert "suggestion" in result
+
+
+def test_similar_players_rejects_an_unknown_method(similarity_ctx):
+    catalog = ToolCatalog(similarity_ctx)
+    result = catalog.execute(
+        "1", "similar_players", {"player_id": "bas_star", "method": "manhattan"}
+    ).result
+    assert result["error"] == "parámetro inválido"
+
+
+def test_similar_players_is_registered_with_its_schema(similarity_ctx):
+    catalog = ToolCatalog(similarity_ctx)
+    assert "similar_players" in catalog.tools
+    assert catalog.tools["similar_players"].parameters["required"] == ["player_id"]

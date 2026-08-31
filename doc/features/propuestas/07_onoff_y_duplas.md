@@ -1,6 +1,19 @@
 # 07. On/Off y duplas
 
-**Estado:** propuesta, parcialmente resuelta en el asistente · **Fecha:** 2026-08-28 · **Índice:** [00_indice.md](00_indice.md)
+**Estado:** IMPLEMENTADA (2026-08-31) · **Fecha de la propuesta:** 2026-08-28 · **Índice:** [00_indice.md](00_indice.md)
+
+Pantalla nueva `app/pages/quintetos.py`, con las tres vistas de §2: On/Off por
+jugador (a), matriz de parejas más lista de mejores/peores tríos (b) y
+con-y-sin para dos jugadores concretos (c) — con selector de equipo, para que
+sirva igual para el Baskonia y para el próximo rival (§2d). El cálculo amplía
+`app/data/queries_assistant.py` con `player_on_off` y `player_combos`
+(tamaño 2 y 3), reutilizando `_lineup_rows` y el recorte de `clutch_lineups`
+tal como proponía §6; las herramientas equivalentes del asistente viven en
+`app/assistant/tools/lineups.py`. Mínimos de muestra tal como pedía §4 (200
+minutos para el On/Off individual, 100 para parejas y tríos) y encogido hacia
+la media con `n/(n+k)` para ordenar, igual criterio que
+[02_calidad_de_tiro.md](02_calidad_de_tiro.md). Tests en
+`tests/app/assistant/test_tools.py`.
 
 Cifras calculadas sobre `data/baskonia.db` el 2026-08-28.
 

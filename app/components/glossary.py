@@ -171,6 +171,43 @@ TERMS: Dict[str, Term] = {
         "Cuántas veces esos cinco han saltado juntos a la pista. Diez minutos en un tramo y diez en "
         "seis tramos sueltos no dicen lo mismo.",
     ),
+    # ------------------------------------------ on/off y duplas (propuesta 07) --
+    "on_minutes": Term(
+        "Min. con él", "Minutos con el jugador en pista",
+        "Minutos del equipo mientras ESE jugador estaba en la cancha, sumando todos sus tramos de "
+        "la temporada.",
+    ),
+    "off_minutes": Term(
+        "Min. sin él", "Minutos sin el jugador en pista",
+        "Minutos del equipo mientras ese jugador estaba en el banquillo. Con on_minutes suman los "
+        "minutos totales del equipo en la temporada.",
+    ),
+    "on_per_40": Term(
+        "+/- 40 con él", "Diferencia por 40 minutos, con él en pista",
+        "Diferencia de puntos del equipo mientras jugaba, normalizada a 40 minutos.",
+    ),
+    "off_per_40": Term(
+        "+/- 40 sin él", "Diferencia por 40 minutos, sin él en pista",
+        "Diferencia de puntos del equipo mientras estaba en el banquillo, normalizada a 40 minutos. "
+        "Es la referencia con la que se compara on_per_40 para sacar el On/Off.",
+    ),
+    "on_off": Term(
+        "On/Off", "Diferencia por 40 con él, menos sin él",
+        "Cuánto mejor (o peor) le va al equipo con ese jugador en pista frente a sin él. NO es una "
+        "medida de la calidad del jugador, es de contexto: compartir pista siempre con los buenos "
+        "infla el número, y al revés. Va regularizado hacia 0 con poca muestra.",
+    ),
+    "plus_minus_per_40": Term(
+        "+/- por 40", "Diferencia de puntos por 40 minutos juntos",
+        "Diferencia de puntos del equipo mientras esa pareja o trío coincidían en pista, normalizada "
+        "a 40 minutos para poder comparar combinaciones con minutos muy distintos.",
+    ),
+    "sample_flag": Term(
+        "Muestra", "Aviso de minutos mínimos",
+        "'Ok' si llega al mínimo no negociable de la propuesta 07 (200 minutos en pista para el "
+        "On/Off individual, 100 minutos juntos para parejas y tríos); por debajo, 'Insuficiente' — "
+        "el número existe pero no debe usarse para decidir.",
+    ),
     "run_swing": Term(
         "Swing", "Puntos que se mueve el marcador",
         "Cuánto cambia la diferencia en el marcador durante el parcial. +10 = se le sacaron diez "
@@ -311,6 +348,37 @@ TERMS: Dict[str, Term] = {
         "'ok' con 15 partidos o más esta temporada (entra en el ranking de la liga); 'caution' entre 8 y "
         "14 (se enseña su ficha, pero como tendencia gruesa, no como afirmación fina). Por debajo de 8 no "
         "se muestra ficha.",
+    ),
+    # --------------------------------- dónde castigar al rival (propuesta 08) --
+    "concede_diff_pp": Term(
+        "Concede vs. liga", "Acierto que concede en la zona, frente a la media de la liga",
+        "Puntos porcentuales de diferencia entre lo que se acierta EN ESA ZONA contra este equipo y lo "
+        "que acierta ahí toda la liga. Positivo = defensa floja en esa zona. Ya regularizado hacia 0 "
+        "con poca muestra.",
+    ),
+    "produce_diff_pp": Term(
+        "Produce vs. liga", "Acierto propio en la zona, frente a la media de la liga",
+        "Igual que 'Concede vs. liga' pero del lado que TIRA: cuánto se acierta ahí por encima (o por "
+        "debajo) de lo que acierta la liga entera desde esa misma zona.",
+    ),
+    "shots_per_game": Term(
+        "Tiros/partido", "Volumen medio de tiros por partido en esa zona",
+        "Cuántos tiros de media se lanzan en esa zona por partido. Una zona con mucha diferencia de "
+        "acierto pero poco volumen mueve menos puntos que una con menos diferencia y más volumen — por "
+        "eso el ranking ordena por puntos por partido, no por el porcentaje.",
+    ),
+    "value_pts_per_game": Term(
+        "Puntos/partido en juego", "Puntos por partido que se pueden ganar (o perder) en esa zona",
+        "(Diferencia de acierto contra la liga) × (2 o 3, lo que vale el tiro) × (tiros por partido en "
+        "esa zona). Es la unidad en la que decide un entrenador: ordena la lista de zonas a atacar (o a "
+        "cuidar), no el porcentaje suelto.",
+    ),
+    # ------------------------------------ similitud de jugadores (propuesta 11) --
+    "similarity_score": Term(
+        "Parecido", "Puntuación de parecido (0-100)",
+        "Qué tan cerca están dos perfiles de percentiles en las dimensiones que se pudieron comparar. "
+        "100 = idéntico en todo lo disponible. Depende del método elegido (estilo o nivel) y de los "
+        "pesos ajustados — no es una cifra absoluta, cambia según qué se le pida que compare.",
     ),
 }
 

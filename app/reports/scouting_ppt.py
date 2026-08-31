@@ -39,17 +39,21 @@ from typing import Dict, List, Optional
 
 import pandas as pd
 from pptx import Presentation
+from pptx.dml.color import RGBColor
+from pptx.enum.shapes import MSO_SHAPE
+from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
+from pptx.util import Inches, Pt
 
 # Mismo patrón de import doble que `postgame_ppt.py` (pytest vs. Streamlit,
 # ver `assistant/tools/context.py`).
 try:  # pragma: no cover - depende de cómo se arranque el proceso, no de la lógica
-    from app.analytics import shot_quality
+    from app.analytics import shot_quality, win_thresholds
     from app.assistant.llm import LLMClient, LLMError
     from app.components.branding import CREST_PATH
     from app.data import queries, queries_assistant
     from app.reports import _deck
 except ImportError:  # pragma: no cover
-    from analytics import shot_quality
+    from analytics import shot_quality, win_thresholds
     from assistant.llm import LLMClient, LLMError
     from components.branding import CREST_PATH
     from data import queries, queries_assistant
@@ -216,14 +220,211 @@ def _shot_quality_bullets(
     return bullets
 
 
-def _build_shot_quality_slide(prs: Presentation, bullets: List[str], rival_name: str) -> None:
-    _deck.add_bullets_slide(
+#: Sufijo de las sub-zonas de ala partidas por el arco de triple
+#: (`shot_quality.zone_profile`: "Ala izq. (2)"/"Ala izq. (3)").
+_WING_SUFFIX_RE = re.compile(r"\s\(\d\)$")
+
+
+def _coarsen_zone_profile(zone_df: pd.DataFrame) -> pd.DataFrame:
+    """Colapsa "Ala izq. (2)"/"Ala izq. (3)" (y su pareja "der.") en una sola "Ala izq."/"Ala der.".
+
+    El mapa de tiro del dossier (§4 de la propuesta: rectángulos NATIVOS de
+    pptx, sin dependencia nueva) necesita una geometría por zona, y
+    `court_zones` solo tiene una caja rectangular real para "Ala izq."/"Ala
+    der." completas (ids 2/3) — la partición en 2/3 puntos que pinta
+    `components/court.py::_wing_area_layers` es un ARCO calculado con Altair
+    en el momento, no un rectángulo de la tabla (sus filas 14-17 son puntos
+    degenerados, `x_min == x_max`, solo para anclar una etiqueta). Reproducir
+    ese arco a mano en pptx no compensa para una diapositiva que se lee en un
+    minuto — se combinan los tiros/aciertos/puntos de las dos sub-zonas y se
+    recalcula el PPS conjunto sobre el rectángulo entero, una simplificación
+    de v1 explícita (igual criterio que acotar el resto de la propuesta 03).
+
+    Args:
+        zone_df: salida de `shot_quality.zone_profile`.
+
+    Returns:
+        `zone_label, volume, made, fg_pct, pps, league_pps, diff_pps` — mismas
+        columnas que hacen falta para pintar el mapa, con las sub-zonas de ala
+        ya fundidas. Vacío si `zone_df` lo está.
+    """
+    columns = ["zone_label", "volume", "made", "fg_pct", "pps", "league_pps", "diff_pps"]
+    if zone_df.empty:
+        return pd.DataFrame(columns=columns)
+
+    df = zone_df.assign(
+        _base_label=zone_df["zone_label"].str.replace(_WING_SUFFIX_RE, "", regex=True),
+        _points=zone_df["pps"] * zone_df["volume"],
+        _league_points=zone_df["league_pps"] * zone_df["volume"],
+    )
+    grouped = df.groupby("_base_label", as_index=False).agg(
+        volume=("volume", "sum"), made=("made", "sum"),
+        _points=("_points", "sum"), _league_points=("_league_points", "sum"),
+    )
+    grouped["fg_pct"] = 100.0 * grouped["made"] / grouped["volume"]
+    grouped["pps"] = grouped["_points"] / grouped["volume"]
+    grouped["league_pps"] = grouped["_league_points"] / grouped["volume"]
+    grouped["diff_pps"] = grouped["pps"] - grouped["league_pps"]
+    return grouped.rename(columns={"_base_label": "zone_label"})[columns]
+
+
+#: Diferencia de PPS (contra la media de la liga en esa zona) donde satura el
+#: color del mapa — verificado sobre `data/baskonia.db` (temporada 2025-2026,
+#: perfil del Baskonia): el rango real de `diff_pps` por zona en una
+#: temporada entera va de -0,11 a +0,11, así que 0,15 satura solo los casos
+#: más extremos sin aplanar todo el mapa a un solo tono.
+_ZONE_DIFF_CAP = 0.15
+_ZONE_LOW = (0xC6, 0x28, 0x28)     # rojo — peor que la liga (mismo tono que `components/court.py`)
+_ZONE_NEUTRAL = (0xF0, 0xED, 0xE4)  # "igual que la liga"
+_ZONE_HIGH = (0x00, 0x83, 0x00)    # verde Baskonia — mejor que la liga
+_ZONE_EMPTY = RGBColor(0xE6, 0xE4, 0xDC)  # sin tiros en esa zona
+
+
+def _lerp_rgb(a: tuple, b: tuple, t: float) -> RGBColor:
+    t = max(0.0, min(1.0, t))
+    return RGBColor(*(int(round(a[i] + (b[i] - a[i]) * t)) for i in range(3)))
+
+
+def _zone_fill_color(diff_pps) -> RGBColor:
+    """Rojo (peor que la liga) → neutro → verde (mejor), saturado a `_ZONE_DIFF_CAP` PPS."""
+    if diff_pps is None or pd.isna(diff_pps):
+        return _ZONE_EMPTY
+    weight = min(abs(float(diff_pps)) / _ZONE_DIFF_CAP, 1.0)
+    base = _ZONE_HIGH if diff_pps >= 0 else _ZONE_LOW
+    return _lerp_rgb(_ZONE_NEUTRAL, base, weight)
+
+
+def _draw_shot_zone_map(
+    slide, zone_geometry: dict, zone_df: pd.DataFrame, *, left: float, top: float, width: float, height: float
+) -> None:
+    """Dibuja un medio campo de rectángulos NATIVOS de pptx, coloreados por `diff_pps`.
+
+    Args:
+        zone_geometry: `zone_label -> (x_min, x_max, y_min, y_max)` en el
+            sistema de coordenadas de `court_zones` (x: 0-500, y: 0-460, y=0
+            lejos del aro). Solo se pintan las zonas presentes aquí Y en
+            `zone_df` — una zona sin geometría (p.ej. si `court_zones` cambia)
+            simplemente no sale, no revienta.
+        zone_df: salida de `_coarsen_zone_profile` — una fila por zona con
+            `volume`/`pps`/`diff_pps`.
+        left/top/width/height: caja completa del diagrama, en pulgadas. El
+            rectángulo de cada zona se escala proporcionalmente dentro de
+            ella (x/500 y y/460), así que el aro queda siempre en la base.
+    """
+    x_span, y_span = 500.0, 460.0
+    court = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(left), Inches(top), Inches(width), Inches(height))
+    court.fill.solid()
+    court.fill.fore_color.rgb = _ZONE_EMPTY
+    _deck.strip_shape_chrome(court)
+
+    by_label = zone_df.set_index("zone_label") if not zone_df.empty else zone_df
+    for label, (x_min, x_max, y_min, y_max) in zone_geometry.items():
+        rect_left = left + (x_min / x_span) * width
+        rect_top = top + (y_min / y_span) * height
+        rect_w = max((x_max - x_min) / x_span * width, 0.05)
+        rect_h = max((y_max - y_min) / y_span * height, 0.05)
+
+        row = by_label.loc[label] if (not by_label.empty and label in by_label.index) else None
+        diff_pps = row["diff_pps"] if row is not None else None
+        volume = int(row["volume"]) if row is not None else 0
+
+        shape = slide.shapes.add_shape(
+            MSO_SHAPE.RECTANGLE, Inches(rect_left), Inches(rect_top), Inches(rect_w), Inches(rect_h)
+        )
+        shape.fill.solid()
+        shape.fill.fore_color.rgb = _zone_fill_color(diff_pps)
+        shape.shadow.inherit = False
+        shape.line.color.rgb = _deck.WHITE
+        shape.line.width = Pt(1.0)
+
+        weight = 0.0 if diff_pps is None or pd.isna(diff_pps) else min(abs(float(diff_pps)) / _ZONE_DIFF_CAP, 1.0)
+        text_color = _deck.WHITE if weight > 0.35 else _deck.DARK
+        tf = shape.text_frame
+        tf.word_wrap = True
+        tf.vertical_anchor = MSO_ANCHOR.MIDDLE
+        p = tf.paragraphs[0]
+        p.alignment = PP_ALIGN.CENTER
+        p.text = shot_quality.format_pps(row["pps"]) if row is not None else "—"
+        p.font.size, p.font.bold, p.font.color.rgb = Pt(11), True, text_color
+        if volume:
+            p2 = tf.add_paragraph()
+            p2.alignment = PP_ALIGN.CENTER
+            p2.text = f"({volume})"
+            p2.font.size, p2.font.color.rgb = Pt(8), text_color
+
+
+def _build_shot_quality_slide(
+    prs: Presentation,
+    bullets: List[str],
+    rival_name: str,
+    *,
+    zones_df: Optional[pd.DataFrame] = None,
+    attack_zone_profile: Optional[pd.DataFrame] = None,
+    defense_zone_profile: Optional[pd.DataFrame] = None,
+) -> None:
+    """Viñetas de veredicto + dos mapas de tiro (ataque/defensa) por zona, si hay geometría.
+
+    Sin `zones_df` (o vacío) degrada a solo las viñetas, a toda página —
+    exactamente el comportamiento de antes de que existiera el mapa (§7 de la
+    propuesta: "v1... sin mapa de tiros", ya cerrado).
+    """
+    zone_geometry = {}
+    if zones_df is not None and not zones_df.empty:
+        # Solo las filas con un rectángulo REAL (`x_min != x_max`): descarta
+        # "Mate" (id 10, un punto) y las sub-zonas de ala degeneradas (14-17,
+        # ver `_coarsen_zone_profile`) — "Línea de fondo" (13) ya no aparece
+        # en `zone_profile` porque `shot_quality.ZONE_MERGES` la funde con
+        # "Pintura" antes de llegar aquí.
+        zone_geometry = {
+            row.label: (row.x_min, row.x_max, row.y_min, row.y_max)
+            for row in zones_df.itertuples() if row.x_min != row.x_max
+        }
+
+    has_maps = bool(zone_geometry) and (
+        (attack_zone_profile is not None and not attack_zone_profile.empty)
+        or (defense_zone_profile is not None and not defense_zone_profile.empty)
+    )
+
+    slide = _deck.add_bullets_slide(
         prs,
         title=f"Calidad de tiro (xPPS) — {rival_name}",
         subtitle="Lo que genera atacando y lo que concede defendiendo, contra la media de la liga en cada zona.",
         bullets=bullets,
         fallback_text=f"Sin datos de calidad de tiro para {rival_name} en esta temporada.",
+        body_left=8.6 if has_maps else 0.6,
+        body_width=4.15 if has_maps else 12.1,
     )
+    if not has_maps:
+        return
+
+    diagram_top, diagram_w = 1.85, 3.7
+    diagram_h = diagram_w * 460.0 / 500.0
+    gap = 0.3
+    lefts = (0.6, 0.6 + diagram_w + gap)
+    labels = ("Ataque (genera)", "Defensa (concede)")
+    profiles = (attack_zone_profile, defense_zone_profile)
+
+    for left, label, profile in zip(lefts, labels, profiles):
+        header = slide.shapes.add_textbox(Inches(left), Inches(diagram_top - 0.35), Inches(diagram_w), Inches(0.3))
+        p = header.text_frame.paragraphs[0]
+        p.text = label
+        p.font.size, p.font.bold, p.font.color.rgb = Pt(14), True, _deck.DARK
+        _draw_shot_zone_map(
+            slide, zone_geometry, profile if profile is not None else pd.DataFrame(),
+            left=left, top=diagram_top, width=diagram_w, height=diagram_h,
+        )
+
+    caption = slide.shapes.add_textbox(
+        Inches(0.6), Inches(diagram_top + diagram_h + 0.15), Inches(2 * diagram_w + gap), Inches(0.7)
+    )
+    tf = caption.text_frame
+    tf.word_wrap = True
+    p = tf.paragraphs[0]
+    p.text = (
+        "Color: PPS por zona contra la media de la liga esa misma zona (verde = mejor, rojo = peor, "
+        "saturado a ±0,15 PPS). Cifra grande = PPS de la zona; entre paréntesis, tiros en la temporada."
+    )
+    p.font.size, p.font.italic, p.font.color.rgb = Pt(11), True, _deck.MUTED
 
 
 # ========================================================== jugadores clave ==
@@ -502,14 +703,39 @@ def _build_lineups_slide(prs: Presentation, lineups_df: pd.DataFrame, quarters_d
 # ========================================================= claves del partido ==
 
 
+def _win_threshold_key_candidates(ctx: dict) -> List[tuple]:
+    """Candidatos de "claves del partido" a partir de los umbrales de victoria (propuesta 09).
+
+    `ctx["win_threshold_cards"]` ya viene con el ajuste al perfil DEL RIVAL
+    aplicado (`win_thresholds.rival_adjusted_card`, ver `generate_scouting_
+    ppt`) — es justo el enganche que §6 de la propuesta 09 pedía ("es también
+    la fuente natural de la diapositiva 'claves del partido' del dossier:
+    calcularlo una vez, usarlo en los dos sitios"). El peso se escala por la
+    separación de cada tarjeta (mismo orden de magnitud que las demás
+    candidatas de esta función, 1.5-6) para que un umbral muy separador
+    compita de verdad con el resto, no se cuele solo por existir.
+    """
+    cards = ctx.get("win_threshold_cards") or []
+    rival_name = ctx["rival_name"]
+    out = []
+    for card in cards:
+        headline = win_thresholds.card_headline(card)
+        text = f"Objetivo del partido: {headline[0].lower()}{headline[1:]}"
+        if card.get("is_rival_adjusted"):
+            text += f" (ajustado al perfil de {rival_name})."
+        else:
+            text += "."
+        weight = 2.5 + card.get("separation", 0.0) / 10.0
+        out.append((weight, text))
+    return out
+
+
 def _rule_based_game_keys(ctx: dict, max_items: int = _MAX_KEYS) -> List[str]:
     """Fallback determinista de "Claves del partido": percentiles extremos +
-    cara a cara + zona más castigable + reparto por cuarto, priorizado por lo
-    extremo que sea cada señal — nunca vacío (§7 de la propuesta menciona
-    umbrales de victoria como una posibilidad futura; aquí, sin esa pieza
-    todavía implementada, se construye con lo que ya está calculado en este
-    mismo dossier)."""
-    candidates: List[tuple] = []
+    cara a cara + objetivos de umbrales de victoria (propuesta 09) + zona más
+    castigable + reparto por cuarto, priorizado por lo extremo que sea cada
+    señal — nunca vacío."""
+    candidates: List[tuple] = _win_threshold_key_candidates(ctx)
     rival_name = ctx["rival_name"]
     style_row = ctx["style_row"]
 
@@ -578,7 +804,8 @@ def _rule_based_game_keys(ctx: dict, max_items: int = _MAX_KEYS) -> List[str]:
 _KEYS_SYSTEM_PROMPT = (
     "Eres el analista del Baskonia preparando la reunión técnica del día antes de un partido. Te "
     "paso el perfil del rival ya resuelto (percentiles de liga, cara a cara, calidad de tiro por "
-    "zona, reparto por cuarto, jugador más peligroso). Redacta EXACTAMENTE 5 claves del partido: "
+    "zona, reparto por cuarto, jugador más peligroso, objetivos numéricos de umbrales de victoria "
+    "ya ajustados a este rival). Redacta EXACTAMENTE 5 claves del partido: "
     "frases cortas en español (máximo 14 palabras), concretas y accionables, basadas SOLO en los "
     "datos que te paso, sin inventar nada que no esté ahí. Sin emojis ni adornos.\n\n"
     "Responde EXCLUSIVAMENTE con JSON válido, sin explicación ni bloque de código: una lista de "
@@ -613,6 +840,18 @@ def _llm_game_keys(client: LLMClient, ctx: dict) -> Optional[List[str]]:
             {"nombre": ctx["top_player"]["name"], "pts_avg": round(float(ctx["top_player"]["pts_avg"]), 1)}
             if ctx["top_player"] is not None and pd.notna(ctx["top_player"].get("pts_avg")) else None
         ),
+        # Propuesta 09 (§6): los umbrales de victoria ya ajustados al perfil
+        # del rival, como candidatos de "objetivo del partido" — el modelo
+        # los redacta, no los recalcula (los números vienen ya resueltos por
+        # `win_thresholds`, igual que el resto de este payload).
+        "objetivos_umbral": [
+            {
+                "batalla": card["label"],
+                "objetivo": win_thresholds.card_value_text(card),
+                "ajustado_al_rival": bool(card.get("is_rival_adjusted")),
+            }
+            for card in (ctx.get("win_threshold_cards") or [])
+        ],
     }
     message = {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}
     response = client.chat([message], [], system=_KEYS_SYSTEM_PROMPT)
@@ -692,7 +931,7 @@ def generate_scouting_ppt(
 
     quarters_df = queries.team_quarter_profile(engine, rival_team_id, scouting_season_id)
 
-    roster_df = queries.team_roster_production(engine, rival_team_id, scouting_season_id)
+    roster_df = queries_assistant.team_roster_production(engine, rival_team_id, scouting_season_id)
     # Solo quien de verdad ha jugado esta temporada (descarta bajas/altas sin
     # minutos), por minutos primero — el rol real, no el dorsal ni el nombre.
     roster_df = roster_df.dropna(subset=["gp"]).sort_values("min_avg", ascending=False)
@@ -745,6 +984,22 @@ def generate_scouting_ppt(
     defense_summary = shot_quality.summarize(defense_valued)
     _, shot_coverage = shot_quality.split_usable(attack_counts)
 
+    # Propuesta 09 (§6): los umbrales de victoria de liga, ajustados al perfil
+    # de ESTE rival, son la fuente natural de "claves del partido" — se
+    # calculan una vez aquí y los usan tanto `_rule_based_game_keys` como el
+    # prompt del LLM (`ctx["win_threshold_cards"]`). Vacío (nunca `None`) si
+    # la temporada no tiene aún estadísticas avanzadas suficientes: el resto
+    # del dossier sigue construyéndose igual, sin esta fuente de claves.
+    league_factor_rows = queries.game_factor_rows(engine, scouting_season_id)
+    win_threshold_cards: List[dict] = []
+    if not league_factor_rows.empty:
+        objective_cards = win_thresholds.league_objectives(league_factor_rows)
+        rival_avg = win_thresholds.rival_concession_averages(league_factor_rows, rival_team_id)
+        league_avg = win_thresholds.league_concession_averages(league_factor_rows)
+        win_threshold_cards = [
+            win_thresholds.rival_adjusted_card(card, rival_avg, league_avg) for card in objective_cards
+        ]
+
     ctx = {
         "rival_name": rival_name,
         "is_home": is_home,
@@ -759,6 +1014,7 @@ def generate_scouting_ppt(
         "top_player": top_player,
         "attack_diff": attack_summary["diff_shrunk"] if attack_summary["reliable"] else None,
         "defense_diff": defense_summary["diff_shrunk"] if defense_summary["reliable"] else None,
+        "win_threshold_cards": win_threshold_cards,
     }
 
     lineups_df = queries.season_lineups(engine, rival_team_id, scouting_season_id)
@@ -766,7 +1022,18 @@ def generate_scouting_ppt(
     player_highlights = select_player_highlights(llm_client, top_rows, rival_name)
     game_keys = select_game_keys(llm_client, ctx)
 
-    return build_scouting_ppt(ctx, style_df, top_rows, player_highlights, lineups_df, shot_quality_bullets, game_keys)
+    # Mapa de tiro (§4/§7 de la propuesta 03): rectángulos NATIVOS de pptx
+    # sobre la geometría real de `court_zones`, sin dependencia nueva — ver el
+    # docstring de `_coarsen_zone_profile` para por qué se colapsan las
+    # sub-zonas de ala partidas por el arco en vez de reproducirlo a mano.
+    zones_df = queries.court_zones(engine)
+    attack_zone_profile = _coarsen_zone_profile(shot_quality.zone_profile(attack_valued))
+    defense_zone_profile = _coarsen_zone_profile(shot_quality.zone_profile(defense_valued))
+
+    return build_scouting_ppt(
+        ctx, style_df, top_rows, player_highlights, lineups_df, shot_quality_bullets, game_keys,
+        zones_df=zones_df, attack_zone_profile=attack_zone_profile, defense_zone_profile=defense_zone_profile,
+    )
 
 
 def build_scouting_ppt(
@@ -777,6 +1044,10 @@ def build_scouting_ppt(
     lineups_df: pd.DataFrame,
     shot_quality_bullets: List[str],
     game_keys: List[str],
+    *,
+    zones_df: Optional[pd.DataFrame] = None,
+    attack_zone_profile: Optional[pd.DataFrame] = None,
+    defense_zone_profile: Optional[pd.DataFrame] = None,
 ) -> bytes:
     """Bytes del `.pptx`: las seis diapositivas del dossier, con todo el texto ya resuelto.
 
@@ -784,12 +1055,23 @@ def build_scouting_ppt(
     `postgame_ppt.build_postgame_ppt`: los tests ejercitan la maquetación con
     datos de mentira, sin fixture de BD; `generate_scouting_ppt` es la única
     que toca `engine`, y le basta con construir estos argumentos y llamar aquí.
+
+    Args:
+        zones_df/attack_zone_profile/defense_zone_profile: geometría de
+            `court_zones` y los dos perfiles de zona YA COARSENED
+            (`_coarsen_zone_profile`), para dibujar el mapa de tiro de la
+            diapositiva de calidad de tiro (§4 de la propuesta 03). `None` (o
+            vacío) degrada a la diapositiva sin mapas, solo con las viñetas —
+            mismo criterio de "nunca un hueco vacío" que el resto del módulo.
     """
     rival_name = ctx["rival_name"]
     prs = _deck.new_presentation()
     _build_cover_slide(prs, ctx)
     _build_identity_slide(prs, style_df, rival_name)
-    _build_shot_quality_slide(prs, shot_quality_bullets, rival_name)
+    _build_shot_quality_slide(
+        prs, shot_quality_bullets, rival_name,
+        zones_df=zones_df, attack_zone_profile=attack_zone_profile, defense_zone_profile=defense_zone_profile,
+    )
     _build_player_slides(prs, player_rows, player_highlights, rival_name)
     _build_lineups_slide(prs, lineups_df, ctx["quarters_df"], rival_name)
     _build_keys_slide(prs, game_keys, rival_name)

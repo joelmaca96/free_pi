@@ -19,6 +19,7 @@ caso ESPERADO, no un error: `app/assistant/capabilities.py` lo sondea y apaga
 la herramienta correspondiente antes de que el modelo la pueda llamar.
 """
 import datetime as dt
+from itertools import combinations
 from typing import List, Optional
 
 import pandas as pd
@@ -26,7 +27,22 @@ import streamlit as st
 from sqlalchemy import inspect, text
 from sqlalchemy.engine import Engine
 
+try:  # pragma: no cover - ver nota en tools/context.py
+    from app.analytics.shot_quality import shrink
+except ImportError:  # pragma: no cover
+    from analytics.shot_quality import shrink
+
 _TTL = 3600  # mismo criterio que `queries.py`: la ingesta corre por su cuenta.
+
+# Mínimos de muestra del §4 de la propuesta 07 (`doc/features/propuestas/
+# 07_onoff_y_duplas.md`), NO NEGOCIABLES: con un quinteto de cinco la muestra
+# se agota casi siempre (§1: solo 2 de 724 combinaciones llegan a 50 minutos
+# en toda la temporada), así que jugador/pareja/trío es el nivel más bajo al
+# que se puede bajar y que la cifra siga significando algo. Se usan también
+# como constante `k` de encogimiento (`shrink`, ver `analytics.shot_quality`):
+# a `k` minutos se conserva la mitad del valor bruto.
+ON_OFF_MIN_MINUTES = 200.0
+COMBO_MIN_MINUTES = 100.0
 
 
 @st.cache_data(ttl=_TTL, show_spinner=False)
@@ -568,6 +584,36 @@ def player_percentile_row(
 
 
 @st.cache_data(ttl=_TTL, show_spinner=False)
+def league_player_percentiles(_engine: Engine, season_id: int) -> pd.DataFrame:
+    """`player_percentile_row`, pero de TODOS los jugadores a la vez (propuesta 11).
+
+    Base del vector de perfil de `app/analytics/similarity.py`: un jugador
+    puede aparecer una vez por competición si reparte la temporada entre ACB
+    y Euroliga — `similarity.py` decide cuál es su competición "principal"
+    (más partidos) antes de comparar, esta consulta se limita a traer las
+    filas tal cual están en la vista, sin elegir.
+
+    Returns:
+        Mismas columnas que `player_percentile_row` más `player_id` (aquí
+        hace falta para saber DE QUIÉN es cada fila). Vacío si ningún
+        jugador llega a los 5 partidos por competición que exige la vista
+        `player_percentiles`.
+    """
+    sql = text("""
+        SELECT p.player_id, c.name AS competition, p.competition_id, p.gp, p.league_players,
+               p.min_avg, p.min_pct, p.pts_avg, p.pts_pct, p.reb_avg, p.reb_pct,
+               p.ast_avg, p.ast_pct, p.efg_pct, p.efg_pct_pct,
+               p.stl_avg, p.stl_pct, p.blk_avg, p.blk_pct, p.tov_avg, p.tov_pct,
+               p.pf_avg, p.pf_pct, p.oreb_avg, p.oreb_pct, p.dreb_avg, p.dreb_pct,
+               p.pir_avg, p.pir_pct
+        FROM player_percentiles p
+        JOIN competitions c ON c.id = p.competition_id
+        WHERE p.season_id = :season_id
+    """)
+    return pd.read_sql(sql, _engine, params={"season_id": season_id})
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
 def league_leaders(
     _engine: Engine,
     metric: str,
@@ -918,6 +964,294 @@ def clutch_lineups(
     if combos.empty:
         return pd.DataFrame(columns=columns)
     return combos.sort_values(["plus_minus", "seconds"], ascending=False).head(limit)[columns].reset_index(drop=True)
+
+
+# ------------------------------------------------------- on/off y duplas --
+# Propuesta 07 (`doc/features/propuestas/07_onoff_y_duplas.md`): el quinteto
+# de cinco no tiene muestra (§1), así que se baja a jugador suelto, pareja y
+# trío, calculado sobre `lineup_stints` (§4) y NO sobre `lineups` — a
+# diferencia de `team_lineups`/`_lineup_rows`, que agregan el partido entero
+# por combinación de cinco. Trabajar desde los tramos es lo que permite sumar
+# `points_for`/`points_against` por separado (para tríos y parejas los tramos
+# se recortan igual que en `clutch_lineups`, si algún día hace falta acotar
+# por ventana) y no arrastra el `is_inferred` de `lineup_team`: `lineup_stints
+# .team_id` es directo, no deducido del equipo actual de los jugadores.
+
+_STINT_PLAYER_ROWS_SQL = """
+    SELECT s.id AS stint_id, s.end_seconds - s.start_seconds AS seconds,
+           s.points_for, s.points_against, g.game_date,
+           p.id AS player_id, p.name AS player_name
+    FROM lineup_stints s
+    JOIN games g ON g.id = s.game_id
+    JOIN lineup_stint_players sp ON sp.stint_id = s.id
+    JOIN players p ON p.id = sp.player_id
+    WHERE s.team_id = :team_id AND g.season_id = :season_id
+      AND (:competition_id IS NULL OR g.competition_id = :competition_id)
+"""
+
+
+def _stint_player_rows(
+    _engine: Engine, team_id: str, season_id: int, competition_id: Optional[int]
+) -> pd.DataFrame:
+    """Filas crudas tramo-jugador del equipo: una fila por jugador en cada tramo."""
+    return pd.read_sql(
+        text(_STINT_PLAYER_ROWS_SQL),
+        _engine,
+        params={"team_id": team_id, "season_id": season_id, "competition_id": competition_id},
+    )
+
+
+def _player_names(raw: pd.DataFrame) -> "dict[str, str]":
+    """`{player_id: player_name}` a partir de las filas crudas, sin duplicados."""
+    return dict(raw.drop_duplicates("player_id")[["player_id", "player_name"]].to_numpy())
+
+
+def _stints_by_id(raw: pd.DataFrame) -> pd.DataFrame:
+    """Un tramo por fila: `seconds`, `plus_minus`, `game_date` y el conjunto de jugadores en pista.
+
+    Es el nivel al que se recorre para on/off, para combos y para las señales
+    semanales de rotación (propuesta 10) — cada tramo aporta una vez a cada
+    jugador/pareja/trío que estuviera en pista, ni más ni menos, sin volver a
+    tocar la base de datos. `game_date` viaja para poder partir los tramos en
+    "últimos K partidos" contra "el resto" sin una segunda consulta.
+    """
+    columns = ["stint_id", "seconds", "plus_minus", "game_date", "players"]
+    if raw.empty:
+        return pd.DataFrame(columns=columns)
+    per_stint = raw.groupby("stint_id").agg(
+        seconds=("seconds", "first"),
+        points_for=("points_for", "first"),
+        points_against=("points_against", "first"),
+        game_date=("game_date", "first"),
+        players=("player_id", frozenset),
+    ).reset_index()
+    per_stint["plus_minus"] = per_stint["points_for"] - per_stint["points_against"]
+    return per_stint[columns]
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def player_on_off(
+    _engine: Engine,
+    team_id: str,
+    season_id: int,
+    competition_id: Optional[int] = None,
+    min_minutes: float = ON_OFF_MIN_MINUTES,
+) -> pd.DataFrame:
+    """On/Off de cada jugador que ha pisado la pista con este equipo en la temporada.
+
+    On/Off = (diferencia por 40 en los tramos CON el jugador) − (diferencia
+    por 40 en los tramos SIN él), del mismo equipo y temporada (§4). No es una
+    medida de calidad del jugador — es contexto: quien comparte pista siempre
+    con los mejores sale beneficiado, y al revés (§5). Se devuelven TODOS los
+    jugadores, con `reliable` marcando quién llega a `min_minutes` en pista;
+    por debajo, la cifra existe pero no debe presentarse como concluyente
+    (§4, mínimo no negociable de 200 minutos).
+
+    Returns:
+        `player_id, player_name, on_minutes, on_plus_minus, on_per_40,
+        off_minutes, off_plus_minus, off_per_40, on_off, on_off_shrunk,
+        reliable`. Ordenado por fiabilidad y luego por `on_off_shrunk`
+        (encogido con `n / (n + min_minutes)`, igual criterio que la
+        propuesta 02). Vacío si el equipo no tiene tramos en la temporada.
+    """
+    columns = [
+        "player_id", "player_name", "on_minutes", "on_plus_minus", "on_per_40",
+        "off_minutes", "off_plus_minus", "off_per_40", "on_off", "on_off_shrunk", "reliable",
+    ]
+    raw = _stint_player_rows(_engine, team_id, season_id, competition_id)
+    if raw.empty:
+        return pd.DataFrame(columns=columns)
+
+    names = _player_names(raw)
+    stints = _stints_by_id(raw)
+
+    rows = []
+    for player_id, player_name in names.items():
+        on_mask = stints["players"].apply(lambda players, pid=player_id: pid in players)
+        on, off = stints[on_mask], stints[~on_mask]
+        on_minutes, off_minutes = on["seconds"].sum() / 60.0, off["seconds"].sum() / 60.0
+        on_pm = int(on["plus_minus"].sum()) if not on.empty else 0
+        off_pm = int(off["plus_minus"].sum()) if not off.empty else 0
+        on_per_40 = 40.0 * on_pm / on_minutes if on_minutes > 0 else float("nan")
+        off_per_40 = 40.0 * off_pm / off_minutes if off_minutes > 0 else float("nan")
+        on_off = on_per_40 - off_per_40
+        rows.append({
+            "player_id": player_id,
+            "player_name": player_name,
+            "on_minutes": on_minutes,
+            "on_plus_minus": on_pm,
+            "on_per_40": on_per_40,
+            "off_minutes": off_minutes,
+            "off_plus_minus": off_pm,
+            "off_per_40": off_per_40,
+            "on_off": on_off,
+            "on_off_shrunk": shrink(on_off, on_minutes, k=int(min_minutes)) if on_minutes > 0 else 0.0,
+            "reliable": bool(on_minutes >= min_minutes),
+        })
+    df = pd.DataFrame(rows, columns=columns)
+    return df.sort_values(["reliable", "on_off_shrunk"], ascending=[False, False]).reset_index(drop=True)
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def player_combos(
+    _engine: Engine,
+    team_id: str,
+    season_id: int,
+    size: int = 2,
+    competition_id: Optional[int] = None,
+    min_minutes: float = COMBO_MIN_MINUTES,
+) -> pd.DataFrame:
+    """Todas las combinaciones de `size` jugadores que han coincidido en pista.
+
+    Recorre los tramos y acumula en cada subconjunto (§4): con 5 jugadores
+    por tramo son 10 parejas y 10 tríos por tramo, así que no hace falta SQL
+    recursivo, con `itertools.combinations` sobre cada tramo basta. Igual que
+    `player_on_off`, se devuelven TODAS las combinaciones con `reliable`
+    marcando quién llega a `min_minutes` juntos — la matriz de parejas de la
+    pantalla filtra por esa marca (§2b), no por un corte silencioso aquí.
+
+    Args:
+        size: 2 para parejas, 3 para tríos.
+
+    Returns:
+        `player_ids, jugadores, minutes, plus_minus, plus_minus_per_40,
+        plus_minus_per_40_shrunk, stints, reliable`. Ordenado por fiabilidad
+        y luego por `plus_minus_per_40_shrunk`, mejor primero.
+    """
+    columns = [
+        "player_ids", "jugadores", "minutes", "plus_minus",
+        "plus_minus_per_40", "plus_minus_per_40_shrunk", "stints", "reliable",
+    ]
+    raw = _stint_player_rows(_engine, team_id, season_id, competition_id)
+    if raw.empty:
+        return pd.DataFrame(columns=columns)
+
+    names = _player_names(raw)
+    stints = _stints_by_id(raw)
+
+    accum: "dict[tuple, list]" = {}
+    for row in stints.itertuples(index=False):
+        players = sorted(row.players)
+        if len(players) < size:
+            continue
+        for combo in combinations(players, size):
+            entry = accum.setdefault(combo, [0.0, 0, 0])
+            entry[0] += row.seconds
+            entry[1] += row.plus_minus
+            entry[2] += 1
+
+    if not accum:
+        return pd.DataFrame(columns=columns)
+
+    rows = []
+    for combo, (seconds, plus_minus, n_stints) in accum.items():
+        minutes = seconds / 60.0
+        per_40 = 40.0 * plus_minus / minutes if minutes > 0 else float("nan")
+        rows.append({
+            "player_ids": ",".join(combo),
+            "jugadores": " · ".join(names[pid] for pid in combo),
+            "minutes": minutes,
+            "plus_minus": plus_minus,
+            "plus_minus_per_40": per_40,
+            "plus_minus_per_40_shrunk": shrink(per_40, minutes, k=int(min_minutes)) if minutes > 0 else 0.0,
+            "stints": n_stints,
+            "reliable": bool(minutes >= min_minutes),
+        })
+    df = pd.DataFrame(rows, columns=columns)
+    return df.sort_values(["reliable", "plus_minus_per_40_shrunk"], ascending=[False, False]).reset_index(drop=True)
+
+
+#: Partidos mínimos a cada lado (recientes / resto) para que la ventana de
+#: rotación de la propuesta 10 tenga algo que comparar. Por debajo, ni se
+#: calcula: menos tramos que jugadores en pista no da ni una pareja fiable.
+PAIR_WINDOW_MIN_GAMES = 3
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def pair_minutes_by_window(
+    _engine: Engine, team_id: str, season_id: int, last_n_games: int = 5, competition_id: Optional[int] = None
+) -> pd.DataFrame:
+    """Peso de cada pareja de jugadores (parte de los minutos de pista) últimos K partidos vs. el resto.
+
+    Señal de rotación de la propuesta 10 (`10_senales_semanales.md` §2): "una
+    pareja... que ha ganado peso". Mismos tramos que `player_combos`, partidos
+    por FECHA de partido en dos ventanas — los `last_n_games` partidos más
+    recientes con tramos registrados, y el resto de la temporada — y agregados
+    por separado a cada lado. El "peso" de una pareja es cuánto de los minutos
+    DE TRAMO trackeados en esa ventana coincidieron los dos en pista, no sus
+    minutos individuales: una pareja que juega junta la mitad del partido pesa
+    50%, jueguen 20 o 35 minutos cada uno.
+
+    A propósito NO reutiliza `player_combos` (que agrega TODA la temporada de
+    una vez): aquí hacen falta las dos ventanas por separado, con sus propios
+    totales, para poder calcular una diferencia de peso con su propio
+    contraste estadístico (`analytics.signals.detect_rotation_signals`).
+
+    Returns:
+        `player_ids, jugadores, recent_minutes, recent_share, recent_seconds,
+        recent_total_seconds, n_recent_games, baseline_minutes, baseline_share,
+        baseline_seconds, baseline_total_seconds, n_baseline_games`. Vacío si
+        el equipo no tiene tramos en la temporada, o si no hay
+        `PAIR_WINDOW_MIN_GAMES` partidos con tramos a cada lado de la ventana
+        (sin `lineup_stints` cargados, `raw` llega vacío igual que en
+        `player_on_off`/`player_combos`).
+    """
+    columns = [
+        "player_ids", "jugadores",
+        "recent_minutes", "recent_share", "recent_seconds", "recent_total_seconds", "n_recent_games",
+        "baseline_minutes", "baseline_share", "baseline_seconds", "baseline_total_seconds", "n_baseline_games",
+    ]
+    raw = _stint_player_rows(_engine, team_id, season_id, competition_id)
+    if raw.empty:
+        return pd.DataFrame(columns=columns)
+
+    names = _player_names(raw)
+    stints = _stints_by_id(raw)
+    game_dates = sorted(stints["game_date"].unique())
+    if len(game_dates) < last_n_games + PAIR_WINDOW_MIN_GAMES:
+        return pd.DataFrame(columns=columns)
+
+    recent_dates = set(game_dates[-last_n_games:])
+    recent = stints[stints["game_date"].isin(recent_dates)]
+    baseline = stints[~stints["game_date"].isin(recent_dates)]
+
+    def _combo_seconds(subset: pd.DataFrame) -> "dict[tuple, float]":
+        accum: "dict[tuple, float]" = {}
+        for row in subset.itertuples(index=False):
+            players = sorted(row.players)
+            if len(players) < 2:
+                continue
+            for combo in combinations(players, 2):
+                accum[combo] = accum.get(combo, 0.0) + row.seconds
+        return accum
+
+    recent_accum = _combo_seconds(recent)
+    baseline_accum = _combo_seconds(baseline)
+    recent_total = float(recent["seconds"].sum())
+    baseline_total = float(baseline["seconds"].sum())
+    if recent_total <= 0 or baseline_total <= 0:
+        return pd.DataFrame(columns=columns)
+
+    rows = []
+    for combo in set(recent_accum) | set(baseline_accum):
+        recent_seconds = recent_accum.get(combo, 0.0)
+        baseline_seconds = baseline_accum.get(combo, 0.0)
+        rows.append({
+            "player_ids": ",".join(combo),
+            "jugadores": " · ".join(names[pid] for pid in combo),
+            "recent_minutes": recent_seconds / 60.0,
+            "recent_share": 100.0 * recent_seconds / recent_total,
+            "recent_seconds": recent_seconds,
+            "recent_total_seconds": recent_total,
+            "n_recent_games": len(recent_dates),
+            "baseline_minutes": baseline_seconds / 60.0,
+            "baseline_share": 100.0 * baseline_seconds / baseline_total,
+            "baseline_seconds": baseline_seconds,
+            "baseline_total_seconds": baseline_total,
+            "n_baseline_games": len(game_dates) - len(recent_dates),
+        })
+    df = pd.DataFrame(rows, columns=columns)
+    return df.sort_values("recent_share", ascending=False).reset_index(drop=True)
 
 
 @st.cache_data(ttl=_TTL, show_spinner=False)

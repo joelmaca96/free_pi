@@ -24,12 +24,20 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
+from analytics import similarity as similarity_engine
+from components import similarity as similarity_component
 from components.ask_assistant import ask_assistant_button
 from components.avatar import player_avatar_html
 from components.court import shot_chart, shot_chart_caption, zone_breakdown, zone_heatmap, zone_heatmap_caption
 from components.glossary import glossary_expander, help_text
 from data import queries, queries_assistant
 from data.db import get_read_engine
+
+#: Top de la propuesta 11 dentro del modal: compacto a propósito (§2: "salen
+#: los 8-10 más parecidos" es para el buscador completo de `pages/
+#: similitud.py`; aquí el usuario ya está mirando a ESTE jugador y solo
+#: quiere el resumen rápido).
+_SIMILARITY_TOP_N_COMPACT = 5
 
 _ACCENT = "#008300"
 
@@ -360,3 +368,26 @@ def player_detail(player_id: str) -> None:
             st.altair_chart(zone_heatmap(zone_df, zones_df))
             st.caption(zone_heatmap_caption(zone_df))
         zone_breakdown(zone_df, len(shots_df), scope="player")
+
+    # ---------------------------------------------------- similitud (propuesta 11) --
+    # Bloque compacto: valores por defecto (estilo, top 5), sin controles —
+    # el buscador completo con filtros y pesos ajustables vive en
+    # `pages/similitud.py` (§6 del documento).
+    st.divider()
+    st.markdown("**Se parece a...**")
+    vectors = similarity_component.league_vectors(engine, stats_season_id)
+    if vectors.empty or player_id not in set(vectors["player_id"]):
+        st.caption(
+            "Sin perfil de percentiles suficiente esta temporada (hace falta al menos 5 partidos en una "
+            "competición) para calcular similitud."
+        )
+    else:
+        target_row = vectors.loc[vectors["player_id"] == player_id].iloc[0]
+        results = similarity_engine.most_similar(vectors, player_id, method="cosine", top_n=_SIMILARITY_TOP_N_COMPACT)
+        labels = similarity_component.competition_labels(engine)
+        rows = similarity_component.build_result_rows(target_row, results, labels)
+        similarity_component.results_list(rows)
+        similarity_component.similarity_caveat()
+        if st.button("Abrir buscador completo (filtros y pesos)", key=f"similarity_open_finder_{player_id}"):
+            st.session_state["similarity_preselect_player_id"] = player_id
+            st.switch_page("pages/similitud.py")

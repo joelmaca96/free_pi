@@ -1,6 +1,49 @@
 # 09. Umbrales de victoria
 
-**Estado:** propuesta, sin implementar · **Fecha:** 2026-08-28 · **Índice:** [00_indice.md](00_indice.md)
+**Estado:** IMPLEMENTADA v1 + v2, con umbrales por competición y enganche al dossier
+(2026-08-31) · **Fecha de la propuesta:** 2026-08-28 · **Índice:** [00_indice.md](00_indice.md)
+
+El cálculo vive en `app/analytics/win_thresholds.py` (paquete puro sobre `pandas`/`numpy`, sin
+Streamlit ni SQLAlchemy — mismo criterio que `shot_quality.py`/`zone_matchup.py`), la consulta
+nueva `queries.game_factor_rows` en `app/data/queries.py` (una fila por equipo y partido, con la
+del rival del mismo partido ya cruzada por self-join — trae `competition_id`, la columna que hace
+posible acotar por competición), el pintado en `app/components/win_thresholds.py` y las secciones
+**Objetivos del partido** en `app/pages/proximo_rival.py` (paneles a y c de §2) y la comprobación
+por partido en `app/pages/partidos_anteriores.py`, pestaña Resumen (panel b de §2).
+
+Los dos puntos que quedaron como trabajo futuro ya están cerrados:
+
+- **Umbrales por competición (§5).** `proximo_rival.py` ofrece un `st.radio` ("ACB y Euroliga
+  juntas" / una opción por competición) cuando esa competición sola tiene partidos de sobra para
+  sostener el barrido (`2×MIN_SIDE_GAMES`); por debajo de eso, ni se ofrece la opción — no hay
+  "umbral de competición" con cuatro partidos. El aviso permanente
+  (`win_thresholds.objectives_caveat_text`) dice el ámbito real en cada caso, nunca "ACB y Euroliga
+  juntas" cuando se ha acotado. La comprobación por partido de `partidos_anteriores.py` hace lo
+  mismo automáticamente: compara cada partido contra el umbral de SU competición si hay muestra, y
+  cae al combinado con una nota si no la hay.
+- **Enganche con el dossier de scouting (§6).** `scouting_ppt.generate_scouting_ppt` calcula las
+  tarjetas de objetivos ya ajustadas al rival (`rival_adjusted_card`) una sola vez y las mete en
+  `ctx["win_threshold_cards"]`; tanto el fallback por reglas como el prompt del LLM de "claves del
+  partido" las usan como candidatas ("Objetivo del partido: al menos 34,0% de rebote ofensivo
+  (ajustado al perfil de X)"), exactamente como pedía el documento: calcularlo una vez, usarlo en
+  los dos sitios.
+
+Se implementó tal como está descrita abajo, con matices:
+
+- **Las tarjetas muestran un número propio ("al menos 32% de rebote ofensivo"), no la diferencia
+  frente al rival**, aunque el barrido de umbrales (v1) y el modelo (v2) trabajan siempre sobre la
+  BATALLA (la propia cifra menos la del rival, §1) — es justo lo que pide el propio documento al
+  avisar de que el porcentaje propio a secas engaña más que la diferencia. El número que se enseña
+  se reconstruye sumando (o restando) el umbral de batalla a lo que concede/produce un rival MEDIO
+  de la liga; ver el docstring de `_display_threshold`.
+- **El ajuste por rival (§4) sale algebraicamente de esa misma reconstrucción**, no de un cálculo
+  aparte: el umbral de liga ya es `concesión_media_liga ± umbral_de_batalla`, así que sustituir la
+  concesión media de la liga por la de un rival concreto (su ORB% concedido, su TOV% forzado...
+  sobre SU temporada completa, nunca sobre el cara a cara) da el número ajustado sin recalcular el
+  barrido — ver `rival_adjusted_card`.
+- **v2 (regresión logística) se enseña en un desplegable aparte** ("pesos relativos de cada
+  batalla"), no sustituye al panel de v1: el barrido de umbrales sigue siendo la versión que se
+  explica sola con una curva, que es la que se enseña sin pedir permiso (§4).
 
 Cifras calculadas sobre `data/baskonia.db` el 2026-08-28 (1.474 filas equipo-partido).
 

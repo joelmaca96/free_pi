@@ -75,6 +75,8 @@ pg = st.navigation(
         st.Page("pages/plantilla.py", title="Plantilla"),
         st.Page("pages/proximo_rival.py", title="Próximo rival"),
         st.Page("pages/partidos_anteriores.py", title="Partidos anteriores"),
+        st.Page("pages/quintetos.py", title="On/off y duplas"),
+        st.Page("pages/similitud.py", title="Similitud de jugadores"),
         # Chat de scouting sobre los datos cargados
         # (`local/features/005-chatbot/01_design.md`). Va la última a
         # propósito: es la única pestaña que depende de un servicio externo

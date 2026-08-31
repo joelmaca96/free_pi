@@ -1,6 +1,26 @@
 # 08. Dónde castigar al rival
 
-**Estado:** propuesta, sin implementar · **Fecha:** 2026-08-28 · **Índice:** [00_indice.md](00_indice.md)
+**Estado:** IMPLEMENTADA (2026-08-30) · **Fecha de la propuesta:** 2026-08-28 ·
+**Índice:** [00_indice.md](00_indice.md)
+
+El cálculo vive en `app/analytics/zone_matchup.py` (paquete puro sobre `pandas`, sin Streamlit ni
+SQLAlchemy — reutiliza `shot_value`/`ZONE_MERGES`/`POOLED_COMPETITION_ID` de
+`app/analytics/shot_quality.py` en vez de duplicarlos), las consultas nuevas en `app/data/queries.py`
+(`team_zone_profile(..., side=)`, `team_zone_profile_by_competition`, `league_zone_baseline_counts`,
+`team_games_played`, junto a `court_zones`), el pintado en `app/components/zone_matchup.py`
+(reutilizando `components/court.py::zone_heatmap(mode="vs_league")`, sin duplicar el mapa) y la
+sección **Dónde castigar al rival** en `app/pages/proximo_rival.py`, encima del mapa de tiros.
+
+Se implementó tal como está descrita abajo, con dos matices:
+
+- **Las dos temporadas de scouting pueden diferir.** Si el rival ya jugó en la temporada
+  seleccionada pero el Baskonia todavía no (o al revés), cada equipo se compara contra la línea
+  base de liga de SU PROPIA temporada de scouting (mismo `queries.team_scouting_season` que ya usa
+  el resto de la pantalla) en vez de forzar una temporada común.
+- **Regularización un poco más agresiva que en la propuesta 02** (`SHRINK_K=200` y
+  `MIN_SHOTS=100` frente a 100/50 en `shot_quality`): la muestra de EQUIPO por zona es más pequeña
+  que la de la liga entera, así que hace falta encoger más para no confundir ruido con una
+  debilidad real (§4).
 
 Cifras calculadas sobre `data/baskonia.db` el 2026-08-28.
 

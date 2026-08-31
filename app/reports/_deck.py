@@ -172,8 +172,27 @@ def add_photo_bullets_slide(
     return slide
 
 
-def add_bullets_slide(prs: Presentation, *, title: str, bullets: Sequence[str], subtitle: str = "", fallback_text: str):
-    """Diapositiva de solo texto: título + lista de viñetas grandes (p.ej. "Claves del partido")."""
+def add_bullets_slide(
+    prs: Presentation,
+    *,
+    title: str,
+    bullets: Sequence[str],
+    subtitle: str = "",
+    fallback_text: str,
+    body_left: float = 0.6,
+    body_width: float = 12.1,
+):
+    """Diapositiva de solo texto: título + lista de viñetas grandes (p.ej. "Claves del partido").
+
+    Args:
+        body_left/body_width: posición y ancho (en pulgadas) del subtítulo y
+            del cuerpo de viñetas — a toda página por defecto (12.1", igual
+            que antes de que existiera este parámetro). Un llamador que
+            quiera dibujar algo MÁS en la diapositiva (p.ej. el mapa de tiro
+            de `scouting_ppt._build_shot_quality_slide`) puede estrechar el
+            cuerpo y añadir sus propias formas en el hueco libre sobre el
+            `slide` devuelto, sin reimplementar el título/subtítulo/viñetas.
+    """
     slide = blank_slide(prs)
 
     title_box = slide.shapes.add_textbox(Inches(0.6), Inches(0.4), Inches(12.1), Inches(0.9))
@@ -183,13 +202,15 @@ def add_bullets_slide(prs: Presentation, *, title: str, bullets: Sequence[str], 
 
     top_in = 1.2
     if subtitle:
-        subtitle_box = slide.shapes.add_textbox(Inches(0.6), Inches(top_in), Inches(12.1), Inches(0.5))
+        subtitle_box = slide.shapes.add_textbox(Inches(body_left), Inches(top_in), Inches(body_width), Inches(0.5))
         p = subtitle_box.text_frame.paragraphs[0]
         p.text = subtitle
         p.font.size, p.font.color.rgb = Pt(16), MUTED
         top_in = 1.85
 
-    body = slide.shapes.add_textbox(Inches(0.6), Inches(top_in), Inches(12.1), Inches(SLIDE_HEIGHT_IN - top_in - 0.4))
+    body = slide.shapes.add_textbox(
+        Inches(body_left), Inches(top_in), Inches(body_width), Inches(SLIDE_HEIGHT_IN - top_in - 0.4)
+    )
     tf = body.text_frame
     tf.word_wrap = True
     items = list(bullets) or [fallback_text]

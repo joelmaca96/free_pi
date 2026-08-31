@@ -12,8 +12,10 @@ de punta a punta.
 import io
 
 import pandas as pd
+import pytest
 from pptx import Presentation
 
+from app.analytics import shot_quality
 from app.assistant.llm.base import LLMError, LLMResponse
 from app.reports import scouting_ppt
 
@@ -43,6 +45,7 @@ def _ctx(**overrides):
         "top_player": None,
         "attack_diff": None,
         "defense_diff": None,
+        "win_threshold_cards": [],
     }
     base.update(overrides)
     return base
@@ -77,6 +80,86 @@ def _all_tables_text(slide) -> str:
                 for cell in row.cells:
                     bits.append(cell.text)
     return "\n".join(bits)
+
+
+# ------------------------------------------------------------- mapa de tiro --
+
+
+def _zone_profile_row(zone_label, volume, made, pps, league_pps):
+    diff_pps = pps - league_pps
+    return {
+        "zone_label": zone_label, "volume": volume, "made": made,
+        "fg_pct": 100.0 * made / volume, "pps": pps, "league_pps": league_pps, "diff_pps": diff_pps,
+    }
+
+
+def test_coarsen_zone_profile_merges_the_wing_2pt_and_3pt_split():
+    """"Ala izq. (2)"/"Ala izq. (3)" (partidas por el arco) se funden en una sola "Ala izq."."""
+    zone_df = pd.DataFrame([
+        _zone_profile_row("Ala izq. (2)", 100, 68, 1.36, 1.30),
+        _zone_profile_row("Ala izq. (3)", 50, 20, 1.20, 1.10),
+        _zone_profile_row("Pintura", 200, 120, 1.20, 1.15),
+    ])
+    coarse = scouting_ppt._coarsen_zone_profile(zone_df)
+
+    assert sorted(coarse["zone_label"]) == ["Ala izq.", "Pintura"]
+    wing = coarse.loc[coarse["zone_label"] == "Ala izq."].iloc[0]
+    assert wing["volume"] == 150
+    assert wing["made"] == 88
+    # PPS conjunto: puntos totales / volumen total, no la media simple de los dos.
+    expected_pps = (100 * 1.36 + 50 * 1.20) / 150
+    assert wing["pps"] == pytest.approx(expected_pps)
+
+
+def test_coarsen_zone_profile_of_empty_input_is_empty():
+    empty = pd.DataFrame(columns=["zone_label", "volume", "made", "fg_pct", "pps", "league_pps", "diff_pps"])
+    assert scouting_ppt._coarsen_zone_profile(empty).empty
+
+
+def test_zone_fill_color_is_neutral_without_data():
+    assert scouting_ppt._zone_fill_color(None) == scouting_ppt._ZONE_EMPTY
+    assert scouting_ppt._zone_fill_color(float("nan")) == scouting_ppt._ZONE_EMPTY
+
+
+def test_zone_fill_color_saturates_at_the_cap_in_both_directions():
+    better = scouting_ppt._zone_fill_color(scouting_ppt._ZONE_DIFF_CAP * 5)  # muy por encima del cap
+    worse = scouting_ppt._zone_fill_color(-scouting_ppt._ZONE_DIFF_CAP * 5)
+    assert better == scouting_ppt._lerp_rgb(scouting_ppt._ZONE_NEUTRAL, scouting_ppt._ZONE_HIGH, 1.0)
+    assert worse == scouting_ppt._lerp_rgb(scouting_ppt._ZONE_NEUTRAL, scouting_ppt._ZONE_LOW, 1.0)
+
+
+def _court_zones_df():
+    """Subconjunto realista de `queries.court_zones`: solo rectángulos reales (ver `court_zones` en
+    la base de datos) — incluye las filas degeneradas (`x_min == x_max`) que el mapa debe ignorar."""
+    return pd.DataFrame([
+        {"id": 1, "label": "Pintura", "x_min": 195.0, "x_max": 305.0, "y_min": 300.0, "y_max": 455.0},
+        {"id": 2, "label": "Ala izq.", "x_min": 0.0, "x_max": 195.0, "y_min": 170.0, "y_max": 380.0},
+        {"id": 3, "label": "Ala der.", "x_min": 305.0, "x_max": 500.0, "y_min": 170.0, "y_max": 380.0},
+        {"id": 10, "label": "Mate", "x_min": 250.0, "x_max": 250.0, "y_min": 455.0, "y_max": 455.0},
+        {"id": 14, "label": "Ala izq. (2)", "x_min": 100.0, "x_max": 100.0, "y_min": 300.0, "y_max": 300.0},
+    ])
+
+
+def test_build_scouting_ppt_shot_quality_slide_draws_zone_map_when_geometry_present():
+    attack = pd.DataFrame([_zone_profile_row("Pintura", 200, 130, 1.30, 1.10)])
+    data = _build(zones_df=_court_zones_df(), attack_zone_profile=attack, defense_zone_profile=attack)
+    prs = Presentation(io.BytesIO(data))
+    slide = list(prs.slides)[2]  # portada, identidad, CALIDAD DE TIRO
+    # 2 fondos de cancha + 3 zonas reales (Pintura/Ala izq./Ala der.) x 2 diagramas, más título,
+    # subtítulo, viñetas, 2 cabeceras y el pie: bastante más que sin mapa (title+subtitle+body=3).
+    assert len(slide.shapes) >= 14
+    assert "Ataque (genera)" in _all_text(slide)
+    assert "Defensa (concede)" in _all_text(slide)
+    assert shot_quality.format_pps(1.30) in _all_text(slide)  # el PPS de Pintura, dibujado en su rectángulo
+
+
+def test_build_scouting_ppt_shot_quality_slide_degrades_without_geometry():
+    """Sin `zones_df` (o vacío), la diapositiva se queda solo con las viñetas — nunca revienta."""
+    data = _build(shot_quality_bullets=["Ataque por encima de lo esperado."])
+    prs = Presentation(io.BytesIO(data))
+    slide = list(prs.slides)[2]
+    assert "Ataque por encima de lo esperado." in _all_text(slide)
+    assert "Ataque (genera)" not in _all_text(slide)
 
 
 # --------------------------------------------- jugadores: reglas (fallback) --
@@ -206,6 +289,26 @@ def test_game_keys_flags_shot_quality_diff():
     assert any("ataque" in text.lower() and "PPS" in text for text in keys)
 
 
+def test_game_keys_includes_win_threshold_objective():
+    """Propuesta 09 §6: los umbrales de victoria, ya ajustados al rival, alimentan las claves."""
+    card = {
+        "label": "rebote ofensivo", "higher_is_better": True,
+        "display_threshold": 32.0, "adjusted_threshold": 34.0,
+        "is_rival_adjusted": True, "separation": 18.0,
+    }
+    ctx = _ctx(rival_name="Real Madrid", win_threshold_cards=[card])
+    keys = scouting_ppt._rule_based_game_keys(ctx)
+    assert any(
+        "Objetivo del partido" in text and "34,0%" in text and "Real Madrid" in text for text in keys
+    )
+
+
+def test_game_keys_without_win_threshold_cards_still_works():
+    """Sin ninguna fuente de claves (ctx "vacío"), la respuesta correcta es una lista vacía,
+    no un error — `_build_keys_slide` cae al texto de "sin claves" con eso."""
+    assert scouting_ppt._rule_based_game_keys(_ctx(win_threshold_cards=[])) == []
+
+
 def test_game_keys_flags_uneven_quarter_split():
     quarters = pd.DataFrame({
         "quarter": [1, 2, 3, 4],
@@ -262,7 +365,8 @@ def test_select_game_keys_without_client_uses_rules_only():
 
 
 def _build(ctx=None, style_df=None, player_rows=None, player_highlights=None,
-           lineups_df=None, shot_quality_bullets=None, game_keys=None):
+           lineups_df=None, shot_quality_bullets=None, game_keys=None,
+           zones_df=None, attack_zone_profile=None, defense_zone_profile=None):
     return scouting_ppt.build_scouting_ppt(
         ctx if ctx is not None else _ctx(),
         style_df if style_df is not None else pd.DataFrame(),
@@ -271,6 +375,7 @@ def _build(ctx=None, style_df=None, player_rows=None, player_highlights=None,
         lineups_df if lineups_df is not None else pd.DataFrame(),
         shot_quality_bullets if shot_quality_bullets is not None else [],
         game_keys if game_keys is not None else [],
+        zones_df=zones_df, attack_zone_profile=attack_zone_profile, defense_zone_profile=defense_zone_profile,
     )
 
 

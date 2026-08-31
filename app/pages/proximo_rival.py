@@ -24,7 +24,7 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
-from analytics import shot_quality
+from analytics import shot_quality, win_thresholds, zone_matchup
 from assistant.capabilities import probe
 from assistant.llm import LLMError, build_llm_client
 from components.ask_assistant import ask_assistant_button
@@ -39,6 +39,8 @@ from components.shot_quality import (
     quality_caveat,
     quality_metrics,
 )
+from components.win_thresholds import factor_correlations_table, logistic_importance_expander, objectives_panel
+from components.zone_matchup import matchup_caveat, split_court_matchup, targets_table
 from data import queries, queries_assistant
 from data.db import get_read_engine
 from reports import scouting_ppt
@@ -225,6 +227,60 @@ if st.session_state.get(dossier_state_key):
         key=f"dossier_dl_{rival_team_id}",
         width="stretch",
     )
+
+st.divider()
+
+# --------------------------------------------------------- objetivos del partido --
+# Propuesta 09 (`doc/features/propuestas/09_umbrales_de_victoria.md`): tres o
+# cuatro números, no veinte estadísticas — los umbrales que mejor separaron
+# victoria de derrota ESTA temporada, ajustados al perfil de ESTE rival. Va
+# antes que cualquier otra sección a propósito (§1 y §2a del documento): es
+# el mensaje de vestuario que ordena el resto, y si algo de abajo no mueve
+# estos números no merece pantalla.
+st.subheader("Objetivos del partido")
+league_factor_rows = queries.game_factor_rows(engine, scouting_season_id)
+if league_factor_rows.empty:
+    st.info(f"Sin estadísticas avanzadas suficientes en la temporada de {rival_name} para calcular umbrales.")
+else:
+    # Por defecto, ACB y Euroliga juntas (más muestra). §5 del documento avisa
+    # de que el ritmo y el arbitraje difieren entre las dos
+    # (`05_perfil_arbitral.md`), así que se puede acotar a una sola cuando hay
+    # partidos de sobra para sostener el barrido (§4: `MIN_SIDE_GAMES` a cada
+    # lado) — con menos, un "umbral de competición" sería una anécdota.
+    comp_counts = league_factor_rows["competition_id"].value_counts()
+    comp_names = queries.list_competitions(engine).set_index("id")["name"]
+    comp_options = {"ACB y Euroliga juntas": None}
+    for comp_id, count in comp_counts.items():
+        if count >= 2 * win_thresholds.MIN_SIDE_GAMES:
+            comp_options[str(comp_names.get(comp_id, f"Competición {comp_id}"))] = comp_id
+
+    selected_competition_id = None
+    competition_label = None
+    if len(comp_options) > 1:
+        selected_label = st.radio(
+            "Umbrales calculados sobre", list(comp_options.keys()),
+            horizontal=True, key="win_thresholds_competition",
+        )
+        selected_competition_id = comp_options[selected_label]
+        competition_label = None if selected_competition_id is None else selected_label
+
+    factor_rows = (
+        league_factor_rows if selected_competition_id is None
+        else league_factor_rows[league_factor_rows["competition_id"] == selected_competition_id]
+    )
+    objective_cards = win_thresholds.league_objectives(factor_rows)
+    rival_concession = win_thresholds.rival_concession_averages(factor_rows, rival_team_id)
+    league_concession = win_thresholds.league_concession_averages(factor_rows)
+    objectives_panel(
+        objective_cards, rival_avg=rival_concession, league_avg=league_concession,
+        rival_name=rival_name, competition_label=competition_label,
+    )
+    factor_correlations_table(factor_rows)
+    # v2 del documento (§4): regresión logística sobre las cuatro batallas,
+    # solo para el "¿cuál pesa más de verdad?" del desplegable — el panel de
+    # arriba sigue siendo v1 (barrido de umbrales), que es la versión
+    # explicable que se enseña sin pedir permiso.
+    logistic_importance_expander(win_thresholds.fit_logistic_model(factor_rows))
 
 st.divider()
 
@@ -704,6 +760,111 @@ else:
         "mano; cargas tempranas dice quién de ellos está a un aviso de sentarse."
     )
     glossary_expander(["pf_drawn_per40", "fta_per40", "ft_pct", "early_trouble_games", "early_trouble_rate"])
+
+st.divider()
+
+# ------------------------------------------------- dónde castigar al rival --
+# Propuesta 08 (`doc/features/propuestas/08_donde_castigar_al_rival.md`): no
+# "¿desde dónde tira el rival?" (eso lo enseña el mapa de tiros de abajo),
+# sino la cruzada "¿desde dónde nos van a dejar tirar, y coincide con lo que
+# nosotros metemos?". Va ENCIMA del mapa de tiros: es la lectura accionable
+# que ese mapa solo respalda con detalle.
+#
+# Fuente `game_zone_stats` (vía `queries.team_zone_profile_by_competition`),
+# no `shots` vía `players.team_id` — ver el docstring de
+# `analytics/zone_matchup.py` (§3 del documento) sobre por qué esa distinción
+# importa aquí y no solo en teoría.
+st.subheader("Dónde castigar al rival")
+
+# El Baskonia tiene su propio fallback de temporada de scouting, INDEPENDIENTE
+# del `scouting_season_id` del rival (mismo criterio que la sección de
+# "Calidad de tiro" de `estado_equipo.py`): si el rival ya jugó esta temporada
+# pero el Baskonia todavía no (o al revés, arrancando de temporada), cada lado
+# se compara contra la referencia de liga de SU PROPIA temporada, que sigue
+# siendo una comparación válida aunque las dos temporadas no coincidan.
+own_zone_scouting = queries.team_scouting_season(engine, own_team_id, season_id)
+own_zone_season_id = own_zone_scouting["season_id"] if own_zone_scouting else None
+
+if scouting_season_id is None or own_zone_season_id is None:
+    missing = []
+    if scouting_season_id is None:
+        missing.append(rival_name)
+    if own_zone_season_id is None:
+        missing.append("el Baskonia")
+    st.info(
+        f"Hace falta scouting de zona de los dos equipos para cruzar los dos perfiles, y falta el de "
+        f"{' y '.join(missing)}."
+    )
+else:
+    zm_zones_geo = queries.court_zones(engine)
+
+    rival_league_baseline = zone_matchup.league_baseline(
+        queries.league_zone_baseline_counts(engine, scouting_season_id)
+    )
+    # Misma temporada en los dos lados (caso normal, mitad de temporada en
+    # curso): reutiliza la línea base ya calculada en vez de pedirla dos veces.
+    own_league_baseline = (
+        rival_league_baseline
+        if own_zone_season_id == scouting_season_id
+        else zone_matchup.league_baseline(queries.league_zone_baseline_counts(engine, own_zone_season_id))
+    )
+
+    rival_defense_diff = zone_matchup.zone_diff_profile(
+        zone_matchup.team_profile(
+            queries.team_zone_profile_by_competition(engine, rival_team_id, scouting_season_id, side="defensive")
+        ),
+        rival_league_baseline,
+    )
+    rival_offense_diff = zone_matchup.zone_diff_profile(
+        zone_matchup.team_profile(
+            queries.team_zone_profile_by_competition(engine, rival_team_id, scouting_season_id, side="offensive")
+        ),
+        rival_league_baseline,
+    )
+    own_offense_diff = zone_matchup.zone_diff_profile(
+        zone_matchup.team_profile(
+            queries.team_zone_profile_by_competition(engine, own_team_id, own_zone_season_id, side="offensive")
+        ),
+        own_league_baseline,
+    )
+    own_defense_diff = zone_matchup.zone_diff_profile(
+        zone_matchup.team_profile(
+            queries.team_zone_profile_by_competition(engine, own_team_id, own_zone_season_id, side="defensive")
+        ),
+        own_league_baseline,
+    )
+
+    if rival_defense_diff.empty and own_offense_diff.empty:
+        st.info(f"Sin tiros con zona registrados de {rival_name} o del Baskonia en esa temporada.")
+    else:
+        st.markdown(f"**Nuestro ataque contra la defensa de {rival_name}**")
+        split_court_matchup(
+            rival_defense_diff, own_offense_diff, zm_zones_geo,
+            f"Lo que concede {rival_name}", "Lo que producimos nosotros",
+        )
+        rival_games_played = queries.team_games_played(engine, rival_team_id, scouting_season_id)
+        targets_table(
+            zone_matchup.attack_targets(rival_defense_diff, own_offense_diff, rival_games_played),
+            f"Ninguna zona con muestra suficiente donde {rival_name} conceda de más Y nosotros "
+            "produzcamos de más a la vez — no hay un plan de ataque claro por zona esta temporada.",
+        )
+
+        st.markdown(f"**Y al revés: dónde nos va a castigar {rival_name}**")
+        split_court_matchup(
+            own_defense_diff, rival_offense_diff, zm_zones_geo,
+            "Lo que concedemos nosotros", f"Lo que produce {rival_name}",
+        )
+        own_games_played = queries.team_games_played(engine, own_team_id, own_zone_season_id)
+        targets_table(
+            zone_matchup.attack_targets(own_defense_diff, rival_offense_diff, own_games_played),
+            "Ninguna zona con muestra suficiente donde nosotros concedamos de más Y "
+            f"{rival_name} produzca de más a la vez.",
+        )
+
+        matchup_caveat()
+        glossary_expander(
+            ["zone_label", "concede_diff_pp", "produce_diff_pp", "shots_per_game", "value_pts_per_game"]
+        )
 
 st.divider()
 

@@ -245,3 +245,112 @@ def clutch_lineups(
         scope=f"temporada {season} · últimos {last_minutes:g} min · margen ±{max_margin}",
         artifact=artifact("table", rows, title="Quintetos en el tramo final"),
     )
+
+
+_ON_OFF_CAVEAT = (
+    "El On/Off es de CONTEXTO, no de calidad: quien comparte pista siempre con los mejores sale "
+    "beneficiado, y el suplente que juega con suplentes, hundido (§5 de la propuesta 07)."
+)
+
+
+@register(
+    "player_on_off",
+    family="lineup",
+    description=(
+        "On/Off de cada jugador de la plantilla: diferencia por 40 minutos con él en pista menos "
+        "sin él. Es el nivel por debajo del quinteto — el quinteto de cinco casi nunca tiene muestra "
+        "(§1 de la propuesta 07), el jugador suelto sí. NO es una medida de calidad, es de contexto."
+    ),
+    parameters=schema(
+        {
+            "team_id": {"type": "string"},
+            "season_id": {"type": "integer"},
+            "competition_id": {"type": "integer"},
+        },
+        required=["team_id"],
+    ),
+    artifact="table",
+    requires="lineup_stints",
+)
+def player_on_off(ctx: ToolContext, team_id: str, season_id: int = None, competition_id: int = None) -> dict:
+    """El On/Off de §2a, calculado sobre `lineup_stints` (§4)."""
+    season = _season(ctx, season_id)
+    onoff = queries_assistant.player_on_off(ctx.engine, team_id, season, competition_id)
+    if onoff.empty:
+        return fail(
+            "sin tramos",
+            detail=f"No hay tramos de {team_id} en la temporada {season} para calcular On/Off.",
+            suggestion="Usa team_lineups, que no necesita tramos por jugador.",
+        )
+    unreliable = int((~onoff["reliable"]).sum())
+    warnings = [_ON_OFF_CAVEAT]
+    if unreliable:
+        warnings.append(
+            f"{unreliable} de {len(onoff)} jugadores no llegan a "
+            f"{queries_assistant.ON_OFF_MIN_MINUTES:.0f} minutos en pista (reliable=false): su "
+            "On/Off no es fiable, no lo uses para decidir."
+        )
+    rows = records(onoff)
+    return ok(
+        rows,
+        source="lineup_stints + lineup_stint_players",
+        scope=f"temporada {season}",
+        warnings=warnings,
+        artifact=artifact("table", rows, title="On/Off por jugador"),
+    )
+
+
+@register(
+    "player_combos",
+    family="lineup",
+    description=(
+        "Ranking de las mejores o peores parejas/tríos de un equipo por diferencia por 40 minutos "
+        "juntos, entre TODAS las combinaciones posibles de ese tamaño. Para dos jugadores concretos "
+        "usa player_pairs, que da las cuatro situaciones (juntos, solo uno, solo el otro, ninguno)."
+    ),
+    parameters=schema(
+        {
+            "team_id": {"type": "string"},
+            "size": {"type": "integer", "enum": [2, 3], "description": "2 = parejas, 3 = tríos."},
+            "order": {"type": "string", "enum": ["best", "worst"], "description": "'worst' para las que peor rinden."},
+            "season_id": {"type": "integer"},
+            "competition_id": {"type": "integer"},
+            "limit": {"type": "integer"},
+        },
+        required=["team_id"],
+    ),
+    artifact="table",
+    requires="lineup_stints",
+)
+def player_combos(
+    ctx: ToolContext,
+    team_id: str,
+    size: int = 2,
+    order: str = "best",
+    season_id: int = None,
+    competition_id: int = None,
+    limit: int = 10,
+) -> dict:
+    """Duplas y tríos de §2b, filtrados al mínimo de muestra no negociable (§4)."""
+    season = _season(ctx, season_id)
+    min_minutes = queries_assistant.COMBO_MIN_MINUTES
+    combos = queries_assistant.player_combos(ctx.engine, team_id, season, size, competition_id)
+    reliable = combos[combos["reliable"]] if not combos.empty else combos
+    label = "parejas" if size == 2 else "tríos"
+    if reliable.empty:
+        return fail(
+            "sin combinaciones con muestra",
+            detail=(
+                f"Ninguna combinación de {size} jugadores de {team_id} llega a {min_minutes:.0f} "
+                f"minutos juntos en la temporada {season}."
+            ),
+            suggestion="Prueba con size=2 si pediste tríos, o con team_lineups para el quinteto completo.",
+        )
+    ordered = reliable.sort_values("plus_minus_per_40_shrunk", ascending=(order == "worst"))
+    rows = records(ordered.head(limit))
+    return ok(
+        rows,
+        source="lineup_stints + lineup_stint_players",
+        scope=f"temporada {season} · {label} · mínimo {min_minutes:.0f} min juntos",
+        artifact=artifact("table", rows, title=f"{label.capitalize()} ({'peores' if order == 'worst' else 'mejores'})"),
+    )

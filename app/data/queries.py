@@ -12,7 +12,7 @@ o un escalar.
 """
 import datetime as dt
 import math
-from typing import Optional
+from typing import List, Optional
 
 import pandas as pd
 import streamlit as st
@@ -77,6 +77,26 @@ def list_seasons(_engine: Engine) -> pd.DataFrame:
     respeta la temporada elegida aquí, no solo la más reciente.
     """
     return pd.read_sql(text("SELECT id, label FROM seasons ORDER BY id DESC"), _engine)
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def season_teams(_engine: Engine, season_id: int) -> pd.DataFrame:
+    """Equipos con al menos un partido cargado en la temporada (`id`, `name`).
+
+    Para el selector de equipo de `pages/quintetos.py` (propuesta 07 §6): la
+    pantalla tiene que servir igual para el Baskonia que para el próximo
+    rival, y el desplegable solo tiene sentido con equipos que de verdad
+    tengan quintetos que enseñar en esta temporada — no el catálogo entero
+    de `teams`, que incluye clubes sin un solo partido cargado todavía.
+    """
+    sql = text("""
+        SELECT DISTINCT t.id, t.name
+        FROM teams t
+        JOIN games g ON t.id IN (g.home_team_id, g.away_team_id)
+        WHERE g.season_id = :season_id
+        ORDER BY t.name
+    """)
+    return pd.read_sql(sql, _engine, params={"season_id": season_id})
 
 
 @st.cache_data(ttl=_TTL, show_spinner=False)
@@ -989,8 +1009,28 @@ def team_shots_season(_engine: Engine, team_id: str, season_id: int) -> pd.DataF
     return pd.read_sql(sql, _engine, params={"team_id": team_id, "season_id": season_id})
 
 
+#: Condición SQL de `game_zone_stats` para cada lado de `team_zone_profile`/
+#: `team_zone_profile_by_competition`. "offensive" son las filas del propio
+#: `team_id`; "defensive" son las del RIVAL en esos mismos partidos —
+#: `game_zone_stats` solo tiene una fila por (partido, equipo, zona), así que
+#: basta con excluir la del propio equipo dentro de sus partidos (no hace
+#: falta comprobar que el otro `team_id` sea el rival: en un partido solo
+#: juegan dos equipos, y `game_zone_stats` no tiene filas de nadie más).
+_ZONE_SIDE_FILTERS = {
+    "offensive": "gzs.team_id = :team_id",
+    "defensive": "gzs.team_id <> :team_id AND (g.home_team_id = :team_id OR g.away_team_id = :team_id)",
+}
+
+
+def _zone_side_filter(side: str) -> str:
+    try:
+        return _ZONE_SIDE_FILTERS[side]
+    except KeyError:
+        raise ValueError(f"side desconocido: {side!r} (válidos: {tuple(_ZONE_SIDE_FILTERS)})") from None
+
+
 @st.cache_data(ttl=_TTL, show_spinner=False)
-def team_zone_profile(_engine: Engine, team_id: str, season_id: int) -> pd.DataFrame:
+def team_zone_profile(_engine: Engine, team_id: str, season_id: int, side: str = "offensive") -> pd.DataFrame:
     """Acierto y volumen de tiro por zona de cancha de un equipo en la temporada.
 
     Acompaña en números al mapa de puntos de `team_shots_season`: la nube de
@@ -1002,30 +1042,190 @@ def team_zone_profile(_engine: Engine, team_id: str, season_id: int) -> pd.DataF
     porcentajes de cada partido — un 100% de un único tiro en un partido no
     puede pesar lo mismo que un 45% de veinte tiros en otro.
 
+    Args:
+        side: `"offensive"` (por defecto, sin cambios de comportamiento para
+            quien ya llamaba a esta función) para los tiros DEL equipo, o
+            `"defensive"` para los que le tira el RIVAL en esos mismos
+            partidos — la mitad que hace falta para "¿dónde nos van a
+            castigar?" (`doc/features/propuestas/08_donde_castigar_al_rival.md`).
+            La fuente sigue siendo `game_zone_stats` en los dos casos, nunca
+            `shots` vía `players.team_id`: ese campo es el equipo ACTUAL del
+            jugador, y un traspaso a mitad de temporada le colgaría tiros
+            antiguos al equipo equivocado (§3 del documento).
+
     Returns:
-        `zone_label, fg_pct, volume, made`, de más a menos volumen. `made`
-        (para poder escribir "aciertos/intentos", no solo el %) se
+        `zone_id, zone_label, fg_pct, volume, made`, de más a menos volumen.
+        `made` (para poder escribir "aciertos/intentos", no solo el %) se
         REDERIVA de `fg_pct*volume` porque `game_zone_stats` no guarda los
         aciertos en bruto por fila (solo el `fg_pct` ya redondeado a 1
         decimal que deja `ingest/common/loader.py`) — con `ROUND()` queda a
         lo sumo a una fracción de tiro de distancia del entero real, de
         sobra para mostrarlo, no para volver a hacer cuentas con él. Vacío
-        si el equipo no tiene tiros con zona registrados en esa temporada.
+        si el equipo no tiene tiros con zona registrados en esa temporada
+        (o, en `"defensive"`, si no jugó ningún partido esa temporada).
     """
-    sql = text("""
-        SELECT cz.label                                   AS zone_label,
+    sql = text(f"""
+        SELECT cz.id                                      AS zone_id,
+               cz.label                                   AS zone_label,
                SUM(gzs.fg_pct * gzs.volume) / SUM(gzs.volume) AS fg_pct,
                SUM(gzs.volume)                            AS volume,
                ROUND(SUM(gzs.fg_pct / 100.0 * gzs.volume)) AS made
         FROM game_zone_stats gzs
         JOIN court_zones cz ON cz.id = gzs.zone_id
         JOIN games g ON g.id = gzs.game_id
-        WHERE gzs.team_id = :team_id AND g.season_id = :season_id
-        GROUP BY cz.label
+        WHERE g.season_id = :season_id AND ({_zone_side_filter(side)})
+        GROUP BY cz.id, cz.label
         HAVING SUM(gzs.volume) > 0
         ORDER BY volume DESC
     """)
     return pd.read_sql(sql, _engine, params={"team_id": team_id, "season_id": season_id})
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def team_zone_profile_by_competition(
+    _engine: Engine, team_id: str, season_id: int, side: str = "offensive"
+) -> pd.DataFrame:
+    """Igual que `team_zone_profile`, pero sin fundir las competiciones.
+
+    Hace falta desglosado así (y no el agregado de `team_zone_profile`) para
+    comparar cada zona contra la referencia de liga DE SU PROPIA competición
+    (`analytics/zone_matchup.py`, propuesta 08 §4): ACB y Euroliga no tienen
+    el mismo nivel de tiro, y un equipo que juega las dos reparte sus tiros
+    de forma distinta entre ellas que cualquier rival.
+
+    Returns:
+        `competition_id, zone_id, zone_label, fg_pct, volume, made`, de más a
+        menos volumen. Vacío en las mismas condiciones que `team_zone_profile`.
+    """
+    sql = text(f"""
+        SELECT g.competition_id                           AS competition_id,
+               cz.id                                       AS zone_id,
+               cz.label                                    AS zone_label,
+               SUM(gzs.fg_pct * gzs.volume) / SUM(gzs.volume) AS fg_pct,
+               SUM(gzs.volume)                             AS volume,
+               ROUND(SUM(gzs.fg_pct / 100.0 * gzs.volume))  AS made
+        FROM game_zone_stats gzs
+        JOIN court_zones cz ON cz.id = gzs.zone_id
+        JOIN games g ON g.id = gzs.game_id
+        WHERE g.season_id = :season_id AND ({_zone_side_filter(side)})
+        GROUP BY g.competition_id, cz.id, cz.label
+        HAVING SUM(gzs.volume) > 0
+        ORDER BY g.competition_id, volume DESC
+    """)
+    return pd.read_sql(sql, _engine, params={"team_id": team_id, "season_id": season_id})
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def league_zone_baseline_counts(_engine: Engine, season_id: int) -> pd.DataFrame:
+    """Referencia de liga por (competición, zona): TODOS los equipos, temporada completa.
+
+    Materia prima de `analytics/zone_matchup.py::league_baseline` — cada fila
+    de `game_zone_stats` pertenece a un único (partido, equipo), así que sumar
+    sin filtrar por `team_id` ya suma a los dos equipos de cada partido, que
+    es exactamente la referencia de liga que hace falta (mismo patrón que
+    `league_shot_counts`, pero sobre `game_zone_stats` en vez de `shots` — ver
+    §3 del documento 08 sobre por qué esa es la fuente correcta aquí).
+
+    Returns:
+        `competition_id, zone_id, zone_label, fg_pct, volume`, de más a menos
+        volumen dentro de cada competición. Vacío si la temporada no tiene
+        tiros con zona registrados.
+    """
+    sql = text("""
+        SELECT g.competition_id                           AS competition_id,
+               cz.id                                       AS zone_id,
+               cz.label                                    AS zone_label,
+               SUM(gzs.fg_pct * gzs.volume) / SUM(gzs.volume) AS fg_pct,
+               SUM(gzs.volume)                             AS volume
+        FROM game_zone_stats gzs
+        JOIN court_zones cz ON cz.id = gzs.zone_id
+        JOIN games g ON g.id = gzs.game_id
+        WHERE g.season_id = :season_id
+        GROUP BY g.competition_id, cz.id, cz.label
+        HAVING SUM(gzs.volume) > 0
+        ORDER BY g.competition_id, volume DESC
+    """)
+    return pd.read_sql(sql, _engine, params={"season_id": season_id})
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def team_games_played(_engine: Engine, team_id: str, season_id: int) -> int:
+    """Partidos ya disputados por un equipo en una temporada (`games`, no `upcoming_matchups`).
+
+    Sirve para pasar de volumen de tiros por zona a **tiros por partido**
+    (`analytics/zone_matchup.py`), que es la unidad en la que se ordena el
+    ranking de zonas a atacar — un 8% de más con 3 tiros por partido vale
+    menos que un 3% de más con 15 (§2b del documento 08).
+    """
+    sql = text("""
+        SELECT COUNT(*) FROM games
+        WHERE season_id = :season_id AND (home_team_id = :team_id OR away_team_id = :team_id)
+    """)
+    with _engine.connect() as conn:
+        result = conn.execute(sql, {"team_id": team_id, "season_id": season_id}).scalar()
+    return int(result or 0)
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def game_factor_rows(_engine: Engine, season_id: Optional[int] = None) -> pd.DataFrame:
+    """Materia prima de `analytics/win_thresholds.py` (propuesta 09): una fila por equipo Y partido.
+
+    Cada fila trae los cuatro factores clásicos y el contexto de
+    `game_advanced_stats` PROPIOS, más los MISMOS del rival de ese partido
+    (columnas `opp_*`) vía un self-join sobre `game_id` — mismo patrón que
+    `team_free_throws`/`team_box_extras`, pero fila a fila en vez de agregado
+    por temporada: el barrido de umbrales necesita el partido suelto, no la
+    media. `win` sale de comparar `home_score`/`away_score` con el lado en el
+    que jugó cada equipo.
+
+    Solo entran partidos con los CUATRO factores clásicos cargados en los
+    DOS equipos (`INNER JOIN` contra la fila del rival, más el filtro de
+    `NOT NULL`): el documento cuenta 1.474 filas así, sin huecos que arrastrar
+    al barrido de umbrales.
+
+    Args:
+        season_id: acota a una temporada (recomendado — el documento calcula
+            los umbrales de UNA temporada, no de varias mezcladas, §5).
+            `None` trae todas las temporadas cargadas.
+
+    Returns:
+        `team_id, team_name, opponent_team_id, opponent_name, game_id,
+        season_id, competition_id, game_date, win, efg_pct, opp_efg_pct,
+        ft_rate, opp_ft_rate, orb_pct, opp_orb_pct, tov_pct, opp_tov_pct,
+        ortg, drtg, net_rating, pace, stl, blk, oreb, dreb, pf, pf_drawn,
+        tov`. `pace` sale de `games.pace` (una sola cifra del PARTIDO, no de
+        cada equipo — así lo guarda el esquema) y es igual en las dos filas
+        de un mismo partido, a propósito. Las seis últimas van en unidades
+        naturales (recuento del partido), por si algún umbral se quiere en
+        esa forma en vez de en porcentaje (§3 del documento);
+        `win_thresholds` no las usa todavía.
+    """
+    sql = text("""
+        SELECT gas.team_id, t.name AS team_name,
+               opp.team_id AS opponent_team_id, t2.name AS opponent_name,
+               gas.game_id, g.season_id, g.competition_id, g.game_date,
+               CASE WHEN (g.home_team_id = gas.team_id AND g.home_score > g.away_score)
+                      OR (g.away_team_id = gas.team_id AND g.away_score > g.home_score)
+                    THEN 1 ELSE 0 END AS win,
+               gas.efg_pct, opp.efg_pct AS opp_efg_pct,
+               gas.ft_rate, opp.ft_rate AS opp_ft_rate,
+               gas.orb_pct, opp.orb_pct AS opp_orb_pct,
+               gas.tov_pct, opp.tov_pct AS opp_tov_pct,
+               gas.ortg, gas.drtg, gas.net_rating, g.pace,
+               gas.stl, gas.blk, gas.oreb, gas.dreb, gas.pf, gas.pf_drawn, gas.tov
+        FROM game_advanced_stats gas
+        JOIN games g ON g.id = gas.game_id
+        JOIN teams t ON t.id = gas.team_id
+        JOIN game_advanced_stats opp ON opp.game_id = gas.game_id AND opp.team_id != gas.team_id
+        JOIN teams t2 ON t2.id = opp.team_id
+        WHERE (:season_id IS NULL OR g.season_id = :season_id)
+          AND gas.efg_pct IS NOT NULL AND gas.tov_pct IS NOT NULL
+          AND gas.orb_pct IS NOT NULL AND gas.ft_rate IS NOT NULL
+          AND opp.efg_pct IS NOT NULL AND opp.tov_pct IS NOT NULL
+          AND opp.orb_pct IS NOT NULL AND opp.ft_rate IS NOT NULL
+        ORDER BY g.game_date
+    """)
+    return pd.read_sql(sql, _engine, params={"season_id": season_id})
 
 
 @st.cache_data(ttl=_TTL, show_spinner=False)
@@ -1060,6 +1260,87 @@ def player_zone_profile(_engine: Engine, player_id: str, season_id: int) -> pd.D
         ORDER BY volume DESC
     """)
     return pd.read_sql(sql, _engine, params={"player_id": player_id, "season_id": season_id})
+
+
+# ---------------------------------------------------------------------------
+# Similitud de jugadores (propuesta 11,
+# doc/features/propuestas/11_similitud_de_jugadores.md). Dos piezas que junto
+# a `queries_assistant.league_player_percentiles` arman el vector de perfil
+# de CADA jugador de la base de datos: `league_player_index` (quién es, de
+# qué equipo, cuántos minutos lleva en la temporada -> el filtro de muestra
+# mínima del §4) y `league_player_zone_volume` (tiros por zona, la materia
+# prima del reparto de tiro que separa esta propuesta de comparar solo
+# medias). Ninguna de las dos calcula percentiles ni distancias: eso es
+# trabajo de `app/analytics/similarity.py`, que se puede probar sin base de
+# datos (mismo criterio que `zone_matchup.py`).
+# ---------------------------------------------------------------------------
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def league_player_index(_engine: Engine, season_id: int) -> pd.DataFrame:
+    """Todos los jugadores con algún partido esta temporada, con su equipo y minutos totales.
+
+    Es la base sobre la que se aplica el filtro de minutos mínimos del §4 de
+    la propuesta 11 (300 mínimo, 500 recomendado): `minutes_total` sale de
+    `player_stats_combined` (`gp * min_avg`, combinando TODAS las
+    competiciones del jugador esa temporada), no del percentil por
+    competición — un jugador que reparte su temporada entre ACB y Euroliga
+    cuenta con el total de las dos, que es la muestra real que respalda su
+    perfil.
+
+    Returns:
+        `player_id, name, team_id, team_name, position, gp_total,
+        minutes_total`. Vacío si nadie tiene partidos esa temporada.
+    """
+    sql = text("""
+        SELECT p.id AS player_id, p.name, p.team_id, t.name AS team_name, p.position,
+               s.gp AS gp_total, s.gp * s.min_avg AS minutes_total
+        FROM player_stats_combined s
+        JOIN players p ON p.id = s.player_id
+        JOIN teams t ON t.id = p.team_id
+        WHERE s.season_id = :season_id AND s.gp > 0
+    """)
+    return pd.read_sql(sql, _engine, params={"season_id": season_id})
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def league_player_zone_volume(_engine: Engine, season_id: int) -> pd.DataFrame:
+    """Tiros por jugador, competición y zona, de TODOS los jugadores de la temporada.
+
+    Sin agregar a la zona "de similitud" (pintura, media distancia...): esa
+    agrupación es analítica (`app/analytics/similarity.py::ZONE_GROUPS`) y no
+    dato — igual que esta consulta no decide qué es "media distancia", solo
+    cuenta tiros por `zone_id` real.
+
+    Returns:
+        `player_id, competition_id, zone_id, volume`. Vacío si no hay tiros
+        con zona registrados esa temporada.
+    """
+    sql = text("""
+        SELECT s.player_id, g.competition_id, s.zone_id, COUNT(*) AS volume
+        FROM shots s
+        JOIN games g ON g.id = s.game_id
+        WHERE g.season_id = :season_id AND s.zone_id IS NOT NULL
+        GROUP BY s.player_id, g.competition_id, s.zone_id
+    """)
+    return pd.read_sql(sql, _engine, params={"season_id": season_id})
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def opponent_team_ids(_engine: Engine, own_team_id: str, season_id: int) -> List[str]:
+    """Equipos a los que se ha enfrentado `own_team_id` esta temporada (local o visitante).
+
+    Es el filtro "solo jugadores que ya hemos enfrentado" del §2 de la
+    propuesta 11 — el que hace útil el uso de scouting de rival: traducir a
+    alguien desconocido a uno que el equipo YA ha defendido.
+    """
+    sql = text("""
+        SELECT DISTINCT CASE WHEN home_team_id = :team_id THEN away_team_id ELSE home_team_id END AS opponent
+        FROM games
+        WHERE season_id = :season_id AND (home_team_id = :team_id OR away_team_id = :team_id)
+    """)
+    df = pd.read_sql(sql, _engine, params={"team_id": own_team_id, "season_id": season_id})
+    return df["opponent"].tolist()
 
 
 # ---------------------------------------------------------------------------
@@ -1554,6 +1835,40 @@ def team_shot_counts(_engine: Engine, team_id: str, season_id: int, conceded: bo
 
 
 @st.cache_data(ttl=_TTL, show_spinner=False)
+def team_game_zone_counts(_engine: Engine, team_id: str, season_id: int) -> pd.DataFrame:
+    """Tiros PROPIOS de un equipo, por partido y zona, para vigilar cambios semanales de reparto.
+
+    Extiende `team_shot_counts` (agregado a TEMPORADA) a resolución de
+    PARTIDO: es el desglose que la v1 de la propuesta 10 dejó fuera por "no
+    existir agregado en ningún sitio" (`analytics/signals.py`, § "matices de
+    alcance") — `shots` ya guarda `game_id` y `zone_id` fila a fila, así que
+    es la misma consulta con `game_id`/`game_date` de más en el `GROUP BY`,
+    no una tabla nueva. Solo tiros PROPIOS (`conceded` no existe aquí): el
+    "reparto de tiro por zona" de §2 de la propuesta es sobre el ataque
+    propio, no lo concedido (eso es la propuesta 08).
+
+    Returns:
+        `game_id, game_date, competition, zone_id, zone_label, located,
+        shots, made`, cronológico. Vacío si el equipo no tiene tiros en esa
+        temporada.
+    """
+    sql = text("""
+        SELECT s.game_id, g.game_date, c.name AS competition,
+               s.zone_id, cz.label AS zone_label, COALESCE(s.located, 1) AS located,
+               COUNT(*) AS shots, SUM(s.made) AS made
+        FROM shots s
+        JOIN players p ON p.id = s.player_id
+        JOIN games g ON g.id = s.game_id
+        JOIN competitions c ON c.id = g.competition_id
+        LEFT JOIN court_zones cz ON cz.id = s.zone_id
+        WHERE g.season_id = :season_id AND p.team_id = :team_id
+        GROUP BY s.game_id, g.game_date, c.name, s.zone_id, cz.label, COALESCE(s.located, 1)
+        ORDER BY g.game_date
+    """)
+    return pd.read_sql(sql, _engine, params={"team_id": team_id, "season_id": season_id})
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
 def game_shot_counts(_engine: Engine, game_id: str) -> pd.DataFrame:
     """Tiros de UN partido, por equipo, competición y zona.
 
@@ -1787,3 +2102,99 @@ def performance_by_rest(_engine: Engine, team_id: str, season_id: int) -> pd.Dat
         .drop(columns="_sort")
         .reset_index(drop=True)
     )
+
+
+# ==================================================== señales semanales (10) ==
+#
+# Los dos "logs" de aquí abajo son la materia prima cruda —partido a partido,
+# sin agregar todavía— que `app/analytics/signals.py` compara (últimos K
+# partidos contra el resto de la temporada). Se calculan en Python y no en
+# SQL a propósito: la comparación estadística (test, corrección por
+# comparaciones múltiples, tamaño de efecto) es lógica pura que se puede
+# probar sin base de datos, igual que `zone_matchup.py`/`shot_quality.py`
+# (§4 y §6 de `doc/features/propuestas/10_senales_semanales.md`).
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def team_player_game_log(_engine: Engine, team_id: str, season_id: int) -> pd.DataFrame:
+    """Boxscore partido a partido de TODA la plantilla activa, para vigilar cambios semanales.
+
+    A diferencia de `player_game_log` (un jugador, con nombre de rival y
+    condición para pintar una tabla) esto es la materia prima de
+    `analytics.signals.detect_player_signals`: todos los jugadores activos a
+    la vez, con las columnas en bruto (nunca tasas ya calculadas) para que
+    quien compare decida el denominador — minutos, pérdidas, faltas, rebote
+    ofensivo y tiros libres vienen tal cual de `player_game_stats`; los
+    triples (`tpm`/`tpa`) no existen como columna (igual limitación que
+    `game_player_report`) y se derivan aparte, aquí mismo, contando tiros
+    cuya zona empieza por "Triple".
+
+    Solo partidos JUGADOS (`minutes > 0`): un DNP no es un dato de tasa, y
+    mezclarlo synthetiza una "pérdida de forma" que en realidad es "no jugó".
+
+    Returns:
+        `player_id, player_name, game_id, game_date, competition, minutes,
+        tov, pf, oreb, ftm, fta, tpm, tpa`, cronológico por jugador. `tov`/
+        `pf`/`oreb` pueden ser `NaN` en partidos anteriores al boxscore
+        ampliado (Fase 1, 2026-08-27); `tpm`/`tpa` son `NaN` cuando ese
+        partido no tiene tiros con coordenadas, no cuando el jugador no
+        lanzó ningún triple — la diferencia importa para no leer "0 triples"
+        donde en realidad es "sin dato". Vacío si el equipo no tiene
+        jugadores activos con partidos en la temporada.
+    """
+    boxscore_sql = text("""
+        SELECT p.id AS player_id, p.name AS player_name, g.id AS game_id, g.game_date,
+               c.name AS competition, pgs.minutes, pgs.tov, pgs.pf, pgs.oreb, pgs.ftm, pgs.fta
+        FROM player_game_stats pgs
+        JOIN players p ON p.id = pgs.player_id
+        JOIN games g ON g.id = pgs.game_id
+        JOIN competitions c ON c.id = g.competition_id
+        WHERE p.team_id = :team_id AND p.active = 1 AND g.season_id = :season_id
+          AND pgs.minutes IS NOT NULL AND pgs.minutes > 0
+        ORDER BY p.name, g.game_date
+    """)
+    boxscore = pd.read_sql(boxscore_sql, _engine, params={"team_id": team_id, "season_id": season_id})
+    if boxscore.empty:
+        return boxscore
+
+    three_pointers_sql = text("""
+        SELECT s.player_id, s.game_id, SUM(s.made) AS tpm, COUNT(*) AS tpa
+        FROM shots s
+        JOIN court_zones cz ON cz.id = s.zone_id
+        JOIN games g ON g.id = s.game_id
+        JOIN players p ON p.id = s.player_id
+        WHERE p.team_id = :team_id AND p.active = 1 AND g.season_id = :season_id
+          AND cz.label LIKE 'Triple%'
+        GROUP BY s.player_id, s.game_id
+    """)
+    three_pointers = pd.read_sql(three_pointers_sql, _engine, params={"team_id": team_id, "season_id": season_id})
+    return boxscore.merge(three_pointers, on=["player_id", "game_id"], how="left")
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def team_game_advanced_log(_engine: Engine, team_id: str, season_id: int) -> pd.DataFrame:
+    """Los cuatro factores + ritmo, partido a partido, para vigilar cambios semanales de equipo.
+
+    Equivalente de equipo a `team_player_game_log`: `team_advanced_profile`
+    ya da estas mismas métricas pero AGREGADAS a temporada — aquí sin agregar,
+    una fila por partido, que es lo que necesita comparar últimos K partidos
+    contra el resto (§4 del documento). `games.pace` es del partido entero
+    (no depende de qué equipo se mire); los cuatro factores sí son de
+    `team_id` en `game_advanced_stats`.
+
+    Returns:
+        `game_id, game_date, competition, efg_pct, tov_pct, orb_pct, ft_rate,
+        pace`, cronológico. `ft_rate` puede ser `NaN` en partidos anteriores a
+        esa columna (2026-08-24). Vacío si el equipo no tiene partidos con
+        estadísticas avanzadas en esa temporada.
+    """
+    sql = text("""
+        SELECT g.id AS game_id, g.game_date, c.name AS competition, g.pace,
+               gas.efg_pct, gas.tov_pct, gas.orb_pct, gas.ft_rate
+        FROM game_advanced_stats gas
+        JOIN games g ON g.id = gas.game_id
+        JOIN competitions c ON c.id = g.competition_id
+        WHERE gas.team_id = :team_id AND g.season_id = :season_id
+        ORDER BY g.game_date
+    """)
+    return pd.read_sql(sql, _engine, params={"team_id": team_id, "season_id": season_id})

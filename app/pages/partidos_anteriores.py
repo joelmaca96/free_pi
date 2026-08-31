@@ -10,7 +10,7 @@ import datetime as dt
 import altair as alt
 import streamlit as st
 
-from analytics import shot_quality
+from analytics import shot_quality, win_thresholds
 from assistant.llm import LLMError, build_llm_client
 from components.ask_assistant import ask_assistant_button
 from components.court import shot_chart, shot_chart_caption
@@ -18,6 +18,7 @@ from components.glossary import abbr, glossary_expander, help_text
 from components.header import page_header
 from components.rotation_chart import event_label, rotation_chart
 from components.shot_quality import quality_caveat, quality_metrics
+from components.win_thresholds import objectives_checklist
 from data import queries, queries_assistant
 from data.db import get_read_engine
 from reports import postgame_ppt
@@ -317,6 +318,44 @@ with detail_col:
                     else "—"
                 )
             glossary_expander([key for key, _ in metrics])
+
+        # Cómo se sostuvo el objetivo, partido a partido (propuesta 09, §2b
+        # `doc/features/propuestas/09_umbrales_de_victoria.md`): de los
+        # umbrales de liga de ESTA temporada, cuáles cumplió el Baskonia en
+        # ESTE partido concreto. Cierra el ciclo con el panel de "Próximo
+        # rival" (se fija antes del partido, se revisa aquí después).
+        st.divider()
+        st.markdown("**Objetivos del partido: qué se cumplió**")
+        objectives_rows = queries.game_factor_rows(engine, games_season_id)
+        if objectives_rows.empty:
+            st.caption("Sin estadísticas avanzadas suficientes esta temporada para revisar objetivos.")
+        else:
+            own_game_rows = objectives_rows[
+                (objectives_rows["game_id"] == game_id) & (objectives_rows["team_id"] == team_id)
+            ]
+            if own_game_rows.empty:
+                st.caption("Este partido no tiene los cuatro factores clásicos cargados para revisar objetivos.")
+            else:
+                # Propuesta 09 §5: comparar el partido contra el umbral de SU
+                # PROPIA competición cuando hay muestra de sobra para
+                # sostenerlo (`MIN_SIDE_GAMES` a cada lado) — un partido de
+                # ACB se revisa mejor contra lo que separa ganar en ACB, no
+                # contra la mezcla con Euroliga. Con poca muestra en esa
+                # competición sola, cae al umbral combinado de siempre.
+                game_competition_id = own_game_rows.iloc[0]["competition_id"]
+                same_competition_rows = objectives_rows[objectives_rows["competition_id"] == game_competition_id]
+                if len(same_competition_rows) >= 2 * win_thresholds.MIN_SIDE_GAMES:
+                    objectives_cards = win_thresholds.league_objectives(same_competition_rows)
+                    scope_note = None
+                else:
+                    objectives_cards = win_thresholds.league_objectives(objectives_rows)
+                    scope_note = (
+                        "Sin partidos-equipo suficientes en esta competición sola: objetivos calculados "
+                        "con todas las competiciones juntas."
+                    )
+                objectives_checklist(own_game_rows.iloc[0], objectives_cards, gano=gano)
+                if scope_note:
+                    st.caption(scope_note)
 
     with tab_box:
         def _render_boxscore(box_df):

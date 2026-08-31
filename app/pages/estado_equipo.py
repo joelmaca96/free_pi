@@ -10,6 +10,8 @@ import altair as alt
 import streamlit as st
 
 from analytics import shot_quality
+from analytics import signals as signals_engine
+from components.ask_assistant import ask_assistant_button
 from components.avatar import team_crest_html
 from components.court import shot_chart, shot_chart_caption, zone_breakdown, zone_heatmap, zone_heatmap_caption
 from components.glossary import glossary_expander, help_text
@@ -29,6 +31,97 @@ season_id = st.session_state["season_id"]
 today = dt.date.today()
 
 page_header("Estado del equipo")
+
+# ------------------------------------------------------- señales semanales --
+# Lo primero que se ve al entrar (propuesta 10, `10_senales_semanales.md`):
+# qué ha cambiado DE VERDAD en los últimos partidos, no cualquier cambio. El
+# valor entero de esto está en decir POCO y acertar (§1 del documento), así
+# que `select_top_signals` ya aplica las dos barreras obligatorias
+# (Benjamini-Hochberg + tamaño de efecto mínimo en unidades de baloncesto) —
+# aquí solo se pintan las tarjetas, la decisión de qué es una señal ya está
+# tomada en `analytics/signals.py`.
+st.subheader("Señales de la semana")
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _weekly_signals(_engine, team_id: str, season_id: int, last_n: int):
+    """Detección + filtro, cacheados por (equipo, temporada, K) — nunca el LLM (ver más abajo).
+
+    Solo `_engine` lleva guion bajo: es el único argumento que NO debe entrar
+    en la clave de caché de Streamlit (convención de `queries.py`, motor sin
+    hashear). `team_id`/`season_id` SÍ tienen que hashear — de lo contrario,
+    cambiar de temporada en el selector de la barra lateral seguiría
+    devolviendo el resultado cacheado de la primera temporada vista.
+    """
+    team_name = queries.team_name(_engine, team_id) or team_id
+    player_log = queries.team_player_game_log(_engine, team_id, season_id)
+    team_log = queries.team_game_advanced_log(_engine, team_id, season_id)
+    zone_log = queries.team_game_zone_counts(_engine, team_id, season_id)
+    pair_window = queries_assistant.pair_minutes_by_window(_engine, team_id, season_id, last_n)
+
+    rolling = queries.rolling_load(_engine, team_id, season_id, 7)
+    rolling_latest = rolling[rolling["game_date"] == rolling["game_date"].max()] if not rolling.empty else rolling
+
+    team_signals = signals_engine.detect_team_signals(
+        team_log, team_id=team_id, team_name=team_name, last_n=last_n
+    ) + signals_engine.detect_team_zone_signals(zone_log, team_id=team_id, team_name=team_name, last_n=last_n)
+    candidates = signals_engine.all_candidates(
+        player=signals_engine.detect_player_signals(player_log, last_n=last_n),
+        team=team_signals,
+        rotation=signals_engine.detect_rotation_signals(pair_window, last_n=last_n),
+        load=signals_engine.detect_load_signals(rolling_latest),
+    )
+    return signals_engine.select_top_signals(candidates, max_signals=5)
+
+
+week_signals = _weekly_signals(engine, team_id, season_id, 5)
+
+# La redacción con LLM (§6: "reglas como suelo, LLM opcional por encima") NO
+# se dispara sola en cada rerun de Streamlit — sería una llamada de pago por
+# cada clic en cualquier otro control de la página. Se deja tras un
+# interruptor explícito, apagado por defecto; sin tocarlo, las tarjetas se
+# quedan con el titular de reglas, que ya es correcto y completo por sí solo.
+if week_signals and st.toggle(
+    "Redactar con IA (opcional)", value=False, key="signals_llm_polish",
+    help="Pule la prosa de los titulares con el modelo configurado. Los números y la selección de "
+    "señales no cambian: eso ya lo decide el código, siempre.",
+):
+    try:  # pragma: no cover - ver nota en tools/context.py sobre las dos formas de import
+        from app.assistant.llm import build_llm_client
+    except ImportError:  # pragma: no cover
+        from assistant.llm import build_llm_client
+    llm_client = build_llm_client()
+    if llm_client is None:
+        st.caption("Sin proveedor de modelo configurado: se muestran los titulares por reglas.")
+    else:
+        team_name_for_llm = queries.team_name(engine, team_id) or team_id
+        week_signals = signals_engine.polish_headlines(llm_client, week_signals, team_name=team_name_for_llm)
+
+if not week_signals:
+    st.info(
+        "Sin cambios significativos esta semana. Con cinco partidos como ventana, eso es lo esperable "
+        "la mayoría de semanas — es la respuesta correcta, no un hueco de datos (§1 y §5 de la propuesta 10)."
+    )
+else:
+    signal_cols = st.columns(len(week_signals))
+    for col, signal in zip(signal_cols, week_signals):
+        with col:
+            with st.container(border=True, height="stretch"):
+                st.markdown(f"**{signal.headline}**")
+                st.caption(signal.confidence)
+                if signal.extra_note:
+                    st.caption(f"⚠ {signal.extra_note}")
+                ask_assistant_button(
+                    signal.ask_question,
+                    key=f"signal_ask_{signal.family}_{signal.subject_id}_{signal.metric}",
+                    label="Preguntar al asistente",
+                )
+    st.caption(
+        "Ordenadas por relevancia práctica (efecto × peso), no por lo estadísticamente llamativo — "
+        "un cambio grande en un suplente puede pesar menos que uno mediano en un titular."
+    )
+
+st.divider()
 
 # ---------------------------------------------------------------- resumen --
 record_df = queries.team_record(engine, team_id, season_id, today)

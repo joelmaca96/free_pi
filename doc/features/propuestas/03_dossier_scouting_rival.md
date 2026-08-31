@@ -1,15 +1,21 @@
 # 03. Dossier de scouting del rival, en un botón
 
-**Estado:** IMPLEMENTADA la v1 (2026-08-29, seis diapositivas, sin mapa de tiros — ver §7) ·
+**Estado:** IMPLEMENTADA (2026-08-31, seis diapositivas, con mapa de tiro) ·
 **Fecha de la propuesta:** 2026-08-28 · **Índice:** [00_indice.md](00_indice.md)
 
 Botón "📊 Generar dossier de scouting" en `app/pages/proximo_rival.py`, justo después del aviso
 de temporada de scouting. La maquetación compartida con "PPT para Paolo" vive en
 `app/reports/_deck.py` (extraída de `postgame_ppt.py` como proponía §4); el ensamblado de este
 dossier, en `app/reports/scouting_ppt.py`, con el mismo patrón de dos capas (reglas + LLM
-opcional) en jugadores clave y claves del partido. Sin mapa de tiros todavía (§4: pedía una
-dependencia nueva o dibujar la pista a mano) — la calidad de tiro sí entra en la diapositiva 3,
-pero como texto (`analytics/shot_quality.py::verdict`), no como el mapa de la pantalla. Tests en
+opcional) en jugadores clave y claves del partido. La diapositiva 3 (calidad de tiro) trae además
+el mapa de tiro por zona, ataque y defensa lado a lado (§4: se optó por dibujar la pista con
+formas NATIVAS de pptx en vez de sumar una dependencia — `_draw_shot_zone_map`, sin
+`vl-convert-python`), coloreado con el mismo criterio divergente que
+`components/court.py::zone_heatmap(mode="vs_league")` pero sobre PPS. Simplificación explícita:
+las sub-zonas de ala partidas por el arco de triple ("Ala izq. (2)"/"(3)") se funden en un solo
+rectángulo (`_coarsen_zone_profile`) porque su geometría real es un arco que
+`components/court.py` calcula en el momento con Altair, no un rectángulo de `court_zones` —
+reproducirlo a mano en pptx no compensaba para una diapositiva de un minuto. Tests en
 `tests/app/test_scouting_ppt.py`, mismo criterio que `tests/app/test_postgame_ppt.py`.
 
 ## 1. El problema del entrenador

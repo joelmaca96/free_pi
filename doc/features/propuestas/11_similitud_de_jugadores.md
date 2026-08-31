@@ -1,6 +1,36 @@
 # 11. Similitud de jugadores
 
-**Estado:** propuesta, sin implementar · **Fecha:** 2026-08-28 · **Índice:** [00_indice.md](00_indice.md)
+**Estado:** IMPLEMENTADA (2026-08-31) · **Fecha de la propuesta:** 2026-08-28 ·
+**Índice:** [00_indice.md](00_indice.md)
+
+El cálculo vive en `app/analytics/similarity.py` (lógica pura sobre `pandas`/`numpy`, sin
+Streamlit ni SQLAlchemy — mismo criterio que `zone_matchup.py`/`win_thresholds.py`), las consultas
+nuevas `queries.league_player_index`/`league_player_zone_volume`/`opponent_team_ids` y
+`queries_assistant.league_player_percentiles`, el pintado en `app/components/similarity.py`, el
+bloque compacto "Se parece a..." en `app/components/player_dialog.py` (uso 1: preparar al rival) y
+el buscador completo en `app/pages/similitud.py` (uso 2: fichajes, con filtros y pesos ajustables).
+La herramienta del asistente es `similar_players` (`app/assistant/tools/similarity.py`).
+
+Se implementó tal como está descrita abajo, con matices:
+
+- **10 dimensiones de producción/eficiencia, no 8-15 "a elegir"**: se reutilizan literalmente las
+  columnas de percentil de la vista `player_percentiles` (rebote separado en ofensivo/defensivo, sin
+  un "rebote total" aparte que lo contaría dos veces) más 5 de reparto de tiro por zona
+  (`ZONE_GROUPS`: pintura, media distancia, triple de esquina, triple de ala, triple central) — 15 en
+  total, dentro del rango que pide §4.
+- **Percentiles por partido, no por 40 minutos**: la vista `player_percentiles` (única fuente que ya
+  resuelve percentiles por competición, §6) los calcula sobre medias por partido, no normalizadas a
+  40'. Es una simplificación consciente frente a la redacción de §3 — recalcular por 40 minutos
+  habría exigido una vista nueva en vez de reutilizar la que ya existe.
+- **Barras de percentil superpuestas, no radar** (de las dos opciones de §2, Altair no tiene un mark
+  polar nativo y el resto de la interfaz ya es Altair — un radar habría exigido una librería nueva
+  solo para esta pantalla).
+- **El filtro de minutos (300/500) se aplica siempre a los CANDIDATOS, nunca al jugador de
+  referencia** — alguien con pocos minutos puede seguir siendo la pregunta ("¿a quién se parece
+  este suplente que nos preocupa?").
+- Los avisos de §5 (sin altura/peso, edad casi vacía, posición vacía en casi la mitad de la base de
+  datos, una sola temporada, sin ajuste de contexto de equipo) van siempre pegados al resultado
+  (`similarity.SIMILARITY_CAVEAT`), no como nota al pie opcional.
 
 Cifras verificadas contra `data/baskonia.db` el 2026-08-28.
 
