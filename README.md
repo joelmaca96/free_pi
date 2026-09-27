@@ -125,10 +125,12 @@ evita que `data/` vuelva a llenarse de backups (llegó a tener diecisiete, 493 M
 Streamlit de un solo proceso, de **solo lectura** sobre `data/baskonia.db` — no crea el
 esquema ni escribe nunca; si la base de datos no está inicializada, falla con un mensaje claro
 en vez de intentar poblarla (eso sigue siendo trabajo de `ingest/`/`tools/init_scouting_db.py`).
-Cinco pantallas: estado del equipo (récord, calendario, carga de minutos), plantilla (galería
-+ detalle por jugador), próximo rival (scouting completo), partidos anteriores (selector +
-detalle: parciales, avanzadas, boxscore, tiros, quintetos) y **asistente** (chat en lenguaje
-natural sobre los datos cargados).
+Pantallas: estado del equipo (récord, señales semanales, calendario, carga de minutos, faltas),
+plantilla (galería + detalle por jugador), próximo rival (scouting completo, patrón de rotación y
+dossier `.pptx`), partidos anteriores (selector + detalle: parciales, avanzadas, boxscore, tiros,
+quintetos), on/off y duplas (con impacto ajustado RAPM y constructor de quintetos), similitud de
+jugadores y **asistente** (chat en lenguaje natural sobre los datos cargados). Qué hace cada
+función y por qué: [doc/features/propuestas/00_indice.md](doc/features/propuestas/00_indice.md).
 
 ### Asistente de scouting (`app/assistant/`)
 

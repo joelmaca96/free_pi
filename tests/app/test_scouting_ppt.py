@@ -366,7 +366,7 @@ def test_select_game_keys_without_client_uses_rules_only():
 
 def _build(ctx=None, style_df=None, player_rows=None, player_highlights=None,
            lineups_df=None, shot_quality_bullets=None, game_keys=None,
-           zones_df=None, attack_zone_profile=None, defense_zone_profile=None):
+           zones_df=None, attack_zone_profile=None, defense_zone_profile=None, rotation_summary=None):
     return scouting_ppt.build_scouting_ppt(
         ctx if ctx is not None else _ctx(),
         style_df if style_df is not None else pd.DataFrame(),
@@ -376,7 +376,20 @@ def _build(ctx=None, style_df=None, player_rows=None, player_highlights=None,
         shot_quality_bullets if shot_quality_bullets is not None else [],
         game_keys if game_keys is not None else [],
         zones_df=zones_df, attack_zone_profile=attack_zone_profile, defense_zone_profile=defense_zone_profile,
+        rotation_summary=rotation_summary,
     )
+
+
+def test_build_scouting_ppt_adds_the_rotation_slide_before_the_keys_when_there_is_a_summary():
+    data = _build(
+        player_rows=[_player_row()], player_highlights={"howard": ["18 puntos de media"]},
+        rotation_summary=["Quinteto inicial más probable: A, B, C, D, E (de salida en 9 de 10 partidos)."],
+    )
+    slides = list(Presentation(io.BytesIO(data)).slides)
+
+    assert len(slides) == 7
+    assert "Rotación de" in _all_text(slides[-2])
+    assert "Quinteto inicial más probable" in _all_text(slides[-2])
 
 
 def test_build_scouting_ppt_has_exactly_six_slides_with_one_player():

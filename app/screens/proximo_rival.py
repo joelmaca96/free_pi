@@ -34,6 +34,7 @@ from components.glossary import glossary_expander, help_text
 from components.header import page_header
 from components.lineups import season_lineups_section
 from components.player_dialog import player_detail
+from components.rotation_pattern import rotation_pattern_section
 from components.shot_quality import (
     league_reference_expander,
     player_quality_table,
@@ -613,6 +614,13 @@ season_lineups_section(
 )
 
 st.divider()
+
+# --------------------------------------------------------- patrón de rotación --
+# Propuesta 13: de "qué quintetos usa" a "cuándo". Necesita tramos con reloj
+# (`lineup_stints`); sin ellos la sección no se pinta.
+if probe(engine).lineup_stints:
+    rotation_pattern_section(engine, rival_team_id, scouting_season_id, rival_name, key="rival_rotation")
+    st.divider()
 
 # ------------------------------------------------------------ perfil por cuartos --
 st.subheader("Rendimiento por cuarto")

@@ -380,6 +380,42 @@ TERMS: Dict[str, Term] = {
         "100 = idéntico en todo lo disponible. Depende del método elegido (estilo o nivel) y de los "
         "pesos ajustados — no es una cifra absoluta, cambia según qué se le pida que compare.",
     ),
+    # ------------------------- impacto ajustado y constructor (propuesta 12) --
+    "rapm": Term(
+        "RAPM", "Impacto ajustado (+/- regularizado)",
+        "Cuántos puntos por 40 minutos gana el equipo con este jugador en pista en lugar de uno medio, "
+        "DESCONTANDO con qué compañeros y contra qué rivales jugó (regresión sobre los diez de pista en "
+        "cada tramo, encogida hacia 0 con poca muestra). A diferencia del On/Off, no premia al que juega "
+        "siempre con los titulares.",
+    ),
+    "projected_per_40": Term(
+        "Proyección", "Diferencia proyectada por 40 minutos",
+        "Suma del RAPM de los cinco. Es lo que el modelo espera de ese quinteto contra un rival medio; no "
+        "capta química (dos que se estorban), por eso va al lado de lo que ese quinteto ha hecho de verdad.",
+    ),
+    "observed_minutes": Term(
+        "Min. reales", "Minutos jugados de verdad por ese quinteto exacto",
+        "Minutos de la temporada que esos cinco han compartido pista. Con 0, la proyección es pura "
+        "extrapolación: una idea para probar, no un dato.",
+    ),
+    # ------------------------------------ patrón de rotación (propuesta 13) --
+    "minute_share": Term(
+        "% en pista", "Proporción en pista por minuto de partido",
+        "Segundos que el jugador estuvo en pista en ese minuto, sumados en todos los partidos del corte, "
+        "entre 60 × partidos. 100% = siempre en pista en ese minuto; los partidos en que no jugó cuentan "
+        "como 0.",
+    ),
+    "rest_window": Term(
+        "Descanso habitual", "Minutos en que suele estar sentado",
+        "Tramos de al menos dos minutos seguidos, dentro de su franja de juego, en los que está en pista "
+        "menos de un tercio de los partidos. Es la ventana para atacar lo que él protege.",
+    ),
+    "block_per_40": Term(
+        "+/- 40 del tramo", "Diferencia por 40 minutos en ese tramo del partido",
+        "Puntos a favor menos en contra del equipo en esos minutos de reloj, sumando todos los partidos, "
+        "escalado a 40 minutos. Los puntos de cada tramo de quinteto se reparten por tiempo entre los "
+        "bloques que toca: aproximación, no canasta a canasta.",
+    ),
 }
 
 
