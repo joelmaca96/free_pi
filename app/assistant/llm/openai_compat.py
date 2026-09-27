@@ -140,6 +140,26 @@ def _merge_stream_deltas(chunks: List[Dict[str, Any]], on_text: TextSink) -> Dic
     }
 
 
+def normalize_usage(raw: Dict[str, Any]) -> Dict[str, int]:
+    """Consumo del proveedor -> claves planas de enteros, con los tokens cacheados.
+
+    El dialecto OpenAI esconde el acierto de caché un nivel más abajo
+    (`prompt_tokens_details.cached_tokens`), y el agente solo suma valores
+    enteros de primer nivel: sin aplanarlo, el dato se descarta en silencio y
+    la pregunta "¿sirve de algo el orden del prompt?" no tiene respuesta en
+    este proveedor. Importa porque el prompt está ordenado —estable primero,
+    volátil al final (`prompt.py`)— precisamente para que el runtime pueda
+    reutilizar el prefijo, y hoy son ~9.100 tokens por vuelta que se reenvían
+    enteros cada vez. El adaptador de Anthropic ya lo expone plano
+    (`cache_read_input_tokens`); esto es la pieza equivalente.
+    """
+    usage = {key: int(value) for key, value in (raw or {}).items() if isinstance(value, int)}
+    details = (raw or {}).get("prompt_tokens_details") or {}
+    if isinstance(details, dict) and isinstance(details.get("cached_tokens"), int):
+        usage["cached_tokens"] = details["cached_tokens"]
+    return usage
+
+
 def first_choice(data: Dict[str, Any]) -> Dict[str, Any]:
     """La primera `choice` de la respuesta, o un `LLMError` con lo que diga el proveedor.
 
@@ -239,7 +259,9 @@ class OpenAICompatClient:
 
         message, usage, stop_reason = self._request_with_retries(payload, on_text)
         text, calls = _from_wire_message(message)
-        return LLMResponse(text=text, tool_calls=calls, usage=usage, stop_reason=stop_reason)
+        return LLMResponse(
+            text=text, tool_calls=calls, usage=normalize_usage(usage), stop_reason=stop_reason
+        )
 
     def _request_with_retries(self, payload: Dict[str, Any], on_text: TextSink) -> tuple:
         """Petición con espera creciente ante límite de cuota o fallo transitorio."""

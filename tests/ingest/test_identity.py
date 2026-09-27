@@ -47,9 +47,51 @@ def test_resolve_or_create_player_reuses_seed_player_by_external_id(engine):
 
 
 def test_resolve_or_create_player_matches_by_team_and_number_without_external_id(engine):
+    """Misma persona escrita distinto en cada fuente: 'M. Howard' no normaliza igual que
+    'Marcus Howard', pero comparte dorsal Y apellido, así que es la misma fila."""
     with engine.begin() as conn:
         player_id = resolve_or_create_player(conn, "euroleague", "EL-9001", "M. Howard", "bas", number=0)
     assert player_id == "howard"
+
+
+def test_a_reused_shirt_number_does_not_merge_two_players(engine):
+    """El dorsal es lo único de la cadena de resolución que NO identifica a una persona: se
+    reutiliza de una temporada a otra. Sin la comprobación de apellido, quien heredaba el
+    dorsal heredaba la FILA de su predecesor — y con ella sus partidos, tramos y tiros.
+
+    Caso real de `data/baskonia.db`: la fila `alberto-abal` (Alberto Abalde, Real Madrid #33)
+    acabó llamándose 'Gunars Grinvalds' con siete `external_id` de ACB y 79 partidos encima.
+    """
+    with engine.begin() as conn:
+        conn.execute(text("INSERT INTO teams (id, name, is_own_team) VALUES ('zzz', 'Equipo Z', 0)"))
+        first = resolve_or_create_player(conn, "acb", "30001111", "Alberto Abalde", "zzz", number=33)
+        second = resolve_or_create_player(conn, "acb", "30002222", "Gunars Grinvalds", "zzz", number=33)
+
+        assert first != second, "dos jugadores distintos fundidos en una sola fila"
+        names = dict(conn.execute(text("SELECT id, name FROM players WHERE team_id = 'zzz'")).all())
+        assert names[first] == "Alberto Abalde"   # no se le ha renombrado por el camino
+        assert names[second] == "Gunars Grinvalds"
+
+
+def test_the_unknown_number_sentinel_does_not_merge_players(engine):
+    """`players.number` es NOT NULL, así que un fichaje sin dorsal confirmado se guarda con el
+    centinela 0 (ver el INSERT de `resolve_or_create_player`). Emparejar por ese 0 juntaba a
+    cualquier par de jugadores sin dorsal — y con el que de verdad lleva el 0."""
+    with engine.begin() as conn:
+        conn.execute(text("INSERT INTO teams (id, name, is_own_team) VALUES ('zzz', 'Equipo Z', 0)"))
+        sin_dorsal = resolve_or_create_player(conn, "baskonia_web", "w1", "Fichaje Sin Dorsal", "zzz")
+        lleva_el_cero = resolve_or_create_player(conn, "acb", "30009999", "Otro Jugador Real", "zzz", number=0)
+
+    assert sin_dorsal != lleva_el_cero
+
+
+def test_two_unknown_signings_do_not_collapse_into_each_other(engine):
+    """El caso vivo al revisar: cuatro fichajes del Baskonia sin dorsal, todos con el 0."""
+    with engine.begin() as conn:
+        first = resolve_or_create_player(conn, "baskonia_web", "w1", "A. J. Lawson", "bas")
+        second = resolve_or_create_player(conn, "baskonia_web", "w2", "Chris Duarte", "bas")
+
+    assert first != second
 
 
 def test_resolve_or_create_player_creates_new_player_when_no_match(engine):

@@ -13,6 +13,7 @@ import pytest
 from sqlalchemy import text
 
 from app.assistant.resolve import (
+    ghost_candidates,
     is_ambiguous,
     previous_season_id,
     resolve_entity,
@@ -23,7 +24,15 @@ from app.assistant.resolve import (
 
 @pytest.fixture()
 def engine_with_howards(engine):
-    """Añade los otros dos Howard reales y el Fenerbahçe, que el seed no trae."""
+    """Añade los otros dos Howard reales y el Fenerbahçe, que el seed no trae.
+
+    Los dos Howard llegan **con boxscore**, igual que en la base de datos
+    real. No es decoración del fixture: desde que `resolve_entity` desempata
+    por partidos cargados (ver `Candidate.games`), un jugador sin una sola
+    línea de boxscore ya no cuenta como empate — así que unos Howard sin
+    partidos probarían el camino contrario al que este fichero quiere probar,
+    y `test_surname_alone_...` pasaría a verde por el motivo equivocado.
+    """
     with engine.begin() as conn:
         conn.execute(
             text("INSERT INTO teams (id, name, is_own_team) VALUES ('fenerbahce-b', 'Fenerbahce Beko Istanbul', 0)")
@@ -40,6 +49,14 @@ def engine_with_howards(engine):
                 " VALUES ('william-howa', 'rm', 'William Howard', 3, 'Alero')"
             )
         )
+        for player_id in ("howard-sant", "william-howa"):
+            conn.execute(
+                text(
+                    "INSERT INTO player_game_stats (game_id, player_id, minutes, pts, reb, ast, efg_pct)"
+                    " VALUES ('syn-2-1', :p, 24.0, 11, 3, 2, 52.0)"
+                ),
+                {"p": player_id},
+            )
     return engine
 
 
@@ -85,6 +102,73 @@ def test_surname_alone_returns_every_howard_and_does_not_choose(engine_with_howa
 
 def test_unknown_name_returns_nothing_rather_than_the_least_bad_match(engine):
     assert resolve_entity(engine, "Michael Jordan") == []
+
+
+# ---------------------------------------------------------------------------
+# Desempate por datos. El caso es literal: el único pulgar abajo del registro
+# de feedback es una pregunta de pretemporada contra el Bilbao en la que el
+# asistente gastó el turno entero preguntando a cuál de los dos Bilbao se
+# refería el entrenador — siendo que uno de los dos no tiene ni un partido.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def engine_with_ghost_team(engine):
+    """Un club duplicado por cambio de patrocinador: mismo nombre, cero partidos.
+
+    Reproduce lo que hay en `data/baskonia.db`: `surne-bilbao` con partidos y
+    `bilbao` sin ninguno, los dos como "Bilbao" para quien escribe.
+    """
+    with engine.begin() as conn:
+        conn.execute(
+            text("INSERT INTO teams (id, name, is_own_team) VALUES ('surne-bilbao', 'Surne Bilbao', 0)")
+        )
+        conn.execute(
+            text("INSERT INTO teams (id, name, is_own_team) VALUES ('bilbao', 'Bilbao Basket', 0)")
+        )
+        conn.execute(
+            text(
+                "INSERT INTO games (id, season_id, competition_id, home_team_id, away_team_id,"
+                " game_date, home_score, away_score, pace)"
+                " VALUES ('bil-1', 2, 1, 'surne-bilbao', 'rm', '2026-11-08', 88, 80, 71.0)"
+            )
+        )
+    return engine
+
+
+def test_ghost_duplicate_does_not_create_an_ambiguity(engine_with_ghost_team):
+    """El club sin partidos no empata con el club real: no hay nada que preguntar."""
+    candidates = resolve_entity(engine_with_ghost_team, "Bilbao", kind="team")
+
+    assert [c.id for c in candidates] == ["surne-bilbao", "bilbao"]
+    assert [c.games for c in candidates] == [1, 0]
+    # Empatan en parecido de nombre; lo que los separa es tener datos.
+    assert candidates[0].score == candidates[1].score
+    assert not is_ambiguous(candidates)
+
+
+def test_the_discarded_ghost_is_reported_not_hidden(engine_with_ghost_team):
+    """Apartar una fila en silencio sería el mismo pecado que elegir en silencio."""
+    candidates = resolve_entity(engine_with_ghost_team, "Bilbao", kind="team")
+
+    assert [c.id for c in ghost_candidates(candidates)] == ["bilbao"]
+
+
+def test_all_tied_without_data_is_still_ambiguous(engine):
+    """Sin datos de ninguno no hay razón para preferir uno: se sigue preguntando."""
+    with engine.begin() as conn:
+        for team_id, name in (("bilbao-a", "Bilbao Basket"), ("bilbao-b", "Bilbao Basket")):
+            conn.execute(
+                text("INSERT INTO teams (id, name, is_own_team) VALUES (:id, :name, 0)"),
+                {"id": team_id, "name": name},
+            )
+
+    candidates = resolve_entity(engine, "Bilbao Basket", kind="team")
+
+    assert len(candidates) == 2
+    assert all(c.games == 0 for c in candidates)
+    assert is_ambiguous(candidates)
+    assert ghost_candidates(candidates) == []
 
 
 def test_external_id_resolves(engine):

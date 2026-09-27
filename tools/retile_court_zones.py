@@ -3,7 +3,7 @@
 Hasta el reteselado del 2026-08-27 (ver el comentario sobre `court_zones` en
 `schema.sql`), las 6 zonas originales dejaban sin clasificar entre el 21%
 (Euroliga) y el 48% (Supercopa) de los tiros de la BD — huecos grandes entre
-rectángulos, verificados en vivo (ver `app/pages/proximo_rival.py`, aviso de
+rectángulos, verificados en vivo (ver `app/screens/proximo_rival.py`, aviso de
 cobertura que leía la interfaz). El reteselado añade zonas nuevas y ensancha
 las de media distancia para cubrir casi toda la cancha ofensiva, más una
 zona dedicada a los mates (antes contados dentro de "Pintura").

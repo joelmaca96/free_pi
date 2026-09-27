@@ -34,7 +34,11 @@ today = dt.date.today()
 
 page_header("Partidos anteriores")
 
-list_col, detail_col = st.columns([1, 2], gap="large")
+# 2:3 y no 1:2 — la lista necesita ancho suficiente para que "V vs Coviran
+# Granada 92–89" quepa entero (es lo único que hay que leer para elegir
+# partido), y al detalle de la derecha no le sobra tanto sitio como para
+# notarlo: sus gráficos y tablas ya se estiran al contenedor.
+list_col, detail_col = st.columns([2, 3], gap="large")
 
 with list_col:
     st.subheader("Selecciona un partido")
@@ -63,29 +67,42 @@ with list_col:
         )
 
     display_df = games_df.copy()
+    # La condición (local/visitante) va DENTRO del resultado como "vs"/"@" —
+    # la misma notación que el título del detalle de la derecha— en vez de en
+    # una columna propia. Esta lista vive en un tercio del ancho de la
+    # pantalla y con cinco columnas la de "Resultado" (que es lo único que de
+    # verdad hay que leer para elegir partido: ganamos o perdimos, contra
+    # quién y por cuánto) se cortaba a media palabra: "D A", "V U", "V F".
     display_df["Resultado"] = display_df.apply(
-        lambda r: f"{'V' if r['pts_favor'] > r['pts_contra'] else 'D'}  {r['rival']}  "
+        lambda r: f"{'V' if r['pts_favor'] > r['pts_contra'] else 'D'} "
+        f"{'vs' if r['condicion'] == 'Local' else '@'} {r['rival']} "
         f"{r['pts_favor']}–{r['pts_contra']}",
         axis=1,
     )
     event = st.dataframe(
-        display_df[["game_date", "competition", "condicion", "rival_logo_url", "Resultado"]],
+        display_df[["game_date", "competition", "rival_logo_url", "Resultado"]],
         hide_index=True,
         width="stretch",
         on_select="rerun",
         selection_mode="single-row",
         column_config={
-            "game_date": st.column_config.TextColumn("Fecha"),
-            "competition": st.column_config.TextColumn("Comp."),
-            "condicion": st.column_config.TextColumn("Cond."),
-            # Pegado a "Resultado" (que ya empieza por el nombre del rival, tras
-            # V/D) — Streamlit no permite combinar imagen+texto en una misma celda.
-            "rival_logo_url": st.column_config.ImageColumn(" ", width="small"),
-            "Resultado": st.column_config.TextColumn("Resultado"),
+            # Anchos explícitos y ajustados en las tres primeras para que el
+            # sobrante se lo lleve "Resultado", que es la que necesita sitio.
+            "game_date": st.column_config.TextColumn("Fecha", width=95),
+            "competition": st.column_config.TextColumn("Comp.", width=60),
+            # Pegado a "Resultado" (que ya lleva el nombre del rival tras V/D)
+            # — Streamlit no permite combinar imagen+texto en una misma celda.
+            "rival_logo_url": st.column_config.ImageColumn(" ", width=32),
+            "Resultado": st.column_config.TextColumn("Resultado", width="large"),
         },
     )
     selected_rows = event.selection.rows if event and event.selection else []
-    selected_idx = selected_rows[0] if selected_rows else 0
+    # Acotado al tamaño de la lista ACTUAL: la selección de `st.dataframe`
+    # sobrevive al rerun que provoca cambiar el filtro de competición, así que
+    # una fila seleccionada abajo del todo en "Todas" apunta fuera de rango en
+    # una competición con menos partidos (IndexError, pantalla rota). Sin
+    # selección, el primero — el más reciente.
+    selected_idx = min(selected_rows[0], len(games_df) - 1) if selected_rows else 0
     selected_game = games_df.iloc[selected_idx]
 
 with detail_col:
@@ -312,10 +329,16 @@ with detail_col:
                 # cualquier versión — y aquí, además, el subrayado punteado
                 # avisa de que la sigla se puede consultar.
                 c1.caption(abbr(key, label), unsafe_allow_html=True)
+                # Cada lado se pinta por separado: antes bastaba con que
+                # faltara UNO de los dos para tirar también el otro y dejar
+                # la fila entera en "—", escondiendo un dato del Baskonia que
+                # sí estaba cargado. La cobertura no es simétrica entre
+                # fuentes (ver `queries.game_advanced_stats`), así que el caso
+                # es real y no hipotético.
                 c2.markdown(
-                    f"**{us_val:.1f}**&nbsp;&nbsp;·&nbsp;&nbsp;:gray[{them_val:.1f}]"
-                    if us_val is not None and them_val is not None
-                    else "—"
+                    f"**{'—' if us_val is None else format(us_val, '.1f')}**"
+                    f"&nbsp;&nbsp;·&nbsp;&nbsp;"
+                    f":gray[{'—' if them_val is None else format(them_val, '.1f')}]"
                 )
             glossary_expander([key for key, _ in metrics])
 

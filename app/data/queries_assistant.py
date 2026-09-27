@@ -904,7 +904,8 @@ def clutch_lineups(
 
     Returns:
         `jugadores, player_ids, seconds, minutes, points_for, points_against,
-        plus_minus, stints`, mejor diferencia primero.
+        plus_minus, plus_minus_per_40, stints`, mejor diferencia BRUTA primero
+        (ver el comentario del orden, al final).
     """
     # 2400 s = 40 minutos reglamentarios. Los tramos de prórroga tienen
     # `end_seconds` por encima y entran igual en la ventana: una prórroga es
@@ -934,7 +935,10 @@ def clutch_lineups(
             "max_margin": max_margin,
         },
     )
-    columns = ["jugadores", "player_ids", "seconds", "minutes", "points_for", "points_against", "plus_minus", "stints"]
+    columns = [
+        "jugadores", "player_ids", "seconds", "minutes", "points_for", "points_against",
+        "plus_minus", "plus_minus_per_40", "stints",
+    ]
     if raw.empty:
         return pd.DataFrame(columns=columns)
 
@@ -963,6 +967,21 @@ def clutch_lineups(
     combos = combos[combos["seconds"] >= min_seconds]
     if combos.empty:
         return pd.DataFrame(columns=columns)
+    # La misma normalización que ya devuelven `team_lineups`, `player_on_off` y
+    # `player_pairs`. Faltaba solo aquí, y el banco de pruebas lo pilló dos
+    # veces en 48 intentos: sin la columna, el modelo hacía la división él
+    # mismo ("+22 en 13,7 minutos, unos +64 por 40") y el verificador marcaba
+    # el 64 como cifra sin verificar en una respuesta correcta. Que la cifra
+    # la dé la herramienta es la salida de siempre en este repo; enseñar al
+    # verificador a aceptar cuentas del modelo no lo es (medido: dejaría pasar
+    # casi cualquier número).
+    combos["plus_minus_per_40"] = 40.0 * combos["plus_minus"] / combos["minutes"]
+    # El orden sigue siendo por diferencia BRUTA, a propósito, aunque
+    # `team_lineups` ordene por el por-40. Con un mínimo de 60 segundos, ordenar
+    # por la tasa pondría arriba un +11 en 2,6 minutos (+168 por 40) por encima
+    # del +22 en 13,7 minutos, que es el único quinteto con muestra de verdad.
+    # En el tramo final hay muy pocos segundos por quinteto, y ahí la tasa
+    # premia al que menos jugó.
     return combos.sort_values(["plus_minus", "seconds"], ascending=False).head(limit)[columns].reset_index(drop=True)
 
 

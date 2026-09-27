@@ -1,21 +1,24 @@
 """Test de una colisión de identidad real (hallada reingiriendo producción, 2026-08-27).
 
-`resolve_or_create_player` (`ingest/common/identity.py`) resuelve un jugador
+`resolve_or_create_player` (`ingest/common/identity.py`) resolvía un jugador
 nuevo, sin `player_external_ids` todavía, por "mismo `team_id` + mismo
-dorsal" — sin comprobar que sea la misma persona (documentado en su propio
-docstring). En un partido real de ACB (104622, MoraBanc Andorra), dos
-jugadores DISTINTOS con dorsal `0` en el mismo equipo (dado de baja uno,
-alta el otro, más habitual de lo que parece a mitad de temporada) acabaron
-resolviendo al MISMO `player_id` interno. `player_game_stats` absorbe eso en
-silencio vía `ON CONFLICT DO UPDATE` (no rompe, pero mezcla estadísticas de
-dos personas reales bajo un jugador); las tablas de Fase 3/4
-(`player_game_quarter_stats`/`player_advanced_stats`, `PRIMARY KEY` estricta
-sin upsert) sí rompían la carga del partido ENTERO por esto — corregido con
-`ingest/common/raw_game.py::_dedupe_after_identity_collision`. Este test no
-arregla la causa raíz (la resolución de identidad sigue fusionando a los dos
-jugadores bajo un mismo `player_id` — decisión de producto pendiente, ver
-`doc/features/ingestor/01_estado.md`); solo comprueba que la colisión ya no
-tumba la carga del resto del partido.
+dorsal" — sin comprobar que fuera la misma persona. En un partido real de ACB
+(104622, MoraBanc Andorra), dos jugadores DISTINTOS con dorsal `0` en el
+mismo equipo (dado de baja uno, alta el otro, más habitual de lo que parece a
+mitad de temporada) acababan resolviendo al MISMO `player_id` interno.
+`player_game_stats` absorbe eso en silencio vía `ON CONFLICT DO UPDATE` (no
+rompe, pero mezcla estadísticas de dos personas reales bajo un jugador); las
+tablas de Fase 3/4 (`player_game_quarter_stats`/`player_advanced_stats`,
+`PRIMARY KEY` estricta sin upsert) sí rompían la carga del partido ENTERO por
+esto — mitigado con `ingest/common/raw_game.py::
+_dedupe_after_identity_collision`.
+
+LA CAUSA RAÍZ YA ESTÁ CERRADA: el emparejamiento por dorsal exige además un
+apellido en común (`identity._shares_a_surname`), así que Shannon Evans y
+Morris Udeze ya no se funden. Este fichero comprueba las dos mitades: que la
+colisión no ocurre, y que la red de seguridad de las tablas de PK estricta
+sigue puesta para las colisiones que SÍ quedan (dos jugadores con el mismo
+nombre normalizado, que el dorsal ya no puede desempatar).
 """
 from ingest.common.raw_game import parse_and_resolve
 
@@ -55,35 +58,68 @@ RAW_GAME_WITH_A_SHARED_DORSAL = {
 }
 
 
-def test_a_shared_dorsal_does_not_crash_the_whole_game_load(engine, caplog):
-    """La colisión se registra en el log, pero el partido se carga entero igual."""
+def test_two_different_players_sharing_a_dorsal_stay_apart(engine, caplog):
+    """Shannon Evans y Morris Udeze son dos personas: mismo equipo y mismo dorsal 0, pero
+    ningún apellido en común. Cada uno tiene que quedarse con su propio `player_id`, y sus
+    estadísticas con él."""
     with engine.begin() as conn:
         game = parse_and_resolve(conn, RAW_GAME_WITH_A_SHARED_DORSAL, source="acb")
 
-    # No revienta: el boxscore principal (con clave natural real) sigue
-    # trayendo los 4 jugadores, colisión incluida (se resuelve como 3 filas:
-    # los dos del dorsal 0 comparten `player_id`).
     assert len(game.boxscore) == 4
     resolved_ids = {stat.player_id for stat in game.boxscore}
-    assert len(resolved_ids) == 3  # 4 jugadores, 2 de ellos fusionados en 1
+    assert len(resolved_ids) == 4, "dos jugadores distintos fundidos bajo un mismo player_id"
 
-    # La colisión quedó registrada, no en silencio.
-    assert any("colisión de identidad" in record.message for record in caplog.records)
+    # Y cada línea de boxscore sigue siendo la suya, no la del otro.
+    by_id = {stat.player_id: stat for stat in game.boxscore}
+    assert sorted(s.pts for s in by_id.values()) == [2, 3, 4, 6]
+
+    assert not any("colisión de identidad" in record.message for record in caplog.records)
 
 
-def test_a_shared_dorsal_keeps_only_one_row_in_the_strict_pk_tables(engine):
-    """`player_game_quarter_stats`/`player_advanced_stats` (PK estricta, sin
-    upsert) se quedan con la PRIMERA fila de la colisión, no con las dos —
-    sin esto, `load_game` reventaba con `IntegrityError` (ver el docstring
-    del módulo)."""
+#: Colisión que el dorsal ya NO puede desempatar: dos ids externos distintos
+#: para el mismo nombre normalizado. Es el caso que le queda a la red de
+#: seguridad de abajo — poco frecuente, pero real (homónimos, o la misma
+#: persona con dos fichas en la fuente).
+RAW_GAME_WITH_A_SHARED_NAME = {
+    **RAW_GAME_WITH_A_SHARED_DORSAL,
+    "game_id": "COLLISION2",
+    "players": [
+        {"player_id": "src-h1", "team_id": "src-bas", "name": "Home Uno", "number": 61, "minutes": 40.0,
+         "pts": 4, "reb": 1, "ast": 1, "efg_pct": 50.0, "starter": True},
+        {"player_id": "src-a", "team_id": "src-bas", "name": "Morris Udeze", "number": 0, "minutes": 10.0,
+         "pts": 2, "reb": 0, "ast": 0, "efg_pct": 50.0, "starter": False},
+        {"player_id": "src-b", "team_id": "src-bas", "name": "Morris Udeze", "number": 4, "minutes": 8.0,
+         "pts": 3, "reb": 2, "ast": 0, "efg_pct": 60.0, "starter": False},
+        {"player_id": "src-a1", "team_id": "src-rm", "name": "Away Uno", "number": 71, "minutes": 40.0,
+         "pts": 6, "reb": 1, "ast": 0, "efg_pct": 50.0, "starter": True},
+    ],
+    "quarter_boxscore": [
+        {"player_id": "src-a", "quarter": 1, "pts": 2, "stl": 1},
+        {"player_id": "src-b", "quarter": 1, "pts": 3, "stl": 0},
+    ],
+    "player_advanced": [
+        {"player_id": "src-a", "ts_pct": 55.0},
+        {"player_id": "src-b", "ts_pct": 62.0},
+    ],
+}
+
+
+def test_a_remaining_collision_still_does_not_crash_the_game_load(engine, caplog):
+    """`player_game_quarter_stats`/`player_advanced_stats` (PK estricta, sin upsert) se quedan
+    con la PRIMERA fila de la colisión, no con las dos — sin esto, `load_game` reventaba con
+    `IntegrityError` y se perdía el partido ENTERO (boxscore, tiros, quintetos) por una tabla
+    que ni siquiera es la fuente de verdad de esas estadísticas."""
     with engine.begin() as conn:
-        game = parse_and_resolve(conn, RAW_GAME_WITH_A_SHARED_DORSAL, source="acb")
+        game = parse_and_resolve(conn, RAW_GAME_WITH_A_SHARED_NAME, source="acb")
 
     quarter_keys = [(row.player_id, row.quarter) for row in game.quarter_boxscore]
     assert len(quarter_keys) == len(set(quarter_keys))  # sin duplicados de clave
 
     advanced_player_ids = [row.player_id for row in game.player_advanced]
     assert len(advanced_player_ids) == len(set(advanced_player_ids))
+
+    # La colisión que queda sigue registrándose, no se traga en silencio.
+    assert any("colisión de identidad" in record.message for record in caplog.records)
 
     # Y lo más importante: `load_game` puede cargar el partido sin reventar.
     from ingest.common.loader import load_game

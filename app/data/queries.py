@@ -53,16 +53,6 @@ def get_own_team_id(_engine: Engine) -> str:
 
 
 @st.cache_data(ttl=_TTL, show_spinner=False)
-def get_current_season_id(_engine: Engine) -> int:
-    """Id de la temporada más reciente en `seasons`."""
-    with _engine.connect() as conn:
-        row = conn.execute(text("SELECT id FROM seasons ORDER BY id DESC LIMIT 1")).fetchone()
-    if row is None:
-        raise RuntimeError("La tabla `seasons` está vacía.")
-    return row[0]
-
-
-@st.cache_data(ttl=_TTL, show_spinner=False)
 def list_competitions(_engine: Engine) -> pd.DataFrame:
     """Catálogo de competiciones (`id`, `name`), para selectores de filtro."""
     return pd.read_sql(text("SELECT id, name FROM competitions ORDER BY id"), _engine)
@@ -70,20 +60,35 @@ def list_competitions(_engine: Engine) -> pd.DataFrame:
 
 @st.cache_data(ttl=_TTL, show_spinner=False)
 def list_seasons(_engine: Engine) -> pd.DataFrame:
-    """Catálogo de temporadas (`id`, `label`), más reciente primero.
+    """Catálogo de temporadas (`id`, `label`, `games`), más reciente primero.
 
     Selector a nivel de aplicación (ver `Home.py`) — todo lo que se filtra
     por partido (récord, medias, carga de minutos, partidos anteriores)
     respeta la temporada elegida aquí, no solo la más reciente.
+
+    `games` (partidos ya cargados en `games`) es lo que permite a `Home.py`
+    preseleccionar una temporada con datos en vez de la más reciente a
+    secas: una temporada recién creada por la ingesta del calendario existe
+    en `seasons` y tiene `upcoming_matchups`, pero CERO partidos jugados —
+    arrancar ahí dejaba media aplicación en blanco (señales, carga de
+    minutos, quintetos, faltas, similitud, on/off) el día que se ingiere el
+    calendario de la temporada siguiente.
     """
-    return pd.read_sql(text("SELECT id, label FROM seasons ORDER BY id DESC"), _engine)
+    sql = text("""
+        SELECT s.id, s.label, COUNT(g.id) AS games
+        FROM seasons s
+        LEFT JOIN games g ON g.season_id = s.id
+        GROUP BY s.id, s.label
+        ORDER BY s.id DESC
+    """)
+    return pd.read_sql(sql, _engine)
 
 
 @st.cache_data(ttl=_TTL, show_spinner=False)
 def season_teams(_engine: Engine, season_id: int) -> pd.DataFrame:
     """Equipos con al menos un partido cargado en la temporada (`id`, `name`).
 
-    Para el selector de equipo de `pages/quintetos.py` (propuesta 07 §6): la
+    Para el selector de equipo de `screens/quintetos.py` (propuesta 07 §6): la
     pantalla tiene que servir igual para el Baskonia que para el próximo
     rival, y el desplegable solo tiene sentido con equipos que de verdad
     tengan quintetos que enseñar en esta temporada — no el catálogo entero
@@ -127,19 +132,26 @@ def team_record(_engine: Engine, team_id: str, season_id: int, today: dt.date) -
 
 
 @st.cache_data(ttl=_TTL, show_spinner=False)
-def next_matchup(_engine: Engine, season_id: int, today: dt.date) -> Optional[dict]:
-    """Próximo rival programado de `season_id` (`upcoming_matchups`), o `None` si no hay ninguno.
+def next_matchup(_engine: Engine, today: dt.date) -> Optional[dict]:
+    """Próximo rival programado (`upcoming_matchups`), o `None` si no hay ninguno.
 
-    Desde el 2026-08-24, `upcoming_matchups` sí tiene columna de temporada y
-    `ingest/acb/pipeline.py::run_upcoming` la puebla con el calendario real
-    de ACB (Liga Endesa/Copa del Rey/Supercopa) — ya no es contenido de
-    ejemplo (ver historia previa en `local/features/002-ajustes-interfaz/
-    00_request.md`). `ingest/euroleague/pipeline.py::run_upcoming` (mismo
-    día) cubre también Euroliga, acotado a su propia `competition_id` para
-    no pisar el calendario de ACB de la misma temporada — el "próximo
-    partido" real puede ser de cualquiera de las dos, la consulta no
-    distingue fuente. La página solo la muestra cuando la temporada
-    seleccionada es la más reciente.
+    Desde el 2026-08-24, `ingest/acb/pipeline.py::run_upcoming` puebla la
+    tabla con el calendario real de ACB (Liga Endesa/Copa del Rey/Supercopa)
+    — ya no es contenido de ejemplo (ver historia previa en
+    `local/features/002-ajustes-interfaz/00_request.md`).
+    `ingest/euroleague/pipeline.py::run_upcoming` (mismo día) cubre también
+    Euroliga, acotado a su propia `competition_id` para no pisar el
+    calendario de ACB de la misma temporada — el "próximo partido" real
+    puede ser de cualquiera de las dos, la consulta no distingue fuente.
+
+    NO se filtra por temporada, a propósito: "el próximo partido" es el
+    siguiente del calendario, y a qué temporada pertenece es un detalle de
+    la ingesta, no algo que el usuario esté eligiendo. Filtrarlo por la
+    temporada del selector rompía justo en el momento en que esta pantalla
+    más falta hace — arrancada la ingesta del calendario 2026-2027, la
+    única temporada con datos analizables (2025-2026) se quedaba sin
+    "próximo rival", y la que sí lo tenía no tenía nada más. `match_date >=
+    today` ya excluye por sí solo el calendario de temporadas cerradas.
 
     Devuelve también `opponent_team_id` (no solo el nombre): lo necesita la
     pantalla "Próximo rival" para pedir todo el scouting de ese equipo con
@@ -154,27 +166,28 @@ def next_matchup(_engine: Engine, season_id: int, today: dt.date) -> Optional[di
         FROM upcoming_matchups um
         JOIN teams t ON t.id = um.opponent_team_id
         JOIN competitions c ON c.id = um.competition_id
-        WHERE um.season_id = :season_id AND um.match_date >= :today
+        WHERE um.match_date >= :today
         ORDER BY um.match_date ASC
         LIMIT 1
     """)
-    df = pd.read_sql(sql, _engine, params={"season_id": season_id, "today": today.isoformat()})
+    df = pd.read_sql(sql, _engine, params={"today": today.isoformat()})
     return None if df.empty else df.iloc[0].to_dict()
 
 
 @st.cache_data(ttl=_TTL, show_spinner=False)
-def upcoming_matchups_list(_engine: Engine, season_id: int, today: dt.date) -> pd.DataFrame:
-    """Calendario completo de partidos aún no jugados de `season_id`, cronológico.
+def upcoming_matchups_list(_engine: Engine, today: dt.date) -> pd.DataFrame:
+    """Calendario completo de partidos aún no jugados, cronológico.
 
     Mismas filas que `next_matchup` mira para elegir "el próximo", pero sin el
     `LIMIT 1` — para pintar el calendario entero (ver `ingest/acb/pipeline.py::
-    run_upcoming`), no solo el siguiente partido.
+    run_upcoming`), no solo el siguiente partido. Tampoco se acota por
+    temporada, por el mismo motivo (ver `next_matchup`).
 
     Returns:
         `match_date, competition, rival, rival_logo_url, condicion` (`'Local'`/
         `'Visitante'`), cronológico — mezcla ACB y Euroliga si ambas tienen
-        calendario cargado para `season_id` (ver `next_matchup`). Vacío si la
-        temporada no tiene calendario futuro cargado (p.ej. temporadas pasadas).
+        calendario cargado (ver `next_matchup`). Vacío si no hay ningún
+        partido futuro cargado.
     """
     sql = text("""
         SELECT um.match_date, c.name AS competition, t.name AS rival, t.logo_url AS rival_logo_url,
@@ -182,10 +195,10 @@ def upcoming_matchups_list(_engine: Engine, season_id: int, today: dt.date) -> p
         FROM upcoming_matchups um
         JOIN teams t ON t.id = um.opponent_team_id
         JOIN competitions c ON c.id = um.competition_id
-        WHERE um.season_id = :season_id AND um.match_date >= :today
+        WHERE um.match_date >= :today
         ORDER BY um.match_date ASC
     """)
-    df = pd.read_sql(sql, _engine, params={"season_id": season_id, "today": today.isoformat()})
+    df = pd.read_sql(sql, _engine, params={"today": today.isoformat()})
     return _blank_missing_url(df, "rival_logo_url")
 
 
@@ -509,27 +522,12 @@ def game_lineups(_engine: Engine, game_id: str, team_id: Optional[str] = None) -
 
 
 @st.cache_data(ttl=_TTL, show_spinner=False)
-def team_logo_url(_engine: Engine, team_id: str) -> Optional[str]:
-    """Escudo de un equipo (`teams.logo_url`), o `None` si no está poblado.
-
-    Columna nueva y aún sin ninguna fuente que la escriba (ver
-    `local/features/003-vista-plantilla/01_design.md` §9) — hoy siempre
-    devuelve `None` para todos los equipos, incluido el Baskonia. Las
-    páginas deben degradar a un badge con iniciales, no a un hueco vacío
-    (`components/avatar.py::team_crest_html`).
-    """
-    with _engine.connect() as conn:
-        row = conn.execute(text("SELECT logo_url FROM teams WHERE id = :team_id"), {"team_id": team_id}).fetchone()
-    return row[0] if row else None
-
-
-@st.cache_data(ttl=_TTL, show_spinner=False)
 def team_name(_engine: Engine, team_id: str) -> Optional[str]:
     """Nombre de un equipo por id, o `None` si no existe.
 
     Trivial pero necesaria: varias pantallas ya tenían el id y solo querían
     el nombre para un título o un prompt, y estaban abriendo una conexión a
-    mano cada una (ver `app/pages/asistente.py`).
+    mano cada una (ver `app/screens/asistente.py`).
     """
     with _engine.connect() as conn:
         row = conn.execute(text("SELECT name FROM teams WHERE id = :team_id"), {"team_id": team_id}).fetchone()
@@ -588,7 +586,9 @@ def player_bio(_engine: Engine, player_id: str) -> Optional[dict]:
 
     Returns:
         `name, number, position, photo_url, photo_local_path, birth_date,
-        nationality, height_cm, team_id`, o `None` si el id no existe. Ver
+        nationality, height_cm, weight_kg, team_id`, o `None` si el id no
+        existe. `height_cm`/`weight_kg` solo están rellenos para jugadores de
+        clubes de Euroliga (ver `ingest/euroleague/roster.py`). Ver
         `roster_cards` para qué es `photo_local_path`. `team_id` es el
         equipo ACTUAL del jugador (mismo matiz de `players.team_id` que en
         el resto de consultas: un traspaso a mitad de temporada lo ensucia
@@ -596,8 +596,8 @@ def player_bio(_engine: Engine, player_id: str) -> Optional[dict]:
         llamar a `queries_assistant.foul_profile`, que necesita `team_id`.
     """
     sql = text("""
-        SELECT name, number, position, photo_url, photo_local_path, birth_date, nationality, height_cm,
-               team_id
+        SELECT name, number, position, photo_url, photo_local_path, birth_date, nationality,
+               height_cm, weight_kg, team_id
         FROM players
         WHERE id = :player_id
     """)
@@ -987,9 +987,14 @@ def team_shots_season(_engine: Engine, team_id: str, season_id: int) -> pd.DataF
     Variante de `player_shots_season` sin filtro de jugador.
 
     Returns:
-        `pos_x, pos_y, made, located, player_name` — mismas columnas que
-        `game_shots`/`player_shots_season`, para reutilizar
-        `components/court.py::shot_chart` sin tocarlo.
+        `pos_x, pos_y, made, located, player_name, player_id` — mismas
+        columnas que `game_shots`/`player_shots_season` para reutilizar
+        `components/court.py::shot_chart` sin tocarlo, más `player_id`: el
+        selector "Jugador" de esta pantalla filtra por `player_name`, pero el
+        mapa de acierto por zona de al lado necesita el id para pedir
+        `player_zone_profile` de ESE jugador (ver `estado_equipo.py`/
+        `proximo_rival.py`) — sin él, ese mapa se quedaba siempre en el
+        agregado del equipo aunque se filtrase por jugador arriba.
 
     Atribuye cada tiro al equipo ACTUAL del jugador (`players.team_id`),
     igual que ya hace `game_shots` — un jugador que cambió de club a mitad de
@@ -997,14 +1002,22 @@ def team_shots_season(_engine: Engine, team_id: str, season_id: int) -> pd.DataF
     guarda a qué equipo pertenecía en cada partido (`player_game_stats` no
     tiene `team_id`), así que no es algo que esta consulta pueda arreglar por
     su cuenta; se documenta en vez de disimularlo.
+
+    `p.active = 1`: sin esto, alguien que ya no está en el equipo (`players.
+    team_id` tampoco se actualiza al salir, mismo motivo que arriba) seguía
+    ofreciéndose en el selector "Jugador" de esta pantalla mientras tuviera
+    algún tiro bajo ese `team_id` — caso real, Chima Moneke, años sin ser del
+    Baskonia. Para un RIVAL esto no cambia nada: `active` solo lo mantiene
+    `ingest/baskonia_web` (plantilla propia), así que en cualquier otro
+    equipo vale `1` por defecto para todos y el filtro no descarta a nadie.
     """
     sql = text("""
         SELECT s.pos_x, s.pos_y, s.made, COALESCE(s.located, 1) AS located,
-               p.name AS player_name
+               p.name AS player_name, p.id AS player_id
         FROM shots s
         JOIN players p ON p.id = s.player_id
         JOIN games g ON g.id = s.game_id
-        WHERE p.team_id = :team_id AND g.season_id = :season_id
+        WHERE p.team_id = :team_id AND p.active = 1 AND g.season_id = :season_id
     """)
     return pd.read_sql(sql, _engine, params={"team_id": team_id, "season_id": season_id})
 

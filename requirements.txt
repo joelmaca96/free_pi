@@ -1,9 +1,17 @@
 # Dependencias agregadas de desarrollo (raíz del repo).
-# Cada módulo de ingesta tiene su propio requirements.txt:
+# Cada módulo tiene además su propio requirements.txt, más ajustado, que es el
+# que usan las imágenes de despliegue:
 #   - ingest/requirements.txt            (pipeline de ingesta: acb/baskonia_web)
 #   - ingest/euroleague/requirements.txt (opcional: euroleague-api)
-# Este fichero agrega todo para desarrollo local en un solo `pip install -r requirements.txt`.
+#   - app/requirements.txt               (interfaz Streamlit, ver app/Dockerfile)
+# Este fichero agrega TODO para desarrollo local en un solo
+# `pip install -r requirements.txt`: la ingesta, la interfaz y los tests.
+# La suite de tests cubre las tres cosas (`tests/app/` importa streamlit,
+# altair y python-pptx), así que omitir aquí las dependencias de `app/` dejaba
+# un `pip install -r requirements.txt && python -m pytest` recién clonado sin
+# poder ni arrancar — que es justo lo que documenta el README §6.
 
+# --- Ingesta (ver ingest/requirements.txt) ---
 requests>=2.31.0
 beautifulsoup4>=4.12.0
 SQLAlchemy>=2.0.0
@@ -12,6 +20,15 @@ python-dotenv>=1.0.0
 # --- Fuente Euroliga (opcional, ver ingest/euroleague/requirements.txt) ---
 euroleague-api>=0.1.1
 pandas>=2.0.0
+
+Pillow>=10.0
+
+# --- Interfaz (ver app/requirements.txt para el detalle de cada una) ---
+streamlit>=1.36.0
+altair>=5.0.0
+openai>=1.0
+anthropic>=1.0
+python-pptx>=1.0
 
 # --- Dependencias de desarrollo (tests) ---
 pytest>=8.0.0

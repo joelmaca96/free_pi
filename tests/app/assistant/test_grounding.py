@@ -11,7 +11,7 @@ from sqlalchemy import text
 from app.assistant.capabilities import probe
 from app.assistant.prompt import build_system_prompt, stable_prefix_length
 from app.assistant.tools.base import ToolInvocation
-from app.assistant.verify import verify_numbers
+from app.assistant.verify import numbers_in_text, verify_numbers
 
 
 # ------------------------------------------------------------- capacidades --
@@ -98,6 +98,62 @@ def test_an_answer_without_figures_has_nothing_to_verify():
     assert verify_numbers("No tengo ese dato.", []) == []
 
 
+def test_clock_minutes_are_verified_whole_and_not_split():
+    """Caso medido en vivo: la respuesta era correcta y el aviso saltaba igual.
+
+    `player_game_stats.minutes` guarda 20.47 y el modelo escribe "20:28", que
+    es como se escribe el tiempo de juego. Partido en dos, el "28" de los
+    segundos no aparecía en ningún resultado y se marcaba como inventado.
+    """
+    invocations = [_invocation({"data": {"pts": 21, "minutes": 20.47}})]
+    assert verify_numbers("Anotó 21 puntos en 20:28.", invocations) == []
+
+
+def test_an_invented_minutage_still_fails():
+    """El minutaje se comprueba entero, así que no se ha abierto un agujero."""
+    invocations = [_invocation({"data": {"pts": 21, "minutes": 20.47}})]
+    assert verify_numbers("Anotó 21 puntos en 31:15.", invocations) == ["31:15"]
+
+
+def test_clock_minutes_written_by_the_tool_also_pass():
+    """Si la herramienta ya devuelve '20:28', copiarlo tal cual cuadra."""
+    invocations = [_invocation({"data": {"pts": 21, "minutes": "20:28"}})]
+    assert verify_numbers("Anotó 21 puntos en 20:28.", invocations) == []
+
+
+def test_a_european_score_is_not_read_as_minutage():
+    """'94:58' no es un minutaje: si sus dos mitades cuadran, no se marca."""
+    invocations = [_invocation({"data": {"home": 94, "away": 58}})]
+    assert verify_numbers("Ganaron 94:58.", invocations) == []
+
+
+def test_unverified_figures_keep_appearance_order():
+    """El minutaje se escanea aparte, pero el aviso se lee en orden de lectura."""
+    invocations = [_invocation({"data": {"pts": 21}})]
+    assert verify_numbers("Hizo 12 puntos en 31:15 y 44 de valoración.", invocations) == [
+        "12",
+        "31:15",
+        "44",
+    ]
+
+
+def test_numbers_in_text_reads_the_answer_with_the_verifier_rules():
+    """El banco de pruebas (`tools/assistant_eval.py`) pregunta lo contrario que
+    `verify_numbers`: no qué cifras sobran, sino si la respuesta cita la que
+    debía. Tiene que leer el texto con LA MISMA regla, o el set dorado mediría
+    con un criterio distinto del que usa el asistente en producción."""
+    found = numbers_in_text("Anotó 21 puntos en 20:28 el 2026-05-03 (acb-104714).")
+    assert 21.0 in found
+    assert 20.47 in found  # el minutaje entero, no sus dos mitades sueltas
+    assert 2026.0 not in found  # la fecha no es una cifra que verificar
+    assert 104714.0 not in found  # ni el id del partido
+
+
+def test_numbers_in_text_survives_an_empty_answer():
+    """Un turno cortado por un tope puede no tener texto; el guion lo llama igual."""
+    assert numbers_in_text("") == set()
+
+
 # ------------------------------------------------------------------ prompt --
 
 
@@ -121,6 +177,18 @@ def test_the_prompt_carries_the_schema_traps(engine):
     assert "players.team_id` es el equipo ACTUAL" in prompt
     assert "ESTIMACIÓN propia" in prompt
     assert "lineup_stints" in prompt  # la tarjeta de esquema se genera de schema.sql
+
+
+def test_the_prompt_gives_the_id_of_every_competition(engine):
+    """Sin el id en el prompt, la única forma de obtenerlo era `run_sql`, y eso
+    es lo que el banco de pruebas vio hacer dos veces en una sola pasada. Las
+    temporadas ya lo llevaban; esta es la mitad que faltaba."""
+    prompt = build_system_prompt(
+        probe(engine), season_label="2025-2026", own_team="Baskonia", today="2026-09-14"
+    )
+    assert "Competiciones: " in prompt
+    for competition in probe(engine).competitions:
+        assert f"{competition['name']} (id {competition['id']})" in prompt
 
 
 def test_the_prompt_lists_what_cannot_be_answered(engine):

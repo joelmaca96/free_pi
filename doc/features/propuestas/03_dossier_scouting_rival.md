@@ -69,7 +69,7 @@ trabajo de ensamblado y maquetación, no de consulta nueva:
 | Mapas de tiro | `queries.player_shots_season`, `queries.court_zones` |
 | Quintetos | `queries_assistant.team_lineups`, `queries.season_lineups` |
 | Por cuartos | `queries.game_quarter_stats` y `game_team_quarter_stats` (5.896 filas) |
-| Fotos y escudos | `app/components/avatar.py`, `queries.team_logo_url` |
+| Fotos y escudos | `app/components/avatar.py` (`logo_url` viaja en cada consulta que pinta un escudo) |
 
 Cobertura: los 737 partidos de la temporada 2025-2026 y los clubes de ACB y Euroliga, así que el
 dossier se puede generar para cualquier rival de ambas competiciones, no solo para los de la ACB.

@@ -8,7 +8,7 @@ que "Fenerbache" funcione igual con cualquier proveedor (§5).
 from sqlalchemy import text
 
 from .. import resolve
-from ..resolve import is_ambiguous
+from ..resolve import ghost_candidates, is_ambiguous
 from .base import ToolContext, artifact, clean_dict, fail, ok, records, register, schema
 
 # `queries.py` se importa igual venga el paquete por `app.*` (pytest, raíz en
@@ -93,15 +93,27 @@ def resolve_entity(ctx: ToolContext, query: str, kind: str = None) -> dict:
             suggestion="Comprueba el nombre, o usa get_context para ver qué competiciones hay cargadas.",
         )
     ambiguous = is_ambiguous(candidates)
+    ghosts = ghost_candidates(candidates)
+    if ambiguous:
+        note = "Varios candidatos empatados: pregunta al usuario a cuál se refiere."
+    elif ghosts:
+        # Desempatado por datos y no por nombre: se dice cuál se ha apartado y
+        # por qué. Sin esta frase el modelo elegiría en silencio, que es
+        # exactamente lo que §5.1 prohíbe (ver `resolve.ghost_candidates`).
+        apartados = ", ".join(f"{c.name} ({c.id})" for c in ghosts)
+        note = (
+            f"Hay otro registro con el mismo nombre y CERO partidos cargados ({apartados}); "
+            "se ha usado el que sí tiene datos. Dilo en la respuesta por si el usuario se "
+            "refería al otro."
+        )
+    else:
+        note = None
+
     return ok(
         {
             "candidates": [c.to_dict() for c in candidates],
             "ambiguous": ambiguous,
-            "note": (
-                "Varios candidatos empatados: pregunta al usuario a cuál se refiere."
-                if ambiguous
-                else None
-            ),
+            "note": note,
         },
         source="players/teams + tablas puente de ids externos",
         scope=f"búsqueda: {query!r}",
@@ -178,17 +190,19 @@ def next_opponent(ctx: ToolContext, limit: int = 1) -> dict:
 
     Los partidos futuros NO están en `games` (que solo guarda lo ya jugado),
     así que esto no se puede sacar de `resolve_game` — es una tabla distinta
-    con su propia ingesta (`ingest/*/pipeline.py::run_upcoming`).
+    con su propia ingesta (`ingest/*/pipeline.py::run_upcoming`). Tampoco se
+    acota por `ctx.season_id`: el próximo partido es el siguiente del
+    calendario, viva en la temporada que viva (ver `queries.next_matchup`).
     """
-    upcoming = queries.upcoming_matchups_list(ctx.engine, ctx.season_id, ctx.today)
+    upcoming = queries.upcoming_matchups_list(ctx.engine, ctx.today)
     if upcoming.empty:
         return fail(
             "sin calendario",
-            detail="No hay partidos futuros cargados para la temporada seleccionada.",
-            suggestion="Puede ser una temporada pasada: pregunta por partidos ya jugados con resolve_game.",
+            detail="No hay ningún partido futuro cargado en el calendario.",
+            suggestion="Pregunta por partidos ya jugados con resolve_game.",
         )
     rows = records(upcoming, limit=max(1, limit))
-    detail = queries.next_matchup(ctx.engine, ctx.season_id, ctx.today)
+    detail = queries.next_matchup(ctx.engine, ctx.today)
     return ok(
         {"upcoming": rows, "next": clean_dict(detail)},
         source="upcoming_matchups",

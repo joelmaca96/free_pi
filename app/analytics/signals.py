@@ -34,6 +34,7 @@ fichero, y es la única función de aquí que sabe que existe un LLM — el rest
 no lo necesita ni lo importa.
 """
 import math
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from itertools import chain
 from typing import Dict, List, Optional, Sequence
@@ -223,6 +224,20 @@ def select_top_signals(candidates: Sequence[Signal], *, max_signals: int = 5, q:
 
     Devuelve **lista vacía** si nada sobrevive — es la respuesta correcta
     ("sin cambios significativos esta semana", §2) y no un error.
+
+    El reparto final es POR RONDAS entre familias, no el top-N crudo de
+    `relevance`. Motivo, verificado contra `data/baskonia.db`: `relevance`
+    es `|efecto| × peso` y esas unidades NO son comparables entre familias
+    (lo dice la propia docstring de `Signal.relevance`). Una señal de
+    rotación mide el efecto en puntos porcentuales de reparto de minutos
+    (~25) y lo pondera por minutos de pareja (~60): sale un orden de
+    magnitud por encima de una de jugador (4 minutos × 25) o de equipo (4
+    puntos de eFG% × 32), así que el top-5 crudo salía SIEMPRE con cinco
+    tarjetas de rotación —tres de ellas del mismo jugador— y ni una de
+    tiro, pérdidas o carga. Por rondas se coge primero la mejor de cada
+    familia, luego la segunda de cada una, etc.: dentro de una familia se
+    respeta la relevancia, y una familia solo llena huecos ajenos cuando
+    las demás ya no tienen candidatos.
     """
     statistical = [c for c in candidates if c.p_value is not None]
     deterministic = [c for c in candidates if c.p_value is None]
@@ -237,7 +252,20 @@ def select_top_signals(candidates: Sequence[Signal], *, max_signals: int = 5, q:
         signal.confidence = _confidence_text(signal)
 
     survivors.sort(key=lambda c: c.relevance, reverse=True)
-    return survivors[:max_signals]
+
+    by_family: "OrderedDict[str, List[Signal]]" = OrderedDict()
+    for signal in survivors:  # ya ordenados: cada lista queda por relevancia
+        by_family.setdefault(signal.family, []).append(signal)
+
+    selected: List[Signal] = []
+    while by_family and len(selected) < max_signals:
+        for family in list(by_family):
+            selected.append(by_family[family].pop(0))
+            if not by_family[family]:
+                del by_family[family]
+            if len(selected) == max_signals:
+                break
+    return selected
 
 
 # ============================================================ especificación ==
@@ -248,7 +276,7 @@ def select_top_signals(candidates: Sequence[Signal], *, max_signals: int = 5, q:
 #: no es débil, es inexistente).
 MIN_BASELINE_GAMES = 3
 
-#: Aviso de carga por defecto: mismo umbral que `app/pages/estado_equipo.py`
+#: Aviso de carga por defecto: mismo umbral que `app/screens/estado_equipo.py`
 #: usa como valor inicial del control "Aviso" en la ventana de 7 días — no es
 #: casualidad, es el mismo criterio en dos sitios, para que la señal semanal
 #: no contradiga lo que ya se ve en esa pantalla.
@@ -634,7 +662,7 @@ def detect_load_signals(
 
     A diferencia de las otras tres familias, ESTA NO ES una comparación
     estadística: es el umbral de calendario de la propuesta 04, que ya vive
-    en `app/pages/estado_equipo.py` — aquí solo se reutiliza para que la
+    en `app/screens/estado_equipo.py` — aquí solo se reutiliza para que la
     semana lo asome sin que haya que ir a mirar esa pantalla (§2: "Carga: un
     jugador entrando en zona de sobrecarga"). `p_value=None` en el `Signal`
     resultante es justo la marca de "esto no pasó por Benjamini-Hochberg,
@@ -644,7 +672,7 @@ def detect_load_signals(
         rolling_latest: UNA fila por jugador, la ventana de 7 días MÁS
             RECIENTE (`queries.rolling_load(..., days=7)` ya filtrada a
             `game_date == rolling_latest['game_date'].max()`, como hace
-            `app/pages/estado_equipo.py`).
+            `app/screens/estado_equipo.py`).
     """
     if rolling_latest.empty:
         return []

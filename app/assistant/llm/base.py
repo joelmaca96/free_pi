@@ -22,7 +22,7 @@ class LLMError(RuntimeError):
 
     Args:
         message: texto ya redactado para el usuario final (la página lo pinta
-            tal cual, ver `app/pages/asistente.py`).
+            tal cual, ver `app/screens/asistente.py`).
         retryable: `True` si tiene sentido reintentar más tarde (429, 5xx,
             timeout) — lo usa el adaptador para decidir si espera y reintenta,
             y la página para sugerir "prueba en un minuto" en vez de "revisa

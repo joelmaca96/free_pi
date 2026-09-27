@@ -23,6 +23,18 @@ Tres decisiones de diseño que no son cosméticas:
   forma de compartirlos. El precio es que cada capa cuantitativa tiene que
   fijar su dominio EXPLÍCITAMENTE y el mismo, o el cero del margen y la línea
   de cero acabarían a distinta altura. De ahí `_margin_domain`.
+  El mismo precio se paga entre las DOS capas ordinales (`_stint_layer` y
+  `_foul_marks_layer`): "independiente" separa CUALQUIER par de capas del
+  canal Y, no solo la ordinal de la cuantitativa. Como no todos los
+  jugadores que salieron a pista cometieron falta, `fouls` trae menos
+  categorías que `stints` — sin dominio explícito, Altair calcula el
+  dominio de cada capa a partir de las categorías que aparecen EN ESA
+  capa, así que "fila 3" apunta a un jugador distinto en cada una y las
+  dos capas de etiquetas del eje quedan desalineadas y superpuestas (se
+  leía como si cada jugador con falta apareciera dos veces). Por eso las
+  dos fijan `scale=alt.Scale(domain=order)`: mismo dominio completo,
+  mismas posiciones, aunque una capa tenga menos filas con datos que
+  la otra.
 
 Las marcas de parcial (`runs`) son rectángulos de altura completa: el parcial
 es una ventana de TIEMPO, no un valor, así que ocupa una franja del eje X
@@ -50,6 +62,14 @@ _BONUS_LINE = "#b5651d"
 #: líneas divisorias del eje: el dato ya viene situado en segundos absolutos.
 _QUARTER_MIN = 10
 _OVERTIME_MIN = 5
+
+#: Alto reservado por jugador y alto fijo del título + eje X + su rótulo, en
+#: píxeles. Los dos entran en la altura que se le pide a Streamlit para el
+#: contenedor del gráfico (ver el final de `rotation_chart`): lo que no se
+#: reserve aquí para el "marco" se lo come a las filas, y una fila más
+#: estrecha que su etiqueta hace que Vega descarte nombres del eje.
+_ROW_H = 26
+_CHROME_H = 110
 
 
 def clock_label(seconds: float) -> str:
@@ -204,7 +224,10 @@ def _stint_layer(stints: pd.DataFrame, order: List[str], bar_color: str, x_scale
         .encode(
             x=alt.X("minute_start:Q", title="Minuto de partido", scale=x_scale),
             x2=alt.X2("minute_end:Q"),
-            y=alt.Y("player_name:N", sort=order, title=None, axis=alt.Axis(labelLimit=160)),
+            y=alt.Y(
+                "player_name:N", sort=order, title=None, axis=alt.Axis(labelLimit=160),
+                scale=alt.Scale(domain=order),
+            ),
             tooltip=[
                 alt.Tooltip("player_name:N", title="Jugador"),
                 alt.Tooltip("entra:N", title="Entra"),
@@ -222,6 +245,21 @@ def _foul_marks_layer(fouls: pd.DataFrame, order: List[str], x_scale: alt.Scale)
     Es el "cuándo" que ningún boxscore da (§1 de la propuesta 06): un
     `mark_tick` corto, no un punto, para que no se confunda con el final de
     una barra de tramo cuando cae justo encima.
+
+    `scale=alt.Scale(domain=order)`, mismo motivo que en `_stint_layer`: sin
+    dominio explícito, esta capa (normalmente con menos jugadores que
+    `stints` — no todos cometen falta) calcularía su propio eje Y con solo
+    SUS categorías, desalineado del de `_stint_layer` pese a compartir
+    `resolve_scale(y="independent")` — ver el docstring del módulo.
+
+    `axis=None`, y esa es la otra mitad del mismo problema: con escalas Y
+    independientes, Vega dibuja UN EJE POR CAPA, así que esta pintaba una
+    segunda columna de nombres encima de la de `_stint_layer`. No salía como
+    texto doble y ya: al medir el solapamiento sobre las etiquetas de las
+    dos, Vega descartaba una de cada dos filas, y el gráfico se quedaba con
+    la mitad de los nombres (10 filas de barras, 5 etiquetas) más un nombre
+    impreso dos veces, desplazado. Las filas ya las etiqueta `_stint_layer`,
+    que es quien manda: esta capa solo pone las marcas encima.
     """
     data = fouls.assign(minute=fouls["seconds"] / 60.0, reloj=fouls["quarter"] + " " + fouls["game_clock"])
     return (
@@ -229,7 +267,7 @@ def _foul_marks_layer(fouls: pd.DataFrame, order: List[str], x_scale: alt.Scale)
         .mark_tick(color=_FOUL_MARK, thickness=2, size=16)
         .encode(
             x=alt.X("minute:Q", scale=x_scale),
-            y=alt.Y("player_name:N", sort=order, title=None),
+            y=alt.Y("player_name:N", sort=order, title=None, axis=None, scale=alt.Scale(domain=order)),
             tooltip=[
                 alt.Tooltip("player_name:N", title="Jugador"),
                 alt.Tooltip("reloj:N", title="Falta"),
@@ -325,10 +363,18 @@ def rotation_chart(
             if not own_fouls.empty:
                 layers.append(_foul_marks_layer(own_fouls, order, x_scale))
 
+    # Altura: sitio de sobra para UNA FILA POR JUGADOR **más** el alto fijo
+    # que se comen el título, el eje X y su rótulo (`_CHROME_H`). Streamlit
+    # ajusta el contenedor a este número y reparte lo que sobra entre las
+    # filas, así que sin contar ese margen la banda de cada jugador se
+    # quedaba en ~14px con una plantilla de diez: por debajo del alto de una
+    # etiqueta, Vega empezaba a descartar nombres y el gráfico salía con diez
+    # filas de barras y cinco nombres. `_ROW_H` va holgado respecto a los
+    # 11px de la barra a propósito — apretarlo vuelve a rozar ese límite.
     return (
         alt.layer(*layers)
         .resolve_scale(y="independent", color="independent")
-        .properties(height=max(22 * len(order) + 40, 200), title=title or "")
+        .properties(height=max(_ROW_H * len(order) + _CHROME_H, 200), title=title or "")
     )
 
 

@@ -120,6 +120,35 @@ def test_openai_stream_deltas_are_reassembled_by_index():
     assert json.loads(message["tool_calls"][1]["function"]["arguments"]) == {"player_id": "kotsar"}
 
 
+def test_openai_usage_surfaces_the_cached_tokens():
+    """El dialecto OpenAI esconde el acierto de caché un nivel más abajo.
+
+    El agente solo suma enteros de primer nivel, así que sin aplanarlo el dato
+    se descartaba en silencio — y con él la única forma de saber si el orden
+    del prompt (estable primero, volátil al final) sirve de algo.
+    """
+    usage = openai_compat.normalize_usage(
+        {
+            "prompt_tokens": 9100,
+            "completion_tokens": 120,
+            "total_tokens": 9220,
+            "prompt_tokens_details": {"cached_tokens": 8704, "audio_tokens": 0},
+        }
+    )
+
+    assert usage["cached_tokens"] == 8704
+    assert usage["total_tokens"] == 9220
+    # Y nada anidado se cuela como entero suelto.
+    assert "prompt_tokens_details" not in usage
+
+
+def test_openai_usage_without_cache_details_does_not_invent_the_key():
+    usage = openai_compat.normalize_usage({"prompt_tokens": 100, "total_tokens": 140})
+
+    assert "cached_tokens" not in usage
+    assert usage["total_tokens"] == 140
+
+
 @pytest.mark.parametrize(
     "status, expected",
     [

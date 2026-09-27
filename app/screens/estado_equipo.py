@@ -16,6 +16,7 @@ from components.avatar import team_crest_html
 from components.court import shot_chart, shot_chart_caption, zone_breakdown, zone_heatmap, zone_heatmap_caption
 from components.glossary import glossary_expander, help_text
 from components.header import page_header
+from components.lineups import season_lineups_section
 from components.shot_quality import (
     league_reference_expander,
     player_quality_table,
@@ -98,10 +99,21 @@ if week_signals and st.toggle(
         week_signals = signals_engine.polish_headlines(llm_client, week_signals, team_name=team_name_for_llm)
 
 if not week_signals:
-    st.info(
-        "Sin cambios significativos esta semana. Con cinco partidos como ventana, eso es lo esperable "
-        "la mayoría de semanas — es la respuesta correcta, no un hueco de datos (§1 y §5 de la propuesta 10)."
-    )
+    # Dos "sin señales" que NO son lo mismo y no pueden decir lo mismo: sin
+    # un solo partido en la temporada no hay nada que comparar (temporada
+    # recién creada por la ingesta del calendario), y decir ahí "sin cambios
+    # significativos, es lo esperable" es afirmar que se ha mirado y no había
+    # nada — justo lo contrario de lo que pide §5 de la propuesta 10.
+    if queries.team_games_played(engine, team_id, season_id) == 0:
+        st.info(
+            "El Baskonia todavía no ha jugado ningún partido en la temporada seleccionada: no hay "
+            "con qué comparar la semana. Cambia de temporada en el selector de la barra lateral."
+        )
+    else:
+        st.info(
+            "Sin cambios significativos esta semana. Con cinco partidos como ventana, eso es lo esperable "
+            "la mayoría de semanas — es la respuesta correcta, no un hueco de datos (§1 y §5 de la propuesta 10)."
+        )
 else:
     signal_cols = st.columns(len(week_signals))
     for col, signal in zip(signal_cols, week_signals):
@@ -131,30 +143,34 @@ for col, row in zip(cols, record_df.itertuples()):
     col.metric(f"Récord {row.competition}", f"{row.wins}–{row.losses}")
 
 with cols[-1]:
-    # Calendario real (ver queries.next_matchup) — solo tiene sentido mirarlo
-    # con la temporada más reciente seleccionada (una pasada ya no tiene
-    # "próximo" partido).
-    if not st.session_state.get("is_current_season", True):
+    # Calendario real (ver `queries.next_matchup`): el siguiente partido del
+    # calendario, sea de la temporada que sea. No se acota a la temporada del
+    # selector — ese filtro dejaba sin "próximo rival" justo a la temporada
+    # con datos en cuanto se ingiere el calendario de la siguiente.
+    next_df = queries.next_matchup(engine, today)
+    if next_df is None:
         st.metric("Próximo rival", "—")
-        st.caption("No aplica a temporadas pasadas.")
+        st.caption("No hay ningún partido futuro en el calendario cargado.")
     else:
-        next_df = queries.next_matchup(engine, season_id, today)
-        if next_df is None:
-            st.metric("Próximo rival", "—")
-        else:
-            condicion = "Local" if next_df["is_home"] else "Visitante"
-            fecha = dt.date.fromisoformat(str(next_df["match_date"])).strftime("%d %b")
-            crest_col, info_col = st.columns([1, 5])
-            with crest_col:
-                st.markdown(
-                    team_crest_html(next_df["opponent"], next_df.get("opponent_logo_url"), size=40),
-                    unsafe_allow_html=True,
-                )
-            with info_col:
-                st.metric("Próximo rival", next_df["opponent"])
-            st.caption(f"{fecha} · {next_df['competition']} · {condicion}")
-            if next_df.get("key_player_note"):
-                st.caption(next_df["key_player_note"])
+        condicion = "Local" if next_df["is_home"] else "Visitante"
+        fecha = dt.date.fromisoformat(str(next_df["match_date"])).strftime("%d %b")
+        crest_col, info_col = st.columns([1, 5])
+        with crest_col:
+            st.markdown(
+                team_crest_html(next_df["opponent"], next_df.get("opponent_logo_url"), size=40),
+                unsafe_allow_html=True,
+            )
+        with info_col:
+            # Nombre en markdown y no en `st.metric`: el valor de una métrica
+            # va a ~2rem en UNA sola línea y se corta con puntos suspensivos
+            # ("Olympiacos …") en cuanto el nombre del rival no cabe en la
+            # cuarta parte del ancho que le toca a esta columna. Un nombre de
+            # equipo recortado no es una métrica, es un dato perdido.
+            st.caption("Próximo rival")
+            st.markdown(f"### {next_df['opponent']}")
+        st.caption(f"{fecha} · {next_df['competition']} · {condicion}")
+        if next_df.get("key_player_note"):
+            st.caption(next_df["key_player_note"])
 
 st.caption("Plantilla completa y estadísticas por jugador → pestaña **Plantilla**.")
 st.caption("Scouting completo del rival (forma, avanzadas, cara a cara, tiros) → pestaña **Próximo rival**.")
@@ -162,37 +178,36 @@ st.caption("Scouting completo del rival (forma, avanzadas, cara a cara, tiros) �
 st.divider()
 
 # --------------------------------------------------------------- calendario --
-# Mismo criterio que "Próximo rival" arriba: el calendario futuro solo tiene
-# sentido con la temporada más reciente seleccionada.
-if st.session_state.get("is_current_season", True):
+# Mismo criterio que "Próximo rival" arriba: los partidos futuros son los
+# futuros, sin acotar por la temporada del selector (ver
+# `queries.upcoming_matchups_list`). Si no hay ninguno cargado, la sección
+# entera no se pinta en vez de dejar un aviso sin acción posible.
+calendar_df = queries.upcoming_matchups_list(engine, today)
+if not calendar_df.empty:
     st.subheader("Calendario")
-    calendar_df = queries.upcoming_matchups_list(engine, season_id, today)
-    if calendar_df.empty:
-        st.info("Todavía no hay calendario futuro cargado para esta temporada.")
-    else:
-        st.dataframe(
-            calendar_df,
-            hide_index=True,
-            # `width="stretch"` reparte el
-            # espacio sobrante EN PARTES IGUALES entre todas las columnas — con
-            # solo 5 columnas eso inflaba la del escudo (`width="small"` = 75px)
-            # hasta ~170px de espacio vacío alrededor de un icono diminuto.
-            # `"content"` ajusta la tabla a lo que ocupan sus columnas (sin pasar
-            # del contenedor), así que cada columna se queda con su ancho real.
-            width="content",
-            height=280,
-            column_order=["rival_logo_url", "rival", "match_date", "competition", "condicion"],
-            column_config={
-                # Escudo pegado al nombre (columnas adyacentes) — Streamlit no
-                # permite combinar imagen+texto en una misma celda de `st.dataframe`.
-                "rival_logo_url": st.column_config.ImageColumn(" ", width=40),
-                "rival": st.column_config.TextColumn("Rival", width=180),
-                "match_date": st.column_config.TextColumn("Fecha", width=100),
-                "competition": st.column_config.TextColumn("Comp.", width=90),
-                "condicion": st.column_config.TextColumn("Cond.", width=90),
-            },
-        )
-        st.caption(f"{len(calendar_df)} partidos programados — Liga Endesa, Copa del Rey, Supercopa y Euroliga.")
+    st.dataframe(
+        calendar_df,
+        hide_index=True,
+        # `width="stretch"` reparte el
+        # espacio sobrante EN PARTES IGUALES entre todas las columnas — con
+        # solo 5 columnas eso inflaba la del escudo (`width="small"` = 75px)
+        # hasta ~170px de espacio vacío alrededor de un icono diminuto.
+        # `"content"` ajusta la tabla a lo que ocupan sus columnas (sin pasar
+        # del contenedor), así que cada columna se queda con su ancho real.
+        width="content",
+        height=280,
+        column_order=["rival_logo_url", "rival", "match_date", "competition", "condicion"],
+        column_config={
+            # Escudo pegado al nombre (columnas adyacentes) — Streamlit no
+            # permite combinar imagen+texto en una misma celda de `st.dataframe`.
+            "rival_logo_url": st.column_config.ImageColumn(" ", width=40),
+            "rival": st.column_config.TextColumn("Rival", width=180),
+            "match_date": st.column_config.TextColumn("Fecha", width=100),
+            "competition": st.column_config.TextColumn("Comp.", width=90),
+            "condicion": st.column_config.TextColumn("Cond.", width=90),
+        },
+    )
+    st.caption(f"{len(calendar_df)} partidos programados — Liga Endesa, Copa del Rey, Supercopa y Euroliga.")
     st.divider()
 
 # ---------------------------------------------------------- carga de minutos --
@@ -338,43 +353,7 @@ else:
 st.divider()
 
 # ----------------------------------------------------------------- quintetos --
-st.subheader("Quintetos más utilizados")
-competitions = queries.list_competitions(engine)
-comp_choice = st.selectbox("Competición", options=["Todas"] + competitions["name"].tolist(), key="lineups_competition")
-lineups_competition_id = None
-if comp_choice != "Todas":
-    lineups_competition_id = int(competitions.loc[competitions["name"] == comp_choice, "id"].iloc[0])
-
-lineups_df = queries.season_lineups(engine, team_id, season_id, lineups_competition_id)
-
-if lineups_df.empty:
-    if comp_choice == "Todas":
-        st.info("Todavía no hay quintetos reconstruidos para esta temporada.")
-    else:
-        st.info(f"Todavía no hay quintetos reconstruidos en {comp_choice} para esta temporada.")
-else:
-    total_combos = int(lineups_df["total_combos"].iloc[0])
-    st.caption(f"{len(lineups_df)} quintetos más usados de {total_combos} combinaciones")
-    st.dataframe(
-        lineups_df,
-        hide_index=True,
-        width="stretch",
-        column_order=["jugadores", "minutes", "plus_minus", "stints"],
-        column_config={
-            "jugadores": st.column_config.TextColumn("Quinteto", width="large"),
-            "minutes": st.column_config.NumberColumn(
-                "Min. juntos", format="%.1f", help=help_text("lineup_minutes")
-            ),
-            "plus_minus": st.column_config.NumberColumn("+/-", help=help_text("lineup_plus_minus")),
-            "stints": st.column_config.NumberColumn("Tramos", help=help_text("stints")),
-        },
-    )
-    st.caption(
-        "Min. juntos y +/- suman todos los tramos en los que ha jugado ese quinteto exacto "
-        "esta temporada, aunque vengan de partidos distintos. Tramos = en cuántos tramos "
-        "reconstruidos ha aparecido (sustituciones incluidas)."
-    )
-    glossary_expander(["lineup_minutes", "lineup_plus_minus", "stints"])
+season_lineups_section(engine, team_id, season_id, key="lineups_competition", subject="el Baskonia")
 
 st.divider()
 
@@ -520,11 +499,20 @@ else:
     filtered_df = shots_df if player_choice == "Todos" else shots_df[shots_df["player_name"] == player_choice]
 
     zones_df = queries.court_zones(engine)
-    # La tabla/mapa de zonas son del EQUIPO completo, no del filtro de
-    # jugador de arriba (`game_zone_stats` es un agregado por equipo, sin
-    # desglose por jugador — ver `queries.team_zone_profile`); el propio
-    # aviso de `zone_breakdown` lo aclara.
-    zone_df = queries.team_zone_profile(engine, team_id, shots_season_id)
+    # Con "Todos", el agregado oficial por equipo (`game_zone_stats`, vía
+    # `team_zone_profile`). Con un jugador concreto, el mismo cálculo que ya
+    # usa el modal de detalle (`player_zone_profile`, sobre `shots.zone_id` —
+    # no hay agregado oficial por jugador que reutilizar, ver su docstring):
+    # antes este mapa se quedaba siempre en el global del equipo aunque el
+    # selector de arriba filtrase por jugador, contradiciendo el propio mapa
+    # de tiros de al lado, que sí se filtraba.
+    if player_choice == "Todos":
+        zone_df = queries.team_zone_profile(engine, team_id, shots_season_id)
+        zone_scope = "team"
+    else:
+        player_id = filtered_df["player_id"].iloc[0]
+        zone_df = queries.player_zone_profile(engine, player_id, shots_season_id)
+        zone_scope = "player"
 
     # Uno al lado del otro, no apilados: son dos lecturas del mismo mapa
     # (nube de tiros vs. acierto por zona) y se comparan mejor en paralelo.
@@ -540,7 +528,7 @@ else:
         st.markdown("**Acierto por zona**")
         st.altair_chart(zone_heatmap(zone_df, zones_df))
         st.caption(zone_heatmap_caption(zone_df))
-    zone_breakdown(zone_df, len(shots_df), scope="team")
+    zone_breakdown(zone_df, len(filtered_df), scope=zone_scope)
 
 st.divider()
 

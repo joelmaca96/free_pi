@@ -1,6 +1,6 @@
 """Modal de detalle de un jugador, compartido entre páginas.
 
-Extraído de `app/pages/plantilla.py` (donde nació como función local) para
+Extraído de `app/screens/plantilla.py` (donde nació como función local) para
 poder abrirlo también desde "Próximo rival" sobre jugadores del equipo
 contrario — el contenido es idéntico, lo único que cambia es de qué galería
 se llega (ver `local/features/004-proximo-rival/01_design.md` §3.2).
@@ -34,7 +34,7 @@ from data import queries, queries_assistant
 from data.db import get_read_engine
 
 #: Top de la propuesta 11 dentro del modal: compacto a propósito (§2: "salen
-#: los 8-10 más parecidos" es para el buscador completo de `pages/
+#: los 8-10 más parecidos" es para el buscador completo de `screens/
 #: similitud.py`; aquí el usuario ya está mirando a ESTE jugador y solo
 #: quiere el resumen rápido).
 _SIMILARITY_TOP_N_COMPACT = 5
@@ -87,10 +87,30 @@ def player_detail(player_id: str) -> None:
         st.markdown(f"### #{bio['number']} · {bio['name']}")
         position = bio["position"] if pd.notna(bio["position"]) else "—"
         nationality = bio["nationality"] if pd.notna(bio["nationality"]) else "—"
-        st.caption(f"{position} · {nationality}")
-        c1, c2 = st.columns(2)
+        st.caption(position)
+        # Peso junto a altura desde que `ingest/euroleague/roster.py` las
+        # puebla: son el par que se lee junto al preparar un emparejamiento
+        # ("204 cm y 83 kg" no es el mismo cuatro que "204 cm y 108 kg"), y
+        # enseñar una sin la otra deja la lectura a medias. "—" en las dos
+        # para quien no juega Euroliga: esa API es la única fuente que las
+        # publica, y decirlo con un hueco es más honesto que esconder la
+        # sección entera.
+        # Nacionalidad como campo propio y no colgada del pie de la posición
+        # ("Escolta · Eslovenia"): ahí se leía como una coletilla del puesto y
+        # pasaba desapercibida, que es justo lo contrario de lo que se busca
+        # al preparar un rival. Va la última de las cuatro porque es la única
+        # que no es un número.
+        c1, c2, c3, c4 = st.columns(4)
         c1.metric("Edad", _age(bio["birth_date"], today))
         c2.metric("Altura", f"{int(bio['height_cm'])} cm" if pd.notna(bio["height_cm"]) else "—")
+        c3.metric("Peso", f"{int(bio['weight_kg'])} kg" if pd.notna(bio["weight_kg"]) else "—")
+        # La nacionalidad NO va en `st.metric` como las tres de al lado: el
+        # valor de una métrica es una sola línea con elipsis, y "República
+        # Dominicana" se quedaba en "República D…" en la cuarta parte del
+        # ancho del modal. Caption + encabezado ocupa el mismo hueco, se lee
+        # igual y parte en dos líneas cuando hace falta.
+        c4.caption("Nacionalidad")
+        c4.markdown(f"### {nationality}")
         # Entrada contextual al chat (ver `local/features/005-chatbot/
         # 01_design.md` §9.4). Cierra el modal por el camino: `st.switch_page`
         # cambia de pantalla, y un modal abierto sobre otra página no tendría
@@ -372,7 +392,7 @@ def player_detail(player_id: str) -> None:
     # ---------------------------------------------------- similitud (propuesta 11) --
     # Bloque compacto: valores por defecto (estilo, top 5), sin controles —
     # el buscador completo con filtros y pesos ajustables vive en
-    # `pages/similitud.py` (§6 del documento).
+    # `screens/similitud.py` (§6 del documento).
     st.divider()
     st.markdown("**Se parece a...**")
     vectors = similarity_component.league_vectors(engine, stats_season_id)
@@ -390,4 +410,4 @@ def player_detail(player_id: str) -> None:
         similarity_component.similarity_caveat()
         if st.button("Abrir buscador completo (filtros y pesos)", key=f"similarity_open_finder_{player_id}"):
             st.session_state["similarity_preselect_player_id"] = player_id
-            st.switch_page("pages/similitud.py")
+            st.switch_page("screens/similitud.py")

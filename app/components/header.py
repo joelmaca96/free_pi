@@ -1,6 +1,6 @@
 """Cabecera compartida de pantalla: escudo del Baskonia + título.
 
-Antes solo `pages/plantilla.py` mostraba el escudo (pequeño, 48px, junto al
+Antes solo `screens/plantilla.py` mostraba el escudo (pequeño, 48px, junto al
 título) y las otras dos pantallas arrancaban directo con `st.title(...)`.
 Factorizado aquí para que el escudo salga en las tres pantallas y con el
 mismo tamaño — pedido de usuario, ver conversación: "quiero que se vea el

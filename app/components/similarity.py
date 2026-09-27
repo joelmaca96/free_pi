@@ -7,7 +7,7 @@ estas piezas (§6 del documento):
 - `components/player_dialog.py`: un bloque compacto "se parece a", sin
   controles, con los valores por defecto de la propuesta (estilo, 500
   minutos, top 5) — es donde el usuario ya está mirando a un jugador.
-- `pages/similitud.py`: el buscador completo para fichajes, con filtros,
+- `screens/similitud.py`: el buscador completo para fichajes, con filtros,
   pesos ajustables y las barras de percentil comparadas.
 
 **Barras de percentil superpuestas, no radar** (§2 ofrece las dos opciones):
@@ -236,5 +236,5 @@ def percentile_bars(
 
 
 def similarity_caveat() -> None:
-    """El aviso permanente de §5: sin altura/peso/edad fiable, una temporada, sin ajuste de contexto."""
+    """El aviso permanente de §5: el cálculo ignora el físico y la edad, una temporada, sin ajuste de contexto."""
     st.caption(similarity_engine.SIMILARITY_CAVEAT)

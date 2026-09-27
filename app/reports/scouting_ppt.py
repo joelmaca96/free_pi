@@ -1,7 +1,7 @@
 """Dossier de scouting del rival, en un `.pptx` — propuesta
 `doc/features/propuestas/03_dossier_scouting_rival.md`.
 
-La pantalla "Próximo rival" (`app/pages/proximo_rival.py`) ya calcula todo
+La pantalla "Próximo rival" (`app/screens/proximo_rival.py`) ya calcula todo
 esto para pintarlo en la app; este módulo es puro ensamblado y maquetación
 sobre las mismas consultas, para que el cuerpo técnico pueda proyectarlo,
 anotarlo y mandarlo por WhatsApp — la reunión del día antes no lleva la
@@ -179,7 +179,7 @@ def _shot_quality_bullets(
     """Verdictos de ataque/defensa (`shot_quality.verdict`) + la zona más castigable, en texto.
 
     Reutiliza `analytics/shot_quality.py` tal cual lo usa
-    `app/pages/proximo_rival.py` — la única diferencia es que aquí el
+    `app/screens/proximo_rival.py` — la única diferencia es que aquí el
     resultado es una lista de frases para una diapositiva, no un `st.metric`.
     Recibe los tiros ya valorados (`shot_quality.with_expected`) en vez de
     volver a consultarlos: `generate_scouting_ppt` los necesita también para

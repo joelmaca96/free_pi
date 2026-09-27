@@ -71,3 +71,17 @@ def test_player_advanced_stats_turns_on_with_a_real_row(engine):
     with engine.begin() as conn:
         conn.execute(text("INSERT INTO player_advanced_stats (game_id, player_id, ts_pct) VALUES ('g5', 'howard', 61.2)"))
     assert probe(engine).player_advanced_stats is True
+
+
+def test_competitions_carry_their_id(engine):
+    """Igual que `seasons`, y por un motivo medido: hasta el 2026-09-14
+    `competitions` eran solo nombres, y como media docena de herramientas
+    piden `competition_id` como entero, el modelo se escapaba por `run_sql`
+    solo para preguntar el id. Los dos únicos escapes a SQL libre de la
+    primera pasada del set dorado eran exactamente eso."""
+    competitions = probe(engine).competitions
+
+    assert competitions, "el seed carga al menos una competición"
+    for competition in competitions:
+        assert isinstance(competition["id"], int)
+        assert competition["name"]

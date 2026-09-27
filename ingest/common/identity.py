@@ -14,6 +14,7 @@ ingesta, y `ingest/` no viaja en la imagen de la interfaz (ver el docstring
 de ese módulo para el razonamiento completo). Se reexporta desde aquí para
 que todo lo que ya la importaba de `ingest.common.identity` siga funcionando.
 """
+import re
 from typing import List, Optional, Tuple
 
 from sqlalchemy import text
@@ -28,6 +29,8 @@ __all__ = [
     "resolve_or_create_team",
     "resolve_or_create_player",
     "find_team_identity_collisions",
+    "find_player_identity_collisions",
+    "find_merged_players",
 ]
 
 
@@ -36,6 +39,69 @@ def _slugify(raw: str, *, max_len: int = 12) -> str:
     normalized = normalize_name(raw).replace(" ", "-")
     slug = normalized[:max_len].strip("-") or "team"
     return slug
+
+
+#: Longitud mínima de una palabra para contar como apellido. Descarta las
+#: iniciales ("M." de "M. Howard", "A. J." de "A. J. Lawson"), que no
+#: identifican a nadie: dos jugadores del mismo equipo pueden empezar por la
+#: misma letra, y aceptarlas devolvería el emparejamiento por dorsal justo al
+#: agujero que `_shares_a_surname` existe para tapar.
+_MIN_SURNAME_LEN = 3
+
+
+def _surname_words(name: str) -> set:
+    """Palabras de `name` largas como para ser un apellido (ver `_MIN_SURNAME_LEN`)."""
+    return {w for w in normalize_name(name).split() if len(w) >= _MIN_SURNAME_LEN}
+
+
+def _shares_a_surname(name_a: str, name_b: str) -> bool:
+    """`True` si los dos nombres comparten alguna palabra larga (apellido).
+
+    Comparación deliberadamente laxa por un lado y estricta por otro: laxa en
+    el ORDEN y en cuántas palabras trae cada fuente ("LARKIN, SHANE",
+    "Shane Larkin" y "S. Larkin" comparten `larkin`), estricta en que tiene
+    que haber una palabra de verdad en común — no vale "los dos empiezan por
+    A". Ver `resolve_or_create_player` para por qué esa segunda mitad importa.
+    """
+    return bool(_surname_words(name_a) & _surname_words(name_b))
+
+
+def _shares_a_prefix(name_a: str, name_b: str) -> bool:
+    """Como `_shares_a_surname`, pero aceptando un apellido cortado por la mitad.
+
+    Solo para comparar un `players.id` con un nombre (`find_merged_players`):
+    el slug viene truncado a 12 caracteres, así que "Timothé Luwawu-Cabarrot"
+    deja `timothe-luwa` y su último "apellido" es un trozo. Fuera de ahí no se
+    usa — en la resolución de identidad, aceptar prefijos volvería a abrir la
+    puerta a emparejar a dos personas distintas.
+    """
+    words_a, words_b = _surname_words(name_a), _surname_words(name_b)
+    return any(a.startswith(b) or b.startswith(a) for a in words_a for b in words_b)
+
+
+#: Pares de `players.id` que normalizan al mismo nombre pero que se ha
+#: comprobado A MANO, contra la fuente, que son DOS PERSONAS DISTINTAS.
+#: `find_player_identity_collisions` los calla; sin esta lista, un homónimo
+#: real se queda gritando en cada ingesta para siempre y el aviso se vuelve
+#: ruido que se deja de mirar — que es justo cuando deja de servir para
+#: detectar el duplicado de verdad.
+#:
+#: PARA AÑADIR UNO hay que haberlo verificado en la fuente y dejar escrito
+#: aquí con qué evidencia, como abajo. Ante la duda, NO se añade: un
+#: duplicado real callado no lo detecta ya nadie. Solo aplica a jugadores; en
+#: clubes, dos filas que normalizan igual son el mismo club y lo que
+#: corresponde es fusionarlas (`tools/fix_team_identity.py`) o corregir el
+#: alias demasiado laxo en `_KNOWN_TEAM_ALIASES`.
+_REVIEWED_DISTINCT_PLAYERS = {
+    # Dos Jaime Fernández españoles en activo en ACB a la vez. Verificado en
+    # acb.com (2026-09-12) por licencia: la 20204124 es el escolta de Madrid
+    # nacido el 04/06/1993, 1,86 m, hoy en La Laguna Tenerife (dorsal 3); la
+    # 20212348 es el ala-pívot de Zaragoza nacido el 15/07/2000, 2,06 m, en
+    # Casademont Zaragoza (dorsal 10). Fecha de nacimiento, altura, posición,
+    # licencia y equipo distintos, y los dos con temporada completa a la vez:
+    # no puede ser la misma persona partida en dos filas.
+    ("jaime-fernan", "jaime-fernan-2"),
+}
 
 
 def get_or_create_season(conn: Connection, start_year: int) -> int:
@@ -129,12 +195,36 @@ def resolve_or_create_player(
 
     Orden de resolución (igual para las tres fuentes):
     1. `player_external_ids` (source, external_id) ya vinculado.
-    2. Mismo `team_id` + mismo dorsal (`number`), si se conoce.
+    2. Mismo `team_id` + mismo dorsal (`number`) **y algún apellido en común**.
     3. Mismo `team_id` + nombre normalizado igual.
     4. Ninguno de los anteriores: crea el jugador y el alias.
 
     Si el jugador ya existía, actualiza dorsal/posición cuando cambian
     (idempotente: no falla, no duplica).
+
+    EL APELLIDO EN COMÚN DEL PASO 2 NO ES UN ADORNO. El dorsal es lo único de
+    esta lista que NO identifica a una persona: se reutiliza de una temporada
+    a otra, y quien hereda el dorsal heredaba con él la FILA de su predecesor.
+    Sin esa comprobación, el paso 2 fusionaba dos jugadores distintos en un
+    solo `players.id` — se renombraba la fila y todos los `player_game_stats`,
+    tramos, tiros y faltas del primero pasaban a colgar del segundo. Caso real
+    en `data/baskonia.db`: la fila `alberto-abal` (creada para Alberto Abalde,
+    Real Madrid #33) acabó llamándose "Gunars Grinvalds" con SIETE
+    `external_id` de ACB y 79 partidos encima — siete personas distintas que
+    fueron pasando por el 33. Y no era raro: 101 filas tenían dos o más
+    `external_id` de la misma fuente.
+
+    Es corrupción silenciosa, y peor que el fallo contrario: un jugador
+    partido en dos filas se detecta (`find_player_identity_collisions`) y se
+    arregla (`tools/fix_player_identity.py`); dos jugadores fundidos en una
+    no se detectan y ya no se pueden separar, porque el dato de a quién
+    pertenecía cada partido se ha perdido. Ante la duda, esta función prefiere
+    duplicar antes que fundir.
+
+    El paso 2 sigue existiendo porque resuelve un caso real que el 3 no pilla:
+    la misma persona escrita distinto en cada fuente ("M. Howard" en Euroliga
+    contra "Marcus Howard" en ACB) no tiene el nombre normalizado igual, pero
+    sí comparte apellido y dorsal.
     """
     row = conn.execute(
         text(
@@ -146,11 +236,11 @@ def resolve_or_create_player(
     player_id = row[0] if row is not None else None
 
     if player_id is None and number is not None:
-        row = conn.execute(
-            text("SELECT id FROM players WHERE team_id = :team_id AND number = :number"),
+        candidates = conn.execute(
+            text("SELECT id, name FROM players WHERE team_id = :team_id AND number = :number"),
             {"team_id": team_id, "number": number},
-        ).first()
-        player_id = row[0] if row is not None else None
+        ).all()
+        player_id = next((c.id for c in candidates if _shares_a_surname(c.name, name)), None)
 
     if player_id is None:
         normalized = normalize_name(name)
@@ -234,6 +324,101 @@ def find_team_identity_collisions(conn: Connection) -> List[Tuple[str, str]]:
         else:
             seen[key] = row.id
     return collisions
+
+
+def find_player_identity_collisions(conn: Connection) -> List[Tuple[str, str]]:
+    """Pares de `players.id` que normalizan al mismo nombre pero viven bajo ids distintos.
+
+    Mismo defecto que `find_team_identity_collisions`, a nivel de jugador:
+    `resolve_or_create_player` empareja por `(source, external_id)` primero
+    y, si no hay alias todavía, por `team_id` + dorsal/nombre — así que un
+    jugador que llega a dos fuentes (ACB/Euroliga) con un `team_id` distinto
+    en cada una (fichaje reciente, o la fuente aún no tiene su ficha
+    actualizada al equipo nuevo) puede acabar con dos `players.id`
+    separados aunque el nombre sea idéntico. Caso real: Jabari Parker con
+    `jabari-parke` (ACB, `external_id` 30002721) y `parker-jabar`
+    (Euroliga, `external_id` P012745) — cada tramo de quinteto/falta que
+    reconstruye el timeline de rotaciones
+    (`app/components/rotation_chart.py`) sale bajo UNO de los dos ids, así
+    que el jugador aparece dos veces en el mismo gráfico (una fila con
+    tramos, otra solo con faltas) en vez de una.
+
+    A diferencia del de equipos, aquí SÍ es posible un falso positivo (dos
+    jugadores distintos con el mismo nombre completo) — nombre normalizado
+    igual es una señal fuerte pero no una prueba; por eso esta función solo
+    DETECTA (para loguearlo al final de una ingesta, igual que la de
+    equipos), nunca fusiona sola. Arreglar una colisión detectada es una
+    migración de datos revisada a mano, ver `tools/fix_player_identity.py`.
+
+    Y el falso positivo no es hipotético: hay DOS Jaime Fernández españoles
+    jugando en ACB a la vez (ver `_REVIEWED_DISTINCT_PLAYERS`). Un homónimo
+    real no se puede "arreglar" — se queda ahí — así que, una vez comprobado
+    contra la fuente que son dos personas, su par se apunta en esa lista y
+    deja de contarse aquí. Si no, el aviso sale en cada ingesta para siempre
+    y acaba siendo ruido que se deja de leer, que es cuando deja de servir
+    para ver el duplicado de verdad.
+
+    Returns:
+        Lista de `(player_id_a, player_id_b)`, ordenado alfabéticamente
+        dentro de cada par, sin los pares ya revisados. Vacía si no hay
+        colisiones.
+    """
+    rows = conn.execute(text("SELECT id, name FROM players ORDER BY id")).all()
+    seen: dict = {}
+    collisions: List[Tuple[str, str]] = []
+    for row in rows:
+        key = normalize_name(row.name)
+        if key in seen:
+            pair = tuple(sorted((seen[key], row.id)))
+            if pair not in _REVIEWED_DISTINCT_PLAYERS:
+                collisions.append(pair)
+        else:
+            seen[key] = row.id
+    return collisions
+
+
+def find_merged_players(conn: Connection) -> List[Tuple[str, str]]:
+    """Filas de `players` que son DOS personas distintas metidas en una sola.
+
+    El fallo contrario a `find_player_identity_collisions`, y bastante peor:
+    allí un jugador está partido en dos filas (molesto, reversible); aquí dos
+    jugadores comparten fila, y con ella sus `player_game_stats`, tramos,
+    tiros y faltas. Lo causaba el emparejamiento por dorsal de
+    `resolve_or_create_player` antes de exigir apellido en común (ver su
+    docstring): el dorsal se reutiliza entre temporadas, así que quien lo
+    heredaba heredaba la fila de su predecesor, que se renombraba en el sitio.
+
+    CÓMO SE DETECTA, y por qué se puede: `players.id` es un slug generado a
+    partir del nombre **en el momento de crear la fila** (`_slugify`) y no se
+    reescribe nunca. Es, de hecho, el único rastro que queda del primer
+    ocupante. Si el slug no comparte ningún apellido con el nombre ACTUAL, la
+    fila se renombró a otra persona. Caso real de `data/baskonia.db`:
+    `alberto-abal` llamándose "Gunars Grinvalds", con ocho licencias de ACB y
+    79 partidos encima — ocho personas que fueron pasando por el 33 del Real
+    Madrid.
+
+    Solo DETECTA, nunca arregla: separar una fila fusionada exige volver a
+    ingerir los partidos afectados, porque el dato de a quién pertenecía cada
+    línea ya no está en la base de datos. Ver `tools/report_merged_players.py`
+    para el informe de qué habría que rehacer.
+
+    Returns:
+        Lista de `(player_id, nombre_actual)`, ordenada por id. Vacía si no
+        hay ninguna. Los nombres demasiado cortos para tener apellido
+        (iniciales sueltas como "A. De", que dejan un slug `a-de`) se omiten:
+        ahí no hay nada que comparar, y contarlos sería ruido.
+    """
+    merged: List[Tuple[str, str]] = []
+    for row in conn.execute(text("SELECT id, name FROM players ORDER BY id")).all():
+        # `-2`, `-3`... son el desempate de `_unique_id`, no parte del nombre.
+        slug = re.sub(r"-\d+$", "", row.id).replace("-", " ")
+        if not _surname_words(slug) or not _surname_words(row.name):
+            continue  # indecidible, no sospechoso
+        # `_slugify` trunca a 12 caracteres, así que el último apellido del
+        # slug puede venir cortado ("timothe-luwa"): se acepta el prefijo.
+        if not _shares_a_surname(slug, row.name) and not _shares_a_prefix(slug, row.name):
+            merged.append((row.id, row.name))
+    return merged
 
 
 def _unique_id(conn: Connection, table: str, base_slug: str) -> str:

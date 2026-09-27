@@ -342,7 +342,7 @@ def generate_postgame_ppt(
         team_id: equipo propio (`queries.get_own_team_id`) — el informe es
             "cada jugador del Baskonia", nunca del rival.
         game_context: `rival`, `resultado`, `competicion`, `fecha`, `subtitle`
-            — ver cómo lo arma `app/pages/partidos_anteriores.py`.
+            — ver cómo lo arma `app/screens/partidos_anteriores.py`.
         llm_client: `assistant.llm.build_llm_client()` ya construido, o
             `None` para saltarse el LLM y quedarse solo con las reglas.
 

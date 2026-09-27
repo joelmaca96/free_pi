@@ -32,6 +32,7 @@ from components.avatar import player_avatar_html, team_crest_html
 from components.court import shot_chart, shot_chart_caption, zone_breakdown, zone_heatmap, zone_heatmap_caption
 from components.glossary import glossary_expander, help_text
 from components.header import page_header
+from components.lineups import season_lineups_section
 from components.player_dialog import player_detail
 from components.shot_quality import (
     league_reference_expander,
@@ -57,21 +58,17 @@ today = dt.date.today()
 page_header("Próximo rival")
 
 # --------------------------------------------------------------- el rival --
-# Mismo criterio que la tarjeta de "Estado del equipo": un calendario futuro
-# solo tiene sentido con la temporada más reciente seleccionada — una
-# temporada ya cerrada no tiene "próximo partido".
-if not st.session_state.get("is_current_season", True):
-    st.info(
-        "El próximo rival solo aplica a la temporada en curso. "
-        "Cambia el selector de temporada del panel lateral para verlo."
-    )
-    st.stop()
-
-matchup = queries.next_matchup(engine, season_id, today)
+# El próximo partido es el siguiente del calendario, sin acotar por la
+# temporada del selector (ver `queries.next_matchup`): esta pantalla se
+# quedaba bloqueada precisamente en la temporada con datos en cuanto la
+# ingesta cargaba el calendario de la siguiente. La temporada del selector
+# sigue mandando en los DATOS de scouting, vía `team_scouting_season` (más
+# abajo).
+matchup = queries.next_matchup(engine, today)
 if matchup is None:
     st.info(
-        "No hay ningún partido futuro cargado para esta temporada todavía. "
-        "El calendario lo pueblan `ingest/acb` e `ingest/euroleague` (`run_upcoming`)."
+        "No hay ningún partido futuro cargado en el calendario todavía. "
+        "Lo pueblan `ingest/acb` e `ingest/euroleague` (`run_upcoming`)."
     )
     st.stop()
 
@@ -188,7 +185,7 @@ if scouting_season_id is None:
 # botón que convierte todo el scouting de esta pantalla en un `.pptx`
 # proyectable para la reunión del día antes — a la reunión no va la
 # aplicación. Mismo patrón que "PPT para Paolo"
-# (`app/pages/partidos_anteriores.py`): bytes en `session_state` +
+# (`app/screens/partidos_anteriores.py`): bytes en `session_state` +
 # `download_button`, porque este último provoca *rerun* y el fichero no
 # puede construirse en el mismo paso en que se descarga. Clave por rival Y
 # temporada de scouting: cambiar de rival (o que la página caiga a otra
@@ -602,43 +599,18 @@ else:
                         player_detail(player.id)
 
     st.caption(
-        "Ordenados por puntos por partido. Las fotos reales solo existen para la plantilla "
-        "propia (`ingest/baskonia_web`); para un rival se muestra el badge con iniciales."
+        "Ordenados por puntos por partido. Las fotos salen de baskonia.com para la plantilla "
+        "propia y de la API de Euroliga para el resto (`ingest/euroleague/roster.py`): un rival "
+        "que solo juega ACB, o un fichaje cuya foto la fuente aún no ha publicado, se queda con "
+        "el badge de iniciales."
     )
 
 st.divider()
 
 # ------------------------------------------------------------------ quintetos --
-st.subheader("Quintetos más utilizados")
-competitions = queries.list_competitions(engine)
-comp_choice = st.selectbox(
-    "Competición", options=["Todas"] + competitions["name"].tolist(), key="rival_lineups_competition"
+season_lineups_section(
+    engine, rival_team_id, scouting_season_id, key="rival_lineups_competition", subject=rival_name
 )
-lineups_competition_id = None
-if comp_choice != "Todas":
-    lineups_competition_id = int(competitions.loc[competitions["name"] == comp_choice, "id"].iloc[0])
-
-lineups_df = queries.season_lineups(engine, rival_team_id, scouting_season_id, lineups_competition_id)
-
-if lineups_df.empty:
-    st.info(f"Sin quintetos reconstruidos para {rival_name} con este filtro.")
-else:
-    total_combos = int(lineups_df["total_combos"].iloc[0])
-    st.caption(f"{len(lineups_df)} quintetos más usados de {total_combos} combinaciones")
-    st.dataframe(
-        lineups_df,
-        hide_index=True,
-        width="stretch",
-        column_order=["jugadores", "minutes", "plus_minus", "stints"],
-        column_config={
-            "jugadores": st.column_config.TextColumn("Quinteto", width="large"),
-            "minutes": st.column_config.NumberColumn(
-                "Min. juntos", format="%.1f", help=help_text("lineup_minutes")
-            ),
-            "plus_minus": st.column_config.NumberColumn("+/-", help=help_text("lineup_plus_minus")),
-            "stints": st.column_config.NumberColumn("Tramos", help=help_text("stints")),
-        },
-    )
 
 st.divider()
 
@@ -880,9 +852,13 @@ else:
     filtered_df = shots_df if player_choice == "Todos" else shots_df[shots_df["player_name"] == player_choice]
 
     zones_df = queries.court_zones(engine)
-    # El % exacto por zona no se estima a ojo de la nube de puntos — tabla aparte.
-    # No se filtra por jugador: `game_zone_stats` está agregado por equipo en
-    # origen, no guarda quién tiró.
+    # Con "Todos", el agregado oficial por equipo (`game_zone_stats`, vía
+    # `team_zone_profile`) — el % exacto por zona no se estima a ojo de la
+    # nube de puntos. Con un jugador concreto, `player_zone_profile` (sobre
+    # `shots.zone_id`, sin agregado oficial por jugador que reutilizar): antes
+    # este mapa se quedaba siempre en el global del equipo aunque el selector
+    # de arriba filtrase por jugador, contradiciendo el mapa de tiros de al
+    # lado, que sí se filtraba.
     #
     # COBERTURA, verificado en vivo (2026-08-24, antes del reteselado): las 6
     # zonas originales dejaban entre el 52% (Euroliga) y el 79% (Supercopa) de
@@ -898,9 +874,15 @@ else:
     # refuerza solo si de verdad queda un hueco apreciable. El mapa de arriba
     # es fiable siempre: usa las coordenadas, no las zonas (y desde esta
     # revisión, su fondo también parte "Ala izq./der." por la línea real de
-    # triple — ver `court.py::_wing_split_layers` — aunque esta tabla, atada
-    # a `game_zone_stats`, siga sin poder desglosarlas).
-    zone_df = queries.team_zone_profile(engine, rival_team_id, scouting_season_id)
+    # triple — ver `court.py::_wing_split_layers` — aunque la tabla de abajo,
+    # atada a `game_zone_stats` con "Todos", siga sin poder desglosarlas).
+    if player_choice == "Todos":
+        zone_df = queries.team_zone_profile(engine, rival_team_id, scouting_season_id)
+        zone_scope = "team"
+    else:
+        player_id = filtered_df["player_id"].iloc[0]
+        zone_df = queries.player_zone_profile(engine, player_id, scouting_season_id)
+        zone_scope = "player"
 
     # Uno al lado del otro, no apilados: son dos lecturas del mismo mapa
     # (nube de tiros vs. acierto por zona) y se comparan mejor en paralelo.
@@ -916,7 +898,7 @@ else:
         st.markdown("**Acierto por zona**")
         st.altair_chart(zone_heatmap(zone_df, zones_df))
         st.caption(zone_heatmap_caption(zone_df))
-    zone_breakdown(zone_df, len(shots_df), scope="team")
+    zone_breakdown(zone_df, len(filtered_df), scope=zone_scope)
 
 st.divider()
 

@@ -151,7 +151,14 @@ CREATE TABLE players (
   -- hay foto real (silueta genérica) o la descarga falló ese jugador
   -- concreto; `photo_url` sigue siendo la fuente de verdad del origen.
   photo_local_path TEXT,
+  -- Ficha física. La puebla `ingest/euroleague/roster.py` desde la API de
+  -- plantillas de Euroliga (`person.height`/`person.weight`), única fuente de
+  -- las tres que los publica: el JSON de baskonia.com no trae altura (ver el
+  -- docstring de su scraper) y el boxscore de ACB tampoco. Por eso solo
+  -- están rellenos para jugadores de clubes de Euroliga; NULL en el resto,
+  -- que es la mitad larga de la tabla.
   height_cm   INTEGER,
+  weight_kg   INTEGER,
   birth_date  DATE,
   nationality TEXT
 );

@@ -1,7 +1,7 @@
 """Herramienta de señales semanales (propuesta 10): "¿qué ha cambiado esta semana?"
 
 Reutiliza EXACTAMENTE el mismo motor que pinta el bloque de
-`app/pages/estado_equipo.py` (`analytics.signals`) — la respuesta del
+`app/screens/estado_equipo.py` (`analytics.signals`) — la respuesta del
 asistente y la de la pantalla nunca pueden divergir, porque las dos llaman a
 las mismas funciones de detección (jugador, equipo, equipo por zona,
 rotación, carga) y al mismo `select_top_signals` (§6 del documento: "Encaja

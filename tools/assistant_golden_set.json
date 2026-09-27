@@ -1,0 +1,206 @@
+{
+  "version": 1,
+  "nota": "Set dorado del asistente (propuesta 13). Lo pasa tools/assistant_eval.py contra el proveedor configurado en ASSISTANT_LLM_*. En JSON y no en YAML a proposito: el repo no anade dependencias por comodidad (mismo criterio que la nota de 'sin scipy' de app/analytics/signals.py). Las cifras de expect_numbers estan FIJADAS contra data/baskonia.db: si reingieres, repasa las que el informe marque como 'no estaba en ningun tool_result' — eso es un pin viejo, no un modelo mintiendo.",
+  "entries": [
+    {
+      "id": "howard-ultimo-partido",
+      "question": "¿Qué tal jugó Markus Howard su último partido?",
+      "origen": "encargo, diseño §2.1",
+      "por_que": "La primera de las tres preguntas del encargo y el camino más corto del catálogo: resolver nombre -> línea de boxscore. Es además el caso del defecto D2 (minutaje MM:SS): la respuesta cita '20:29' y el verificador partía ese minutaje en dos marcando el '29' como inventado. Por eso max_unverified es 0 y por eso los minutos están entre las cifras exigidas: sin pedir el minutaje, esta entrada dejaría de cubrir la regresión que la motivó.",
+      "expect_tools": [
+        "resolve_entity",
+        "player_game"
+      ],
+      "forbid_tools": [
+        "run_sql"
+      ],
+      "expect_ambiguous": false,
+      "expect_numbers": [
+        {
+          "valor": 21,
+          "es": "puntos"
+        },
+        {
+          "valor": 20.48,
+          "es": "minutos (20:29 en notación de reloj)"
+        }
+      ],
+      "max_unverified": 0,
+      "fijado": {
+        "el": "2026-09-12",
+        "recalcular": "player_game(player_id='howard', when='last') -> data.line.pts / data.line.minutes"
+      }
+    },
+    {
+      "id": "howard-ambiguo",
+      "question": "¿Qué tal jugó Howard su último partido?",
+      "origen": "assistant_feedback.jsonl 2026-08-25 (pulgar arriba)",
+      "por_que": "Regla dura de §5.1: hay tres Howard con partidos y el asistente NO elige, pregunta. Es un pulgar arriba a una NO-respuesta, y por eso entra en el set: el arreglo de D1 (desempate por partidos jugados) tocó justo esta lógica, y una entrada que solo cubriese el desempate dejaría sin red la mitad que no debe cambiar nunca. Las herramientas prohibidas son la aserción de verdad: si llamó a player_game es que eligió un Howard en silencio, diga lo que diga la prosa.",
+      "expect_tools": [
+        "resolve_entity"
+      ],
+      "forbid_tools": [
+        "player_game",
+        "player_game_log",
+        "player_profile",
+        "player_averages",
+        "run_sql"
+      ],
+      "expect_ambiguous": true,
+      "expect_numbers": [],
+      "max_unverified": 0
+    },
+    {
+      "id": "howard-nombre-mal-escrito",
+      "question": "Que tal jugó Marcus Howard su ultimo partido?",
+      "origen": "assistant_feedback.jsonl 2026-08-25 (pulgar arriba), diseño §12.2",
+      "por_que": "La misma pregunta con el nombre mal escrito y sin tildes, tal y como la tecleó el usuario. Aquí ambiguous DEBE ser false: 'Marcus Howard' se parece lo bastante a Markus Howard como para que el parecido de nombre desempate solo, y preguntar aquí sería tan malo como elegir en el caso de arriba. Las dos entradas juntas acotan la regla por los dos lados.",
+      "expect_tools": [
+        "resolve_entity",
+        "player_game"
+      ],
+      "forbid_tools": [
+        "run_sql"
+      ],
+      "expect_ambiguous": false,
+      "expect_numbers": [
+        {
+          "valor": 21,
+          "es": "puntos"
+        }
+      ],
+      "max_unverified": 0,
+      "fijado": {
+        "el": "2026-09-12",
+        "recalcular": "player_game(player_id='howard', when='last') -> data.line.pts"
+      }
+    },
+    {
+      "id": "fenerbahce-estilo",
+      "question": "El Fenerbahçe, ¿qué estilo de juego tiene?",
+      "origen": "encargo, diseño §2.2",
+      "por_que": "La segunda del encargo. Lo que se mide no es que sepa el pace, es que llame a team_style y no a team_profile: 'estilo' es una lectura RELATIVA y solo team_style trae el percentil de liga que convierte 73.6 posesiones en una afirmación verificable (§6). Se exigen los 43 partidos porque la regla 4 del prompt obliga a citar el tamaño de cualquier agregado, y es la parte que un modelo pequeño se salta primero.",
+      "expect_tools": [
+        "resolve_entity",
+        "team_style"
+      ],
+      "forbid_tools": [
+        "run_sql"
+      ],
+      "expect_ambiguous": false,
+      "expect_numbers": [
+        {
+          "valor": 73.6,
+          "es": "pace"
+        },
+        {
+          "valor": 43,
+          "es": "partidos del agregado"
+        }
+      ],
+      "max_unverified": 0,
+      "fijado": {
+        "el": "2026-09-12",
+        "recalcular": "team_style(team_id='fenerbahce-b') -> data.style[0].pace.value / data.style[0].gp"
+      }
+    },
+    {
+      "id": "mejor-quinteto-clutch",
+      "question": "¿Cuál es el mejor quinteto para los últimos minutos?",
+      "origen": "encargo, diseño §2.3",
+      "por_que": "La tercera del encargo, y la entrada que documenta un CAMBIO DE CAPACIDAD: cuando se escribió el diseño esta pregunta tenía que rechazarse (lineups agregaba el partido entero, sin reloj), y hoy se contesta porque la fase 3 trajo lineup_stints y clutch_lineups. Por eso lleva requires_capabilities_on: si esa capacidad desaparece de la base de datos, la entrada no falla — se salta diciendo que vuelve a ser un caso de rechazo. Sin cifras fijadas a propósito: el mejor quinteto cambia con cada ingesta y clavarlo aquí sería fabricar un rojo futuro. Es además la pregunta con la que se midió D4 (seis vueltas, nueve llamadas, 70.034 tokens antes de la memoización), así que sus columnas de vueltas y tokens son la línea base que había que tener.",
+      "requires_capabilities_on": [
+        "lineup_stints"
+      ],
+      "expect_tools": [
+        "clutch_lineups"
+      ],
+      "forbid_tools": [
+        "run_sql"
+      ],
+      "expect_numbers": [],
+      "max_unverified": 0
+    },
+    {
+      "id": "bilbao-pretemporada",
+      "question": "Tengo la semana que viene partido contra el bilbao basket. Es pretemporada, no está en el calendario, fíjate en la temporada 25/26. ¿Cómo jugaban? ¿Con quién debemos tener cuidado?",
+      "origen": "assistant_feedback.jsonl 2026-08-27 (el único pulgar abajo), defecto D1",
+      "por_que": "El pulgar abajo del entrenador: 'Bilbao' devolvía dos candidatos empatados —el club real con 36 partidos y una fila fantasma con cero— y el asistente gastó el turno entero preguntando a cuál se refería. Esa pregunta no tenía respuesta buena: son el mismo club y solo uno tiene datos. La aserción que importa es expect_ambiguous=false. Se recorta la pregunta original en sus dos primeras partes: las otras dos ('¿cuál debería ser mi quinteto inicial?', '¿con quién emparejo a cada jugador?') no las cubre ninguna herramienta todavía — son la propuesta 12 — y exigirlas aquí mediría una función que no existe.",
+      "expect_tools": [
+        "resolve_entity",
+        "team_style"
+      ],
+      "forbid_tools": [
+        "run_sql"
+      ],
+      "expect_ambiguous": false,
+      "expect_numbers": [
+        {
+          "valor": 36,
+          "es": "partidos del agregado"
+        }
+      ],
+      "max_unverified": 0,
+      "fijado": {
+        "el": "2026-09-12",
+        "recalcular": "team_style(team_id='surne-bilbao') -> data.style[0].gp"
+      }
+    },
+    {
+      "id": "maximo-anotador-acb",
+      "question": "¿Quién anota más en la ACB esta temporada?",
+      "origen": "app/screens/asistente.py (_SUGGESTIONS, la familia de liga)",
+      "por_que": "Una de las cuatro sugerencias que la pantalla ofrece en frío, así que es de las primeras preguntas que recibe el asistente de cualquiera que lo abra. Mide la elección dentro de la familia de liga y, sobre todo, que no se escape por run_sql: un 'quién anota más' es exactamente la consulta que un modelo pequeño prefiere escribir a mano teniendo league_leaders delante (§4.6).",
+      "expect_tools": [
+        "league_leaders"
+      ],
+      "forbid_tools": [
+        "run_sql"
+      ],
+      "expect_numbers": [
+        {
+          "valor": 18.06,
+          "es": "puntos por partido del líder"
+        }
+      ],
+      "max_unverified": 0,
+      "fijado": {
+        "el": "2026-09-12",
+        "recalcular": "league_leaders(metric='pts', competition_id=1) -> data.leaders[0].value (Patty Mills, 18.06)"
+      }
+    },
+    {
+      "id": "cronica-rechazo",
+      "question": "Cuéntame la crónica del último partido del Baskonia con sus momentos clave.",
+      "origen": "diseño §2.4 (huecos verificados contra la BD real)",
+      "por_que": "La entrada de rechazo, que es la que hace que el set mida confianza y no solo cobertura. key_events tiene 0 filas y games.narrative 0 partidos con texto, así que no hay crónica ni momentos clave que citar: la respuesta correcta es decirlo y ofrecer lo adyacente (parciales por cuarto, boxscore), que es el patrón de la regla 3 del prompt. requires_capabilities_off es el guardarraíl: el día que se ingiera el play-by-play tipado como eventos clave, esta entrada se salta sola en vez de ponerse roja por haber mejorado la base de datos. Los marcadores de rechazo son la ÚNICA aserción de prosa de todo el set, y van en la entrada y no en el código a propósito: son una lista de alternativas, no una frase exacta.",
+      "requires_capabilities_off": [
+        "key_events",
+        "narratives"
+      ],
+      "expect_refusal": {
+        "marcadores": [
+          "no tiene",
+          "no tengo",
+          "no hay",
+          "no dispongo",
+          "no puedo",
+          "no existe",
+          "no guarda",
+          "no registra",
+          "no conserva",
+          "no está cargad",
+          "no se ha cargad",
+          "sin crónica",
+          "sin eventos"
+        ],
+        "nota": "La lista se amplió el 2026-09-14 tras un falso rojo del propio set: el asistente contestó 'Esta base de datos NO TIENE crónicas ni eventos clave que citar' —el patrón correcto de la regla 3, palabra por palabra— y la entrada lo dio por fallo porque 'no tiene' no estaba entre los marcadores. Es la fragilidad que esta entrada ya advertía de sí misma: es la única aserción de prosa del set. Si vuelve a pasar con otra forma de negar, se añade aquí; el día que la lista se haga inmanejable, la señal es que esta entrada necesita otra forma de comprobarse, no más parches."
+      },
+      "forbid_tools": [
+        "run_sql"
+      ],
+      "expect_numbers": [],
+      "max_unverified": 0
+    }
+  ]
+}

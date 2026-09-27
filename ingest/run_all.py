@@ -12,7 +12,11 @@ import argparse
 import logging
 
 from ingest.common.db import get_engine
-from ingest.common.identity import find_team_identity_collisions
+from ingest.common.identity import (
+    find_merged_players,
+    find_player_identity_collisions,
+    find_team_identity_collisions,
+)
 from ingest.common.logging_utils import configure_logging
 
 logger = logging.getLogger(__name__)
@@ -77,23 +81,61 @@ def run_all(season: int, database_url: str = None, skip: tuple = ()) -> dict:
         except Exception as exc:  # noqa: BLE001
             logger.exception("Euroliga (calendario futuro) falló")
             results["euroleague_upcoming"] = {"ok": False, "error": str(exc)}
+
+        # Ficha física (altura/peso/nacimiento/nacionalidad). Va DESPUÉS del
+        # backfill de partidos a propósito: solo actualiza jugadores que ya
+        # existen (ver `roster.py`), así que cuanto más tarde corra, más
+        # altas del boxscore alcanza. Aparte del resto por el mismo motivo
+        # que los calendarios: es la única fuente de esos campos, pero
+        # ninguna estadística depende de ella.
+        try:
+            from ingest.euroleague.roster import run as run_euroleague_roster
+
+            results["euroleague_roster"] = {"ok": True, "summary": run_euroleague_roster(engine, season)}
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Euroliga (ficha física) falló")
+            results["euroleague_roster"] = {"ok": False, "error": str(exc)}
     else:
         results["euroleague"] = {"ok": None, "summary": "omitido"}
         results["euroleague_upcoming"] = {"ok": None, "summary": "omitido"}
+        results["euroleague_roster"] = {"ok": None, "summary": "omitido"}
 
-    # Comprobación de integridad de identidad de club (§5 de
+    # Comprobación de integridad de identidad (club y jugador, §5 de
     # doc/features/propuestas/04_fatiga_y_calendario.md), SIEMPRE al final —
-    # incluso si algún módulo se omitió: un club duplicado ("ningún club con
-    # dos identidades") es más barato de detectar aquí, en cada ingesta, que
-    # de descubrir a ojo meses después mirando un agregado que sale por la
-    # mitad. Solo avisa, no arregla nada (ver el docstring de la función).
+    # incluso si algún módulo se omitió: un duplicado ("ningún club/jugador
+    # con dos identidades") es más barato de detectar aquí, en cada ingesta,
+    # que de descubrir a ojo meses después mirando un agregado que sale por
+    # la mitad (o, en el caso de jugador, un timeline de rotaciones con la
+    # misma persona en dos filas — ver `find_player_identity_collisions`).
+    # Solo avisa, no arregla nada (ver el docstring de cada función).
     with engine.connect() as conn:
-        collisions = find_team_identity_collisions(conn)
-    if collisions:
-        logger.warning("colisión de identidad de club detectada: %s", collisions)
+        team_collisions = find_team_identity_collisions(conn)
+        player_collisions = find_player_identity_collisions(conn)
+        merged_players = find_merged_players(conn)
+    if team_collisions:
+        logger.warning("colisión de identidad de club detectada: %s", team_collisions)
+    if player_collisions:
+        logger.warning("colisión de identidad de jugador detectada: %s", player_collisions)
+    # El fallo contrario y peor: dos personas en una sola fila. Se avisa aparte
+    # porque la reparación no se parece en nada — una colisión se fusiona a
+    # mano, una fila fusionada hay que reingerirla (ver
+    # `tools/report_merged_players.py`).
+    if merged_players:
+        logger.warning(
+            "%d filas de jugador parecen dos personas fusionadas (informe: "
+            "python tools/report_merged_players.py): %s",
+            len(merged_players), merged_players[:5],
+        )
+    collisions = team_collisions + player_collisions
+    problems = collisions + merged_players
     results["identity_check"] = {
-        "ok": not collisions,
-        "summary": f"{len(collisions)} colisión(es): {collisions}" if collisions else "sin colisiones",
+        "ok": not problems,
+        "summary": (
+            f"{len(team_collisions)} colisiones de club, {len(player_collisions)} de jugador, "
+            f"{len(merged_players)} filas fusionadas"
+            if problems
+            else "sin colisiones"
+        ),
     }
 
     return results
@@ -113,6 +155,7 @@ def main() -> None:
     results = run_all(args.season, args.database_url, tuple(args.skip))
 
     print(f"\nResumen de ingesta (temporada {args.season}):")
+    failed = []
     for name, result in results.items():
         if result["ok"] is None:
             print(f"  {name}: omitido")
@@ -120,10 +163,24 @@ def main() -> None:
             print(f"  {name}: OK -> {result['summary']}")
         elif "error" in result:
             print(f"  {name}: FALLÓ -> {result['error']}")
+            failed.append(name)
         else:
             # `identity_check`: no falla ejecutando nada, solo avisa (ver su
             # docstring) - no tiene "error" que imprimir, solo "summary".
+            # Por eso NO cuenta como fallo: un duplicado de identidad es algo
+            # que revisar, no una ingesta que no se ha hecho.
             print(f"  {name}: AVISO -> {result['summary']}")
+
+    # Código de salida distinto de 0 si algún módulo reventó. `run_all` está
+    # pensado para no detenerse ante el fallo de una fuente (esa es su
+    # gracia), pero salir siempre con 0 hacía que `baskonia-ingest.service`
+    # (`Type=oneshot`, ver deploy/systemd/) se marcase como correcto aunque no
+    # hubiese entrado un solo partido: la ingesta se quedaba muerta en
+    # silencio y `systemctl --failed` seguía limpio. El caso no es
+    # hipotético — el propio README avisa de que la `x-apikey` de acb.com
+    # puede rotar.
+    if failed:
+        raise SystemExit(f"\nIngesta incompleta: falló {', '.join(failed)}.")
 
 
 if __name__ == "__main__":

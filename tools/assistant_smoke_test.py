@@ -36,13 +36,21 @@ from app.assistant.llm.base import ToolSpec  # noqa: E402
 # Deliberadamente NO es una del catálogo real — lo que se está probando es el
 # proveedor, no el asistente, y mezclar las dos cosas hace que un fallo no
 # diga cuál de las dos falló.
+#
+# El argumento obligatorio es el NOMBRE, que la pregunta sí da, y no un `id`
+# opaco: pidiendo un id, un modelo que hace tool calling perfectamente
+# respondía "¿podrías indicarme el id del jugador?" —que es la conducta
+# CORRECTA, no inventarse un id— y este guion lo descartaba con un "no sirve
+# para el asistente". Un falso negativo en la puerta de entrada de §8.1 es
+# peor que no tener puerta: hace descartar modelos que funcionan. En el
+# asistente real esa resolución la hace `resolve_player`, no el modelo.
 TOY_TOOL = ToolSpec(
     name="get_player_points",
     description="Puntos que anotó un jugador en su último partido.",
     parameters={
         "type": "object",
-        "properties": {"player_id": {"type": "string", "description": "Id del jugador."}},
-        "required": ["player_id"],
+        "properties": {"player_name": {"type": "string", "description": "Nombre del jugador."}},
+        "required": ["player_name"],
         "additionalProperties": False,
     },
 )
@@ -51,8 +59,8 @@ SYSTEM = (
     "Eres un asistente de baloncesto. Responde en español, en una frase. "
     "Usa las herramientas disponibles para obtener cualquier cifra: nunca la inventes."
 )
-QUESTION = "¿Cuántos puntos hizo howard en su último partido?"
-TOY_RESULT = {"player_id": "howard", "points": 21, "minutes": 20.29}
+QUESTION = "¿Cuántos puntos hizo Markus Howard en su último partido?"
+TOY_RESULT = {"player_name": "Markus Howard", "points": 21, "minutes": 20.29}
 
 
 def main() -> int:
@@ -99,7 +107,7 @@ def main() -> int:
     if call.arguments_error:
         print(f"FALLO (2/3): argumentos ilegibles -> {call.arguments_error}")
         return 1
-    if "player_id" not in call.arguments:
+    if "player_name" not in call.arguments:
         print(f"FALLO (2/3): faltan argumentos obligatorios. Ha mandado: {call.arguments}")
         return 1
     print(f"OK (2/3): argumentos válidos -> {call.arguments}")

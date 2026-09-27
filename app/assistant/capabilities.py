@@ -44,7 +44,15 @@ class Capabilities:
     quarter_player_stats: bool = False  # Fase 3: boxscore de jugador por cuarto (ACB-only)
     player_advanced_stats: bool = False  # Fase 4: avanzadas oficiales por jugador (ACB-only)
     seasons: List[Dict[str, object]] = field(default_factory=list)
-    competitions: List[str] = field(default_factory=list)
+    #: Competiciones con su id, igual que `seasons` y por el mismo motivo.
+    #: Eran solo nombres hasta el 2026-09-14, y el banco de pruebas
+    #: (`tools/assistant_eval.py`) lo destapó: media docena de herramientas
+    #: piden `competition_id` como entero y el modelo no tenía de dónde
+    #: sacarlo, así que se escapaba por `run_sql` para preguntarlo. Los dos
+    #: únicos escapes a SQL libre de la pasada del set dorado eran literalmente
+    #: "obtener el id de la competición ACB" y "obtener el id de la Euroliga".
+    #: Un dato que falta en una respuesta cuesta una vuelta entera de agente.
+    competitions: List[Dict[str, object]] = field(default_factory=list)
     date_range: Optional[List[str]] = None
     counts: Dict[str, int] = field(default_factory=dict)
 
@@ -183,7 +191,10 @@ def probe(engine: Engine) -> Capabilities:
             {"id": row[0], "label": row[1]}
             for row in conn.execute(text("SELECT id, label FROM seasons ORDER BY id DESC"))
         ]
-        competitions = [row[0] for row in conn.execute(text("SELECT name FROM competitions ORDER BY id"))]
+        competitions = [
+            {"id": row[0], "name": row[1]}
+            for row in conn.execute(text("SELECT id, name FROM competitions ORDER BY id"))
+        ]
         date_row = conn.execute(text("SELECT MIN(game_date), MAX(game_date) FROM games")).fetchone()
 
     date_range = [str(date_row[0]), str(date_row[1])] if date_row and date_row[0] else None

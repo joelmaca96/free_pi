@@ -41,8 +41,10 @@ services:
       - ./data:/data:ro
       # Único punto escribible de la interfaz: contador diario de preguntas al
       # asistente y votos de las respuestas (app/assistant/budget.py y
-      # feedback.py). Deliberadamente fuera de ./data para no abrir una vía de
-      # escritura sobre la base de datos.
+      # feedback.py). Es un MONTAJE APARTE, no un hueco escribible dentro de
+      # /data: el contenedor ve /data entero de solo lectura (incluida la base
+      # de datos) y solo /state escribible, aunque en el host los dos
+      # directorios estén uno dentro del otro.
       - ./data/assistant_state:/state
     expose:
       - "8501"

@@ -2,9 +2,12 @@
 
 Diseño completo en `doc/features/propuestas/07_onoff_y_duplas.md`. Punto de
 partida del documento (§1): el quinteto de cinco jugadores casi nunca tiene
-muestra — de las 724 combinaciones distintas que usó el Baskonia en toda la
-temporada, solo 2 llegan a 50 minutos juntas. Por eso esta pantalla se queda
-un nivel por debajo, donde el número empieza a significar algo:
+muestra — en la temporada 2025-2026 el Baskonia usó 724 combinaciones
+distintas y solo 2 llegaron a 50 minutos juntas. Ese dato concreto se queda
+AQUÍ, en la docstring, y no en la pantalla: es de una temporada y un equipo,
+y el selector de arriba sirve para cualquiera de los dos. Por eso esta
+pantalla se queda un nivel por debajo, donde el número empieza a significar
+algo:
 
 - **On/Off por jugador** (§2a): diferencia por 40 minutos con él en pista
   menos sin él, jugador a jugador.
@@ -50,10 +53,10 @@ capabilities = probe(engine)
 page_header("On/off y duplas")
 
 st.caption(
-    "El quinteto de cinco no tiene muestra: de las 724 combinaciones que usó el Baskonia en toda "
-    "la temporada, solo 2 llegan a 50 minutos juntas (§1 de la propuesta 07). Esta pantalla se "
-    "queda un nivel por debajo — jugador, pareja y trío — que es donde el número empieza a "
-    "significar algo."
+    "El quinteto de cinco casi nunca tiene muestra: un equipo usa cientos de combinaciones "
+    "distintas en una temporada y apenas un puñado llega a un rato juntas en pista (§1 de la "
+    "propuesta 07). Esta pantalla se queda un nivel por debajo — jugador, pareja y trío — que es "
+    "donde el número empieza a significar algo."
 )
 
 # ------------------------------------------------------------------ selector --
@@ -93,23 +96,24 @@ st.caption(
     "precisión que el dato no tiene."
 )
 
+st.divider()
+
+# Sin `lineup_stints` no hay On/Off, ni duplas, ni tríos: las tres secciones
+# necesitan tramos con marcador. Se dice UNA vez y esas tres secciones no se
+# pintan, en lugar de repetir tres cabeceras con el mismo "no se puede
+# calcular" debajo — el aviso ya explica qué falta, cómo activarlo y qué
+# sigue funcionando.
 if not capabilities.lineup_stints:
     st.warning(
         "Los quintetos de esta base de datos están agregados por partido, sin tramos de tiempo "
-        "ni marcador (`lineup_stints`): el On/Off y las duplas necesitan esos tramos y no se "
-        "pueden calcular todavía. Reingiere para activarlos. La sección **Con y sin**, más abajo, "
-        "no los necesita y sí funciona."
+        "ni marcador (`lineup_stints`): el On/Off, las duplas y los tríos necesitan esos tramos "
+        "y no se pueden calcular todavía. Reingiere para activarlos. La sección **Con y sin**, "
+        "más abajo, no los necesita y sí funciona."
     )
 
-st.divider()
-
 # ----------------------------------------------------------------- on/off --
-st.subheader("On/Off por jugador")
-
-if not capabilities.lineup_stints:
-    st.info("Sin `lineup_stints` no se puede calcular el On/Off individual.")
-    onoff = pd.DataFrame()
-else:
+if capabilities.lineup_stints:
+    st.subheader("On/Off por jugador")
     onoff = queries_assistant.player_on_off(engine, team_id, season_id, competition_id)
     if onoff.empty:
         st.info(f"No hay tramos de {team_label} en esta temporada.")
@@ -155,14 +159,10 @@ else:
         )
         glossary_expander(["on_minutes", "on_per_40", "off_minutes", "off_per_40", "on_off", "sample_flag"])
 
-st.divider()
+    st.divider()
 
-# ----------------------------------------------------------- duplas y tríos --
-st.subheader("Duplas")
-
-if not capabilities.lineup_stints:
-    st.info("Sin `lineup_stints` no se puede calcular la matriz de parejas.")
-else:
+    # ------------------------------------------------------- duplas y tríos --
+    st.subheader("Duplas")
     pairs = queries_assistant.player_combos(engine, team_id, season_id, size=2, competition_id=competition_id)
     reliable_pairs = pairs[pairs["reliable"]] if not pairs.empty else pairs
     if reliable_pairs.empty:
@@ -219,13 +219,9 @@ else:
         )
         glossary_expander(["plus_minus_per_40"])
 
-st.divider()
+    st.divider()
 
-st.subheader("Tríos")
-
-if not capabilities.lineup_stints:
-    st.info("Sin `lineup_stints` no se puede calcular el ranking de tríos.")
-else:
+    st.subheader("Tríos")
     trios = queries_assistant.player_combos(engine, team_id, season_id, size=3, competition_id=competition_id)
     reliable_trios = trios[trios["reliable"]] if not trios.empty else trios
     if reliable_trios.empty:

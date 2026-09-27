@@ -187,12 +187,18 @@ def _volatile_block(
     gaps = capabilities.missing_summary()
     gap_text = "\n".join(f"- {gap}" for gap in gaps) if gaps else "- (ninguna)"
     seasons = ", ".join(f"{s['label']} (id {s['id']})" for s in capabilities.seasons) or "(ninguna)"
+    # Con su id, como las temporadas: casi todas las herramientas de liga,
+    # equipo y quintetos aceptan `competition_id`, y sin el id aquí el modelo
+    # solo podía averiguarlo con `run_sql` (ver `Capabilities.competitions`).
+    competitions = (
+        ", ".join(f"{c['name']} (id {c['id']})" for c in capabilities.competitions) or "(ninguna)"
+    )
     date_range = " a ".join(capabilities.date_range) if capabilities.date_range else "(sin partidos)"
     return (
         "CONTEXTO DE ESTA SESIÓN\n"
         f"Hoy: {today}. Equipo propio: {own_team}. Temporada seleccionada: {season_label}.\n"
         f"Temporadas disponibles: {seasons}.\n"
-        f"Competiciones: {', '.join(capabilities.competitions) or '(ninguna)'}.\n"
+        f"Competiciones: {competitions}.\n"
         f"Rango de fechas con datos: {date_range}.\n"
         "LO QUE ESTA BASE DE DATOS NO PUEDE CONTESTAR (dilo tal cual si te lo preguntan):\n"
         f"{gap_text}"

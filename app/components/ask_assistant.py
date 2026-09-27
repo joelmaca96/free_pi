@@ -15,7 +15,7 @@ from typing import Optional
 
 import streamlit as st
 
-_ASSISTANT_PAGE = "pages/asistente.py"
+_ASSISTANT_PAGE = "screens/asistente.py"
 
 
 def ask_assistant_button(

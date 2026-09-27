@@ -31,6 +31,20 @@ _NUMBER_RE = re.compile(r"(?<![\w./,-])[-+]?\d{1,3}(?:[.,]\d+)?(?![\w/])")
 # son cifras que verificar y se trocean fatal (2026-05-03 -> 202, 6, 05, 03).
 _DATE_RE = re.compile(r"\b\d{4}[-/]\d{2,4}(?:[-/]\d{2})?\b")
 
+# Minutaje en notación de reloj (`20:28`), que es como se escribe el tiempo de
+# juego en baloncesto y como lo escribe el modelo sin que nadie se lo pida.
+# Medido en vivo: con "21 puntos en 20:28" la regex de números lo partía en
+# dos y marcaba el "28" de los segundos como cifra sin verificar, con la
+# respuesta entera correcta. Un falso positivo aquí es caro de una forma
+# particular — el aviso de cifras sin verificar ES el mecanismo de confianza
+# del asistente, y uno que salta sin motivo enseña a ignorar también los que
+# sí lo tienen.
+#
+# Se comprueba ENTERO, convertido a minutos decimales, no por trozos: así un
+# minutaje inventado sigue saltando. Los segundos se acotan a `[0-5]\d` para
+# no tragarse un marcador escrito a la europea ("94:88").
+_CLOCK_RE = re.compile(r"(?<![\w:.,])(\d{1,3}):([0-5]\d)(?![\d:])")
+
 # Números que no vale la pena comprobar: aparecen en cualquier texto ("los 5
 # jugadores", "el segundo cuarto") y perseguirlos llena el aviso de ruido
 # hasta que deja de leerse.
@@ -48,6 +62,11 @@ def _to_float(raw: str):
         return None
 
 
+def _clock_minutes(match) -> float:
+    """`20:28` -> 20.47 minutos, que es como lo guarda `player_game_stats.minutes`."""
+    return int(match.group(1)) + int(match.group(2)) / 60.0
+
+
 def _numbers_in(value: Any, seen: Set[float], depth: int = 0) -> None:
     """Recoge recursivamente todos los números de un resultado de herramienta."""
     if depth > 6:  # pragma: no cover - defensivo ante estructuras raras
@@ -57,6 +76,11 @@ def _numbers_in(value: Any, seen: Set[float], depth: int = 0) -> None:
     if isinstance(value, (int, float)):
         seen.add(round(float(value), 2))
     elif isinstance(value, str):
+        # Un minutaje que ya viene en formato reloj desde la herramienta cuenta
+        # por su valor decimal además de por sus dos mitades: si no, la
+        # respuesta que lo copia tal cual no casaría con nada.
+        for match in _CLOCK_RE.finditer(value):
+            seen.add(round(_clock_minutes(match), 2))
         for match in _NUMBER_RE.findall(value):
             number = _to_float(match)
             if number is not None:
@@ -83,6 +107,26 @@ def numbers_from_invocations(invocations: Iterable) -> Set[float]:
     return seen
 
 
+def numbers_in_text(text: str) -> Set[float]:
+    """Todas las cifras que aparecen en un texto, con la misma lectura que el verificador.
+
+    Existe para el banco de pruebas (`tools/assistant_eval.py`, propuesta 13),
+    que necesita preguntar lo contrario que `verify_numbers`: no "qué cifras de
+    la respuesta no salen del dato", sino "¿ha citado la respuesta los 21
+    puntos que tenía que citar?".
+
+    Es una función de cuatro líneas porque la alternativa era escribir un
+    segundo extractor de números en el guion de evaluación, y ahí está la
+    trampa: ese segundo extractor no sabría que `20:29` son 20.48 minutos ni
+    que `acb-104714` no son dos cifras, así que el set dorado mediría con una
+    regla distinta de la que usa el asistente en producción — y las dos
+    derivarían en cuanto una de las dos se tocase.
+    """
+    seen: Set[float] = set()
+    _numbers_in(_DATE_RE.sub(" ", text or ""), seen)
+    return seen
+
+
 def verify_numbers(text: str, invocations: Iterable) -> List[str]:
     """Cifras del texto que no aparecen en ningún resultado de herramienta.
 
@@ -95,13 +139,35 @@ def verify_numbers(text: str, invocations: Iterable) -> List[str]:
         return []
 
     available = numbers_from_invocations(invocations)
-    unverified: List[str] = []
-    for match in _NUMBER_RE.findall(_DATE_RE.sub(" ", text)):
-        number = _to_float(match)
+
+    def _matches(number: float) -> bool:
+        return any(abs(number - candidate) <= _TOLERANCE for candidate in available)
+
+    cleaned = _DATE_RE.sub(" ", text)
+
+    # Se recoge todo con su posición y se ordena al final, para que el aviso
+    # siga saliendo en orden de aparición aunque el minutaje se escanee aparte.
+    found: List[tuple] = []
+    for match in _CLOCK_RE.finditer(cleaned):
+        minutes = _clock_minutes(match)
+        halves = (float(match.group(1)), float(match.group(2)))
+        # O cuadra como minutaje, o cuadran sus dos mitades por separado (un
+        # marcador a la europea, "94:58", no es un minutaje inventado).
+        verified = _matches(minutes) or all(_matches(half) for half in halves)
+        found.append((match.start(), match.group(0), verified))
+
+    # Enmascarado conservando la longitud: el minutaje ya está comprobado
+    # entero y no debe volver a mirarse por trozos, pero las posiciones del
+    # resto del texto no pueden moverse.
+    masked = _CLOCK_RE.sub(lambda m: " " * len(m.group(0)), cleaned)
+    for match in _NUMBER_RE.finditer(masked):
+        number = _to_float(match.group(0))
         if number is None or abs(number) in _IGNORED:
             continue
-        if any(abs(number - candidate) <= _TOLERANCE for candidate in available):
-            continue
-        if match not in unverified:
-            unverified.append(match)
+        found.append((match.start(), match.group(0), _matches(number)))
+
+    unverified: List[str] = []
+    for _, raw, verified in sorted(found):
+        if not verified and raw not in unverified:
+            unverified.append(raw)
     return unverified

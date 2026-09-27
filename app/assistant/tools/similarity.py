@@ -1,7 +1,7 @@
 """Herramienta de similitud de jugadores (propuesta 11): "¿a quién se parece?"
 
 Reutiliza EXACTAMENTE el mismo motor que pinta el bloque "se parece a" de
-`components/player_dialog.py` y la página `pages/similitud.py`
+`components/player_dialog.py` y la página `screens/similitud.py`
 (`analytics.similarity`) — la respuesta del asistente y la de la pantalla no
 pueden divergir, porque las dos llaman a `build_player_vectors` +
 `most_similar` sobre las mismas tres consultas.
@@ -36,7 +36,7 @@ def build_league_vectors(ctx: ToolContext, season: int):
     """El vector de perfil de TODOS los jugadores de la liga esa temporada.
 
     Compartida entre la herramienta y las dos pantallas (`player_dialog.py`,
-    `pages/similitud.py`) para que las tres consultas de origen se pidan
+    `screens/similitud.py`) para que las tres consultas de origen se pidan
     siempre igual — ver el docstring del módulo.
     """
     index_df = queries.league_player_index(ctx.engine, season)
@@ -74,8 +74,9 @@ def _result_row(row, target_row, competition_labels: dict, *, group_weights=None
         "con la explicación de en qué se parecen y en qué se alejan. Sirve para dos preguntas: traducir a "
         "un rival desconocido a alguien que el equipo ya ha defendido, o buscar sustitutos de mercado para "
         "una baja. 'method' cambia la pregunta: cosine compara la FORMA del perfil (estilo, ignorando el "
-        "nivel absoluto, por defecto); euclidean compara también el NIVEL. Puramente estadístico — sin "
-        "altura ni peso en esta base de datos, puede emparejar posiciones distintas que produzcan parecido."
+        "nivel absoluto, por defecto); euclidean compara también el NIVEL. Puramente estadístico — el "
+        "cálculo no mira altura ni peso (aunque la base de datos los tenga), así que puede emparejar "
+        "posiciones distintas que produzcan parecido."
     ),
     parameters=schema(
         {

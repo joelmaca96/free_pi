@@ -20,6 +20,6 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 WorkingDirectory=/home/pi/free_pi
-ExecStart=/home/pi/free_pi/.venv/bin/python -m ingest.run_all --season 2025
+ExecStart=/home/pi/free_pi/.venv/bin/python -m ingest.run_all --season 2026
 # La ingesta escribe en data/baskonia.db (WAL); la interfaz solo lee, así que
 # no hace falta parar el contenedor `app` durante la ejecución.

@@ -56,33 +56,50 @@ except RuntimeError as exc:
 # `st.session_state["season_id"]` en vez de asumir "la más reciente" — así
 # se puede mirar una temporada pasada sin que se mezcle con la actual (ver
 # local/features/002-ajustes-interfaz/01_design.md).
+#
+# Preseleccionada la temporada más reciente CON PARTIDOS JUGADOS, no la más
+# reciente a secas: en cuanto la ingesta carga el calendario de la temporada
+# siguiente, esa temporada existe en `seasons` con cero partidos en `games`,
+# y arrancar ahí dejaba en blanco casi toda la aplicación (señales, carga de
+# minutos, quintetos, faltas, on/off, similitud) aunque la temporada
+# anterior estuviera entera en la base de datos. El calendario futuro no se
+# pierde por esto: "Próximo rival" y "Calendario" leen `upcoming_matchups`
+# sin filtrar por temporada (ver `queries.next_matchup`).
 seasons_df = queries.list_seasons(engine)
 season_labels = seasons_df.set_index("id")["label"].to_dict()
-default_season_id = seasons_df["id"].iloc[0] if not seasons_df.empty else None
+with_games = seasons_df.index[seasons_df["games"] > 0]
+default_index = int(with_games[0]) if len(with_games) else 0
 
 selected_season_id = st.sidebar.selectbox(
     "Temporada",
     options=list(season_labels.keys()),
     format_func=lambda sid: season_labels[sid],
-    index=0,
+    index=default_index,
 )
 st.session_state["season_id"] = selected_season_id
-st.session_state["is_current_season"] = selected_season_id == default_season_id
 
+# OJO: el directorio se llama `screens/`, NO `pages/`. Streamlit auto-detecta
+# cualquier carpeta literalmente llamada `pages/` junto al script de entrada y
+# la trata como su navegación "v1" propia — cuando eso coincide con un
+# `st.navigation()` manual como este, cada clic de página ejecuta SOLO el
+# fichero de esa página, sin volver a correr este `Home.py` antes (así que
+# `st.session_state["season_id"]`, puesto arriba, nunca llega a existir y
+# cada pantalla revienta con KeyError). Renombrar a `screens/` evita el
+# choque; si esto vuelve a llamarse `pages/` alguna vez, vuelve el bug.
 pg = st.navigation(
     [
-        st.Page("pages/estado_equipo.py", title="Estado del equipo", default=True),
-        st.Page("pages/plantilla.py", title="Plantilla"),
-        st.Page("pages/proximo_rival.py", title="Próximo rival"),
-        st.Page("pages/partidos_anteriores.py", title="Partidos anteriores"),
-        st.Page("pages/quintetos.py", title="On/off y duplas"),
-        st.Page("pages/similitud.py", title="Similitud de jugadores"),
+        st.Page("screens/estado_equipo.py", title="Estado del equipo", default=True),
+        st.Page("screens/plantilla.py", title="Plantilla"),
+        st.Page("screens/proximo_rival.py", title="Próximo rival"),
+        st.Page("screens/partidos_anteriores.py", title="Partidos anteriores"),
+        st.Page("screens/quintetos.py", title="On/off y duplas"),
+        st.Page("screens/similitud.py", title="Similitud de jugadores"),
         # Chat de scouting sobre los datos cargados
         # (`local/features/005-chatbot/01_design.md`). Va la última a
         # propósito: es la única pestaña que depende de un servicio externo
         # (el proveedor de modelo), y si no está configurado se explica sola
         # sin afectar a las otras cuatro.
-        st.Page("pages/asistente.py", title="Asistente"),
+        st.Page("screens/asistente.py", title="Asistente"),
     ]
 )
 pg.run()

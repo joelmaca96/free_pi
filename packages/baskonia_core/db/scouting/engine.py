@@ -131,6 +131,10 @@ _ADDITIVE_COLUMN_MIGRATIONS = [
     ("games", "referees", "TEXT"),
     ("games", "home_coach", "TEXT"),
     ("games", "away_coach", "TEXT"),
+    # Ficha física desde la API de plantillas de Euroliga
+    # (`ingest/euroleague/roster.py`). `height_cm` ya existía en `schema.sql`
+    # pero sin nadie que la escribiera; `weight_kg` es nueva.
+    ("players", "weight_kg", "INTEGER"),
 ]
 
 # Las VISTAS (`VIEW_NAMES`) no se migran con `ALTER TABLE`: se recrean enteras

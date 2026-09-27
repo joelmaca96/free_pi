@@ -5,3 +5,9 @@
 requests>=2.31.0
 beautifulsoup4>=4.12.0
 SQLAlchemy>=2.0.0
+
+# Reduce los headshots de Euroliga al descargarlos (ingest/euroleague/roster.py::shrink_photo).
+# Sin ella la ingesta funciona igual, pero guarda las fotos a tamaño original
+# (~600 KB cada una) y `avatar.py` las embebe enteras en el HTML: 15 MB de
+# página por pantalla de plantilla.
+Pillow>=10.0

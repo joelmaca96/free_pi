@@ -82,10 +82,19 @@ _LEADING_ARTICLES = ("el ", "la ", "los ", "las ", "un ", "una ")
 
 @dataclass(frozen=True)
 class Candidate:
-    """Un candidato de resolución, con de dónde salió y cuánto se parece.
+    """Un candidato de resolución, con de dónde salió, cuánto se parece y cuánto dato tiene.
 
     `matched_by` no es decorativo: es lo que permite leer la traza del chat y
     entender por qué el asistente creyó que "el Fener" era el Fenerbahçe.
+
+    `games` es la otra mitad, y existe por un caso real (el único pulgar abajo
+    del registro de feedback): el `score` mide parecido de NOMBRE y nada más,
+    así que una fila fantasma —un club duplicado por cambio de patrocinador,
+    con cero partidos— empata a 0.98 con el club de verdad y el asistente
+    gasta el turno preguntando a cuál de los dos se refiere el usuario. Esa
+    pregunta no tiene respuesta buena: son el mismo club y solo uno tiene
+    datos. Con el recuento delante, el empate se rompe por lo único que
+    importa aquí — de cuál de los dos se puede hablar.
     """
 
     id: str
@@ -94,6 +103,10 @@ class Candidate:
     team: Optional[str]
     score: float
     matched_by: str
+    #: Partidos de esta entidad EN ESTA base de datos (partidos jugados para
+    #: un equipo, líneas de boxscore para un jugador). Cero significa que
+    #: ninguna herramienta del catálogo podrá decir nada de ella.
+    games: int = 0
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -170,24 +183,33 @@ def _score(query: str, raw_query: str, entity_id: str, name: str, external_ids: 
 
 
 def _load_teams(engine: Engine) -> List[tuple]:
+    # El recuento va como subconsulta escalar y NO como un `JOIN` más: ya hay
+    # un `LEFT JOIN` con `GROUP BY` para agregar los ids externos, y unir
+    # además `games` multiplicaría las filas antes de contarlas.
     sql = text(
         """
         SELECT t.id, t.name,
-               COALESCE(GROUP_CONCAT(LOWER(x.external_id), '|'), '') AS external_ids
+               COALESCE(GROUP_CONCAT(LOWER(x.external_id), '|'), '') AS external_ids,
+               (SELECT COUNT(*) FROM games g
+                 WHERE g.home_team_id = t.id OR g.away_team_id = t.id) AS games
         FROM teams t
         LEFT JOIN team_external_ids x ON x.team_id = t.id
         GROUP BY t.id, t.name
         """
     )
     with engine.connect() as conn:
-        return [(row[0], row[1], set(filter(None, row[2].split("|")))) for row in conn.execute(sql)]
+        return [
+            (row[0], row[1], set(filter(None, row[2].split("|"))), int(row[3] or 0))
+            for row in conn.execute(sql)
+        ]
 
 
 def _load_players(engine: Engine) -> List[tuple]:
     sql = text(
         """
         SELECT p.id, p.name, t.name AS team_name,
-               COALESCE(GROUP_CONCAT(LOWER(x.external_id), '|'), '') AS external_ids
+               COALESCE(GROUP_CONCAT(LOWER(x.external_id), '|'), '') AS external_ids,
+               (SELECT COUNT(*) FROM player_game_stats s WHERE s.player_id = p.id) AS games
         FROM players p
         JOIN teams t ON t.id = p.team_id
         LEFT JOIN player_external_ids x ON x.player_id = p.id
@@ -196,7 +218,7 @@ def _load_players(engine: Engine) -> List[tuple]:
     )
     with engine.connect() as conn:
         return [
-            (row[0], row[1], row[2], set(filter(None, row[3].split("|"))))
+            (row[0], row[1], row[2], set(filter(None, row[3].split("|"))), int(row[4] or 0))
             for row in conn.execute(sql)
         ]
 
@@ -237,24 +259,66 @@ def resolve_entity(engine: Engine, query: str, kind: Optional[str] = None, limit
             return [Candidate(id=team_id, name=name, kind="team", team=None, score=1.0, matched_by="equipo propio")]
 
     if kind in (None, "team"):
-        for team_id, name, external_ids in _load_teams(engine):
+        for team_id, name, external_ids, games in _load_teams(engine):
             score, matched_by = _score(normalized, raw_key, team_id, name, external_ids)
             if score:
-                candidates.append(Candidate(team_id, name, "team", None, score, matched_by))
+                candidates.append(
+                    Candidate(team_id, name, "team", None, score, matched_by, games=games)
+                )
 
     if kind in (None, "player"):
-        for player_id, name, team_name, external_ids in _load_players(engine):
+        for player_id, name, team_name, external_ids, games in _load_players(engine):
             score, matched_by = _score(normalized, raw_key, player_id, name, external_ids)
             if score:
-                candidates.append(Candidate(player_id, name, "player", team_name, score, matched_by))
+                candidates.append(
+                    Candidate(player_id, name, "player", team_name, score, matched_by, games=games)
+                )
 
-    candidates.sort(key=lambda c: (-c.score, c.name))
+    # A igualdad de parecido, primero el que tiene datos: es el único desempate
+    # que no es arbitrario (ver `Candidate.games`).
+    candidates.sort(key=lambda c: (-c.score, -c.games, c.name))
     return candidates[:limit]
 
 
+def tied_candidates(candidates: List[Candidate]) -> List[Candidate]:
+    """Los candidatos que empatan con el mejor, el mejor incluido."""
+    if not candidates:
+        return []
+    best = candidates[0].score
+    return [c for c in candidates if best - c.score < _TIE_MARGIN]
+
+
+def ghost_candidates(candidates: List[Candidate]) -> List[Candidate]:
+    """Candidatos empatados de los que esta base de datos no puede decir nada.
+
+    Se devuelven aparte —y la herramienta los nombra en su `note`— en vez de
+    esconderlos: apartar una fila fantasma en silencio sería el mismo pecado
+    que elegir en silencio entre dos Howard. El usuario tiene que poder ver
+    que existía y por qué no se ha usado.
+    """
+    tied = tied_candidates(candidates)
+    return [] if all(c.games == 0 for c in tied) else [c for c in tied if c.games == 0]
+
+
 def is_ambiguous(candidates: List[Candidate]) -> bool:
-    """`True` si los dos mejores candidatos están tan cerca que elegir sería inventar."""
-    return len(candidates) >= 2 and (candidates[0].score - candidates[1].score) < _TIE_MARGIN
+    """`True` si quedan dos candidatos CON DATOS tan cerca que elegir sería inventar.
+
+    La regla de §5.1 sigue intacta donde importa: tres Howard con partidos
+    cada uno siguen siendo ambiguos y el modelo pregunta. Lo que ya no cuenta
+    como empate es una fila sin un solo partido cargado (ver `Candidate.games`),
+    porque ninguna herramienta del catálogo podría contestar sobre ella: la
+    pregunta "¿a cuál te refieres?" tendría una única respuesta útil, y
+    hacerla cuesta un turno entero.
+
+    Si NINGUNO de los empatados tiene datos, se sigue considerando ambiguo:
+    ahí no hay ninguna razón para preferir uno, y el asistente debe decir que
+    no tiene nada de ninguno en vez de elegir a cara o cruz.
+    """
+    tied = tied_candidates(candidates)
+    if len(tied) < 2:
+        return False
+    with_data = [c for c in tied if c.games > 0]
+    return len(with_data) != 1
 
 
 # ---------------------------------------------------------------------------

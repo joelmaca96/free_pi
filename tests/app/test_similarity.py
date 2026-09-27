@@ -370,6 +370,31 @@ def test_explain_similarity_weight_changes_which_dimension_is_called_out_as_fart
 
 
 def test_similarity_caveat_mentions_the_known_data_gaps():
-    """Aviso de §5 siempre presente: sin altura, sin edad fiable, una temporada."""
+    """Aviso de §5 siempre presente: el cálculo ignora el físico, y describe una sola temporada."""
     assert "altura" in sim.SIMILARITY_CAVEAT.lower()
     assert "temporada" in sim.SIMILARITY_CAVEAT.lower()
+
+
+def test_similarity_caveat_does_not_claim_the_physique_is_missing():
+    """El aviso decía "sin altura ni peso (no se registran de esta fuente)" y "sin edad fiable (solo
+    12 jugadores...)". Dejó de ser cierto en cuanto `ingest/euroleague/roster.py` empezó a traer
+    altura, peso y fecha de nacimiento. La limitación real es otra —el cálculo no MIRA el físico—,
+    y confundirlas engaña al que lee: le hace pensar que el dato no existe.
+
+    El test comprueba las dos mitades: que no se afirme la carencia, y que sí se avise de que el
+    cálculo los ignora (que es lo que importa para no fichar a un base creyendo que es un cuatro).
+    """
+    caveat = sim.SIMILARITY_CAVEAT.lower()
+
+    assert "no se registran" not in caveat
+    assert "sin altura ni peso" not in caveat
+    assert "solo 12 jugadores" not in caveat
+    assert "no los usa" in caveat or "no mira" in caveat
+
+
+def test_no_similarity_dimension_is_physical():
+    """Lo que sostiene el aviso: las 15 dimensiones son percentiles de producción y de reparto de
+    tiro. Si algún día entra una de físico, el aviso pasa a ser mentira y hay que reescribirlo."""
+    keys = {dim["key"] for dim in sim.DIMENSIONS}
+
+    assert not keys & {"height_cm", "weight_kg", "height", "weight", "age", "birth_date"}

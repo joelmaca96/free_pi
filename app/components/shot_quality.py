@@ -50,23 +50,29 @@ def quality_metrics(
         st.caption(shot_quality.verdict(summary))
         return
 
-    xpps_label = "xPPS concedido" if conceded else "xPPS generado"
-    pps_label = "PPS encajado" if conceded else "PPS real"
-    diff_label = "Acierto del rival sobre lo esperado" if conceded else "Acierto sobre lo esperado"
+    # Etiquetas CORTAS ("xPPS", no "xPPS concedido"; "PPS − xPPS", no "Acierto
+    # del rival sobre lo esperado"): las tres métricas se reparten media
+    # pantalla en las tres llamadas de la app (dos bloques en paralelo,
+    # ataque y defensa), o sea ~100px cada una, y `st.metric` recorta la
+    # etiqueta que no cabe — se leía "xPPS gen…", "Acierto so…". Lo que
+    # distingue generado de concedido ya lo dice el titular de cada bloque
+    # ("Lo que generamos" / "Lo que le concedimos a X") y lo repite la frase
+    # de debajo; el matiz va además al `help`, no a una etiqueta cortada.
+    # "PPS − xPPS" es, encima, la misma etiqueta que la columna equivalente
+    # de `player_quality_table`, justo debajo en dos de las tres pantallas.
+    side = "concedido" if conceded else "generado"
+    xpps_help = f"{glossary.help_text('xpps')} Aquí, el {side}."
+    pps_help = f"{glossary.help_text('pps')} Aquí, el {'encajado' if conceded else 'real'}."
 
-    # `help=` en las tres: xPPS y PPS se diferencian en una letra y significan
-    # cosas opuestas (la decisión contra el acierto), así que la etiqueta sola
-    # no basta. El texto sale del glosario, para que diga lo mismo aquí que en
-    # la cabecera de la tabla de abajo y que en las otras dos pantallas.
     xpps_col, pps_col, diff_col = st.columns(3)
-    xpps_col.metric(xpps_label, shot_quality.format_pps(summary["xpps"]), help=glossary.help_text("xpps"))
-    pps_col.metric(pps_label, shot_quality.format_pps(summary["pps"]), help=glossary.help_text("pps"))
+    xpps_col.metric("xPPS", shot_quality.format_pps(summary["xpps"]), help=xpps_help)
+    pps_col.metric("PPS", shot_quality.format_pps(summary["pps"]), help=pps_help)
     if summary["reliable"]:
         diff_col.metric(
-            diff_label, shot_quality.format_diff(summary["diff_shrunk"]), help=glossary.help_text("diff_shrunk")
+            "PPS − xPPS", shot_quality.format_diff(summary["diff_shrunk"]), help=glossary.help_text("diff_shrunk")
         )
     else:
-        diff_col.metric(diff_label, "—", help=glossary.help_text("diff_shrunk"))
+        diff_col.metric("PPS − xPPS", "—", help=glossary.help_text("diff_shrunk"))
         diff_col.caption(f"Muestra insuficiente ({summary['shots']} tiros).")
     st.caption(
         shot_quality.verdict(

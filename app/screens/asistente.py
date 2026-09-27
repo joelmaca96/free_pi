@@ -110,6 +110,18 @@ def _render_turn(entry: dict, index: int) -> None:
     st.markdown(entry["text"])
     render.render_artifacts(entry.get("artifacts") or [], engine)
 
+    if entry.get("wrapped_up"):
+        # El turno llegó a un tope y se redactó con lo ya consultado (ver
+        # `Agent._wrap_up`). Decirlo importa: la respuesta puede dejarse una
+        # parte de la pregunta fuera, y una respuesta parcial que no avisa de
+        # que es parcial es peor que una disculpa — el usuario no tiene forma
+        # de saber que le falta la mitad.
+        st.info(
+            "Esta respuesta se ha redactado con lo consultado hasta agotar el presupuesto "
+            "del turno: puede dejarse alguna parte de la pregunta fuera. Pregúntala por "
+            "partes si necesitas el resto.",
+            icon=":material/hourglass_bottom:",
+        )
     if entry.get("unverified"):
         st.warning(
             "Cifras sin verificar contra los datos consultados: "
@@ -253,6 +265,7 @@ st.session_state["assistant_history"].append(
         "trace": trace_lines,
         "provenance": render.provenance_line(turn.invocations),
         "unverified": turn.unverified_numbers,
+        "wrapped_up": turn.wrapped_up,
         "tools": [inv.name for inv in turn.invocations],
         "vote": None,
     }

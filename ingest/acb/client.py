@@ -144,6 +144,57 @@ class _WeekNotFound(Exception):
     """Señal interna: `weekId` fuera del rango de la edición (límite de temporada)."""
 
 
+class _SourceServerError(requests.HTTPError):
+    """Señal interna: 5xx de la API de ACB (fallo de ellos, no de lo que se pidió).
+
+    VERIFICADO EN VIVO (2026-09-11): `weekId=3022` de la edición 91 devuelve
+    500 de forma persistente (no transitoria), mientras la semana anterior
+    (3021) responde 200 y la siguiente (3023) responde el 400 normal de
+    "Week with ID N is not valid or does not exist" - o sea, UNA semana
+    concreta envenenada del lado de ACB con el resto del calendario sano.
+    Hasta entonces solo el 400 tenía tratamiento propio aquí y cualquier otro
+    estado salía por `raise_for_status()`, así que ese único 500 tumbaba el
+    recorrido ENTERO del calendario (la ingesta diaria de la Raspberry falló
+    así: `acb_upcoming: FALLÓ -> 500 Server Error`).
+
+    Subclase de `requests.HTTPError` a propósito: quien no distinga este caso
+    -todos los endpoints de partido, que no recorren nada- sigue viendo
+    exactamente el mismo fallo HTTP que antes.
+    """
+
+
+class AcbSourceUnavailable(RuntimeError):
+    """La fuente ACB no responde para NINGUNA semana de un recorrido.
+
+    Es la otra mitad de tolerar un 5xx suelto (ver `_WalkTally`): saltarse la
+    semana rota vale cuando el resto del calendario contesta, pero si TODAS
+    contestan 5xx -API caída, `x-apikey` rotada- devolver un calendario vacío
+    sería peor que fallar, porque tiene la misma pinta que "esta temporada no
+    tiene partidos todavía" y la ingesta terminaría en verde sin datos.
+    """
+
+
+class _WalkTally:
+    """Cómo han respondido los `weekId` de UN recorrido de calendario.
+
+    Solo existe para poder distinguir al final "una semana rota" (se salta
+    como hueco) de "la fuente no responde" (ver `AcbSourceUnavailable`).
+    """
+
+    def __init__(self) -> None:
+        self.ok = 0
+        self.server_errors = 0
+
+    def check(self, season: int) -> None:
+        """Falla si el recorrido se fue entero en 5xx sin una sola semana buena."""
+        if self.server_errors and not self.ok:
+            raise AcbSourceUnavailable(
+                f"ACB: las {self.server_errors} semanas pedidas del calendario de {season} "
+                "han respondido 5xx y ninguna 200 - la fuente no responde (API caída o "
+                "`x-apikey` inválida), no es una semana rota suelta."
+            )
+
+
 class AcbClient:
     """Cliente de red de la fuente ACB."""
 
@@ -156,6 +207,9 @@ class AcbClient:
         # para no tener que volver a pedir el calendario por partido.
         self._match_cache: Dict[str, Dict[str, Any]] = {}
         self._season_by_match: Dict[str, int] = {}
+        # El RECORRIDO del calendario, no los partidos sueltos: ver el
+        # comentario dentro de `fetch_season_finished_matches`.
+        self._finished_by_season: Dict[int, List[Dict[str, Any]]] = {}
 
     def _get(self, url: str) -> Any:
         elapsed = time.monotonic() - self._last_request
@@ -165,6 +219,10 @@ class AcbClient:
         self._last_request = time.monotonic()
         if response.status_code == 400:
             raise _WeekNotFound(response.text)
+        if response.status_code >= 500:
+            raise _SourceServerError(
+                f"{response.status_code} Server Error for url: {url}", response=response
+            )
         response.raise_for_status()
         return response.json()
 
@@ -176,6 +234,33 @@ class AcbClient:
         if week_id is not None:
             url += f"&weekId={week_id}"
         return self._get(url)
+
+    def _get_walked_week(
+        self, edition_id: int, week_id: int, tally: _WalkTally
+    ) -> Optional[Dict[str, Any]]:
+        """Una semana del RECORRIDO del calendario, o `None` si es un hueco.
+
+        Un 5xx sale por el MISMO camino que el 400 de semana inexistente -el
+        hueco que `_MAX_CONSECUTIVE_GAPS` ya tolera- porque una semana rota
+        del lado de ACB (verificada una real, ver `_SourceServerError`) no
+        tiene por qué tumbar el resto del calendario. `tally` se queda con la
+        cuenta para que el recorrido entero pueda fallar igualmente si TODAS
+        las semanas fueron así (ver `_WalkTally.check`).
+
+        Solo para el recorrido: la semana ancla (`week_id=None`) se pide con
+        `_get_matches_page` a pelo, para que un 5xx ahí siga siendo un fallo
+        visible - sin ancla no hay recorrido que tolerar.
+        """
+        try:
+            page = self._get_matches_page(edition_id, week_id)
+        except _WeekNotFound:
+            return None
+        except _SourceServerError as exc:
+            tally.server_errors += 1
+            logger.warning("ACB: weekId=%s se salta como hueco -> %s", week_id, exc)
+            return None
+        tally.ok += 1
+        return page
 
     def fetch_season_finished_matches(self, season: int) -> List[Dict[str, Any]]:
         """Partidos finalizados (`matchStatus == "FINALIZED"`) de una temporada.
@@ -203,21 +288,41 @@ class AcbClient:
         más ancho que el ya visto arrastraría partidos de otras temporadas;
         (3) `_MAX_TOTAL_WEEKS_WALKED` como techo absoluto de peticiones, por
         si semanas antiguas ajenas a cualquier temporada siguen devolviendo
-        200 en vez de 400 (verificado en vivo que puede pasar).
+        200 en vez de 400 (verificado en vivo que puede pasar); (4) una
+        semana que responde 5xx entra por ese mismo camino de hueco en vez de
+        tumbar el recorrido entero - hay una real y persistente, ver
+        `_SourceServerError` -, pero si TODAS responden 5xx el recorrido falla
+        (`AcbSourceUnavailable`) en vez de devolver un calendario vacío que no
+        se distingue de una temporada sin empezar.
         """
+        # Memoizado POR TEMPORADA en la vida del cliente. Recorrer el
+        # calendario son ~40 peticiones (una por semana, con
+        # `ACB_REQUEST_DELAY` entre medias): un coste que se paga una vez sin
+        # problema al hacer el backfill de la temporada entera, pero que se
+        # convierte en el cuello de botella en cuanto alguien llama a
+        # `run_single_game` en bucle — cada partido volvía a recorrer las 40
+        # semanas antes de bajarse el suyo, unos 20 s de peaje por partido.
+        # Con 379 partidos que recargar (reparación de identidades, ver
+        # `tools/repair_merged_players.py`) eso eran horas de espera contra
+        # minutos de trabajo real. `_match_cache` ya existía, pero cachea
+        # partidos sueltos, no el recorrido que hay que hacer para
+        # encontrarlos.
+        if season in self._finished_by_season:
+            return self._finished_by_season[season]
+
         edition_id = season_to_edition_id(season)
         anchor = self._get_matches_page(edition_id, week_id=None)
         week_id = anchor["selectedFilters"]["week"]
         date_min, date_max = _season_date_bounds(season)
 
         matches_by_id: Dict[Any, Dict[str, Any]] = {}
+        tally = _WalkTally()
         consecutive_gaps = 0
         weeks_walked = 0
         while consecutive_gaps <= _MAX_CONSECUTIVE_GAPS and weeks_walked < _MAX_TOTAL_WEEKS_WALKED:
             weeks_walked += 1
-            try:
-                page = self._get_matches_page(edition_id, week_id)
-            except _WeekNotFound:
+            page = self._get_walked_week(edition_id, week_id, tally)
+            if page is None:
                 consecutive_gaps += 1
                 week_id -= 1
                 continue
@@ -226,12 +331,14 @@ class AcbClient:
                 if date_min <= str(match.get("startDateTime", ""))[:10] <= date_max:
                     matches_by_id[match["id"]] = match
             week_id -= 1
+        tally.check(season)
 
         finished = [m for m in matches_by_id.values() if m.get("matchStatus") == "FINALIZED"]
         for match in finished:
             key = str(match["id"])
             self._match_cache[key] = match
             self._season_by_match[key] = season
+        self._finished_by_season[season] = finished
         return finished
 
     def fetch_season_scheduled_matches(self, season: int) -> Tuple[List[Dict[str, Any]], Dict[str, Dict[str, Any]]]:
@@ -285,21 +392,22 @@ class AcbClient:
 
         _collect(anchor)
 
+        tally = _WalkTally()
         for step in (-1, 1):
             week_id = anchor_week + step
             consecutive_gaps = 0
             weeks_walked = 0
             while consecutive_gaps <= _MAX_CONSECUTIVE_GAPS and weeks_walked < _MAX_TOTAL_WEEKS_WALKED:
                 weeks_walked += 1
-                try:
-                    page = self._get_matches_page(edition_id, week_id)
-                except _WeekNotFound:
+                page = self._get_walked_week(edition_id, week_id, tally)
+                if page is None:
                     consecutive_gaps += 1
                     week_id += step
                     continue
                 consecutive_gaps = 0
                 _collect(page)
                 week_id += step
+        tally.check(season)
 
         scheduled = [m for m in matches_by_id.values() if m.get("matchStatus") != "FINALIZED"]
         return scheduled, teams_by_id

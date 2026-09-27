@@ -5,8 +5,8 @@
 desde el último partido —en CUALQUIER competición, el matiz que motiva toda
 la propuesta—, su carga de minutos reciente jugador a jugador y cómo rinde el
 equipo con poco descanso frente a con más. Mismas tres consultas que pintan
-los bloques de "Carga de minutos" (`app/pages/estado_equipo.py`) y "Fatiga y
-descanso" (`app/pages/proximo_rival.py`) — `queries.rest_days`/
+los bloques de "Carga de minutos" (`app/screens/estado_equipo.py`) y "Fatiga y
+descanso" (`app/screens/proximo_rival.py`) — `queries.rest_days`/
 `rolling_load`/`performance_by_rest` —, aquí en una sola llamada en vez de en
 varios bloques de pantalla.
 """

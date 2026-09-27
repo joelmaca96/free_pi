@@ -1,7 +1,7 @@
 """Tests de `app/data/queries.py`: por ahora, solo `team_scouting_season`.
 
 Es la pieza que decide de qué temporada sale el scouting de un rival en
-"Próximo rival" (`app/pages/proximo_rival.py`) cuando la temporada
+"Próximo rival" (`app/screens/proximo_rival.py`) cuando la temporada
 seleccionada todavía no tiene partidos suyos — cae a la última temporada con
 datos, sin mirar nunca hacia delante, y lo señala (`is_fallback`). Caso real
 documentado en la propia función: el Baskonia arranca 2026-2027 contra el

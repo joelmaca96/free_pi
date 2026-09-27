@@ -9,10 +9,11 @@ en vez de golpear la red real.
 from urllib.parse import parse_qs, urlparse
 
 import pytest
+import requests
 
 import ingest.acb.client as client_module
 from ingest.acb.adapter import build_raw_game
-from ingest.acb.client import AcbClient, season_to_edition_id
+from ingest.acb.client import AcbClient, AcbSourceUnavailable, season_to_edition_id
 
 
 @pytest.fixture(autouse=True)
@@ -41,21 +42,32 @@ class _FakeResponse:
 class _FakeSession:
     """Simula `Competition/matches` (paginado por `weekId`), `Result/boxscores`, `MatchShots` y `PlayByPlay`."""
 
-    def __init__(self, edition_id, matches_by_week, last_week, boxscores, shots=None, plays=None, match_headers=None):
+    def __init__(self, edition_id, matches_by_week, last_week, boxscores, shots=None, plays=None,
+                 match_headers=None, server_error_weeks=()):
         self.headers = {}
         self.edition_id = edition_id
         self.matches_by_week = matches_by_week
         self.last_week = last_week
+        # `weekId` que contestan 500 en vez de 200/400. Caso real y persistente
+        # (2026-09-11): la semana 3022 de la edición 91 - ver
+        # `ingest.acb.client._SourceServerError`.
+        self.server_error_weeks = set(server_error_weeks)
         self.boxscores = boxscores
         self.shots = shots or {}
         self.plays = plays or {}
         self.match_headers = match_headers or {}
+        # Para poder afirmar CUÁNTAS peticiones se hacen, no solo qué devuelven
+        # (ver `test_fetch_season_finished_matches_walks_the_calendar_only_once`).
+        self.requested_urls = []
 
     def get(self, url, timeout=30):
+        self.requested_urls.append(url)
         parsed = urlparse(url)
         qs = parse_qs(parsed.query)
         if parsed.path.endswith("/Competition/matches"):
             week_id = int(qs["weekId"][0]) if "weekId" in qs else self.last_week
+            if week_id in self.server_error_weeks:
+                return _FakeResponse(500, text="500 Server Error")
             if week_id not in self.matches_by_week:
                 return _FakeResponse(400, text=f'"Week with ID {week_id} is not valid or does not exist."')
             return _FakeResponse(
@@ -179,6 +191,23 @@ def test_fetch_season_finished_matches_walks_back_until_week_boundary():
     matches = client.fetch_season_finished_matches(2025)
 
     assert {m["id"] for m in matches} == {1001, 1003}
+
+
+def test_fetch_season_finished_matches_walks_the_calendar_only_once():
+    """Recorrer el calendario son ~40 peticiones con `ACB_REQUEST_DELAY` entre medias. Se paga
+    una vez sin problema en un backfill, pero `run_single_game` lo llamaba por CADA partido:
+    recargar los 379 de la reparación de identidades eran horas de peaje contra minutos de
+    trabajo. La segunda llamada tiene que salir de memoria, sin tocar la red."""
+    matches_by_week = {2985: [_match(1001, 10, 20)], 2984: [_match(1002, 20, 30)]}
+    session = _FakeSession(edition_id=90, matches_by_week=matches_by_week, last_week=2985, boxscores={})
+    client = AcbClient(session=session)
+
+    first = client.fetch_season_finished_matches(2025)
+    requests_after_first = len(session.requested_urls)
+    second = client.fetch_season_finished_matches(2025)
+
+    assert {m["id"] for m in second} == {m["id"] for m in first}
+    assert len(session.requested_urls) == requests_after_first, "ha vuelto a recorrer el calendario"
 
 
 def test_fetch_game_uses_cached_match_and_builds_common_contract():
@@ -522,3 +551,76 @@ def test_a_player_row_without_free_throws_leaves_them_null_not_zero():
 
     home_player = next(p for p in raw["players"] if p["player_id"] == "501")
     assert home_player["ftm"] is None and home_player["fta"] is None
+
+
+def test_fetch_season_finished_matches_skips_a_week_that_returns_500():
+    """Una semana rota del lado de ACB no puede tumbar el recorrido entero.
+
+    Verificado en vivo (2026-09-11) con la edición 91: `weekId=3022` devuelve
+    500 de forma persistente mientras 3021 responde 200 - antes de esto,
+    cualquier estado que no fuese 400 salía por `raise_for_status()` y ese
+    único 500 abortaba el calendario completo.
+    """
+    matches_by_week = {
+        2985: [_match(1001, 10, 20)],
+        2984: [_match(1002, 30, 40)],  # solo se ve si el 500 de 2983 no aborta el recorrido
+    }
+    session = _FakeSession(
+        edition_id=90, matches_by_week=matches_by_week, last_week=2985, boxscores={},
+        server_error_weeks={2983},
+    )
+    client = AcbClient(session=session)
+
+    matches = client.fetch_season_finished_matches(2025)
+
+    assert {m["id"] for m in matches} == {1001, 1002}
+
+
+def test_fetch_season_scheduled_matches_skips_a_week_that_returns_500():
+    """El caso que tumbó la ingesta diaria: `acb_upcoming` con una semana envenenada."""
+    matches_by_week = {
+        2987: [_match(2001, 10, 20, status="SCHEDULED", start="2026-09-26T18:00:00Z")],  # ancla
+        2989: [_match(2002, 30, 40, status="SCHEDULED", start="2026-10-10T18:00:00Z")],
+        2986: [_match(2003, 50, 60, status="SCHEDULED", start="2026-09-19T18:00:00Z")],
+    }
+    session = _FakeSession(
+        edition_id=91, matches_by_week=matches_by_week, last_week=2987, boxscores={},
+        server_error_weeks={2988},  # entre el ancla y 2989, como la 3022 real
+    )
+    client = AcbClient(session=session)
+
+    scheduled, _teams = client.fetch_season_scheduled_matches(2026)
+
+    assert {m["id"] for m in scheduled} == {2001, 2002, 2003}
+
+
+def test_a_calendar_walk_that_is_all_server_errors_fails_instead_of_returning_empty():
+    """Si TODAS las semanas dan 5xx (API caída o `x-apikey` rotada), hay que fallar.
+
+    Devolver un calendario vacío sería peor que fallar: no se distingue de una
+    temporada que todavía no tiene partidos, así que la ingesta terminaría en
+    verde sin haber cargado nada.
+    """
+    anchor = 2987
+    matches_by_week = {anchor: [_match(2001, 10, 20, status="SCHEDULED", start="2026-09-26T18:00:00Z")]}
+    session = _FakeSession(
+        edition_id=91, matches_by_week=matches_by_week, last_week=anchor, boxscores={},
+        # Todo menos el ancla: el recorrido entero se va en 5xx.
+        server_error_weeks=set(range(anchor - 200, anchor + 201)) - {anchor},
+    )
+    client = AcbClient(session=session)
+
+    with pytest.raises(AcbSourceUnavailable):
+        client.fetch_season_scheduled_matches(2026)
+
+
+def test_a_500_on_the_anchor_week_still_fails():
+    """Sin semana ancla no hay recorrido que tolerar: el 5xx sigue siendo un fallo visible."""
+    session = _FakeSession(
+        edition_id=91, matches_by_week={2987: []}, last_week=2987, boxscores={},
+        server_error_weeks={2987},
+    )
+    client = AcbClient(session=session)
+
+    with pytest.raises(requests.HTTPError):
+        client.fetch_season_scheduled_matches(2026)

@@ -1,6 +1,6 @@
 """Test de la página del chat de punta a punta, con `st.testing.v1.AppTest`.
 
-Ejecuta el script real de `app/pages/asistente.py` (sin navegador y sin red)
+Ejecuta el script real de `app/screens/asistente.py` (sin navegador y sin red)
 con un cliente de LLM falso, y comprueba lo que hace que esta pantalla sea
 una herramienta de scouting y no un chat cualquiera:
 
@@ -27,7 +27,7 @@ from streamlit.testing.v1 import AppTest  # noqa: E402
 
 from app.assistant.llm.base import LLMResponse, ToolCall  # noqa: E402
 
-PAGE = str(_APP_DIR / "pages" / "asistente.py")
+PAGE = str(_APP_DIR / "screens" / "asistente.py")
 QUESTION = "¿Qué tal jugó Howard su último partido?"
 
 

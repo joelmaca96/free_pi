@@ -128,13 +128,23 @@ MIN_MINUTES_RECOMMENDED = 500
 
 #: Aviso permanente de §5 del documento — limitaciones de datos que hay que
 #: decir siempre, no dejar como letra pequeña opcional.
+#:
+#: OJO al redactarlo: la limitación ya NO es que falte el físico. Desde que
+#: `ingest/euroleague/roster.py` trae altura, peso y fecha de nacimiento, esos
+#: campos existen para los jugadores de clubes de Euroliga (~38% de `players`,
+#: el Baskonia y todos sus rivales europeos incluidos). Lo que sigue siendo
+#: cierto, y es lo que hay que avisar, es que **el cálculo no los mira**: las
+#: 15 dimensiones son percentiles de producción y de reparto de tiro (ver
+#: `DIMENSIONS`), ni una de físico. Si algún día entran, hay que reescribir
+#: esta constante Y este comentario.
 SIMILARITY_CAVEAT = (
-    "Puramente estadístico: sin altura ni peso (no se registran de esta fuente) puede emparejar a un "
-    "base con un alero que produzca parecido — para fichajes, mira siempre el vídeo antes de decidir. "
-    "Sin edad fiable (solo 12 jugadores de la plantilla propia la tienen) ni posición fiable en casi la "
-    "mitad de la base de datos: por eso se agrupa por perfil ESTADÍSTICO, no por posición nominal. Una "
-    "sola temporada: describe cómo ha jugado alguien estos meses, no lo que es. No corrige el contexto "
-    "de equipo — pocos minutos en un equipo dominante puede parecerse a muchos minutos en uno flojo."
+    "Puramente estadístico: compara producción y reparto de tiro, no físico. La altura y el peso "
+    "están en la base de datos, pero el cálculo no los usa — puede emparejar a un base con un alero "
+    "que produzca parecido, así que para fichajes mira siempre el vídeo antes de decidir. Tampoco "
+    "pesa la edad, y la posición sigue vacía en casi la mitad de la base de datos: por eso se agrupa "
+    "por perfil ESTADÍSTICO, no por posición nominal. Una sola temporada: describe cómo ha jugado "
+    "alguien estos meses, no lo que es. No corrige el contexto de equipo — pocos minutos en un equipo "
+    "dominante puede parecerse a muchos minutos en uno flojo."
 )
 
 

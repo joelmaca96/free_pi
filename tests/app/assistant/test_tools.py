@@ -51,9 +51,38 @@ def test_resolve_entity_tool_flags_ambiguity(catalog, engine):
                 " VALUES ('william-howa', 'rm', 'William Howard', 3, 'Alero')"
             )
         )
+        # Con boxscore, como el Howard del seed: desde que la resolución
+        # desempata por partidos cargados, un jugador sin una sola línea ya no
+        # cuenta como empate y este test dejaría de probar la ambigüedad.
+        conn.execute(
+            text(
+                "INSERT INTO player_game_stats (game_id, player_id, minutes, pts, reb, ast, efg_pct)"
+                " VALUES ('syn-2-1', 'william-howa', 24.0, 11, 3, 2, 52.0)"
+            )
+        )
     result = catalog.execute("1", "resolve_entity", {"query": "Howard", "kind": "player"}).result
     assert result["data"]["ambiguous"] is True
     assert len(result["data"]["candidates"]) == 2
+
+
+def test_resolve_entity_tool_reports_a_ghost_instead_of_asking(catalog, engine):
+    """El caso del pulgar abajo: un duplicado sin partidos no se pregunta, se dice."""
+    from sqlalchemy import text
+
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO players (id, team_id, name, number, position)"
+                " VALUES ('howard-dup', 'rm', 'Marcus Howard', 3, 'Escolta')"
+            )
+        )
+
+    result = catalog.execute("1", "resolve_entity", {"query": "Marcus Howard"}).result
+
+    assert result["data"]["ambiguous"] is False
+    assert result["data"]["candidates"][0]["id"] == "howard"
+    assert "CERO partidos" in result["data"]["note"]
+    assert "howard-dup" in result["data"]["note"]
 
 
 def test_resolve_entity_tool_fails_usefully(catalog):
@@ -457,6 +486,45 @@ def test_clutch_lineups_clips_a_stint_to_the_window(engine, ctx):
 
     # Ventana = últimos 300 s (2100..2400): solo cuentan 300, no 600.
     assert result["data"][0]["seconds"] == 300.0
+
+
+def test_clutch_lineups_returns_the_per_40_like_its_sibling_tools(engine, ctx):
+    """Sin la columna, el modelo dividía él mismo ("+64 por 40") y el
+    verificador marcaba la cifra en una respuesta correcta: dos veces en 48
+    intentos del set dorado. `team_lineups` y compañía ya la devolvían."""
+    starters = ["howard", "moneke", "codi", "sedekerskis", "kotsar"]
+    add_stints(engine, [("g5", "bas", 2100.0, 2400.0, 12, 6, 0, starters)])
+    from app.assistant.capabilities import probe
+
+    ctx.capabilities = probe(engine)
+    row = ToolCatalog(ctx).execute("1", "clutch_lineups", {"team_id": "bas"}).result["data"][0]
+
+    # +6 en 5 minutos -> +48 por 40.
+    assert row["plus_minus"] == 6
+    assert row["plus_minus_per_40"] == pytest.approx(48.0)
+
+
+def test_clutch_lineups_still_ranks_by_raw_difference_not_by_rate(engine, ctx):
+    """En el tramo final hay pocos segundos por quinteto, y ordenar por la tasa
+    pondría arriba al que menos jugó. El por-40 se devuelve, pero no manda."""
+    long_sample = ["howard", "moneke", "codi", "sedekerskis", "kotsar"]
+    short_sample = ["howard", "nikos", "moneke", "lutse", "costello"]
+    add_stints(
+        engine,
+        [
+            # +8 en 300 s -> +64 por 40.
+            ("g5", "bas", 2100.0, 2400.0, 14, 6, 0, long_sample),
+            # +5 en 60 s -> +200 por 40: más tasa, mucha menos muestra.
+            ("g4", "bas", 2340.0, 2400.0, 5, 0, 0, short_sample),
+        ],
+    )
+    from app.assistant.capabilities import probe
+
+    ctx.capabilities = probe(engine)
+    rows = ToolCatalog(ctx).execute("1", "clutch_lineups", {"team_id": "bas"}).result["data"]
+
+    assert rows[0]["plus_minus"] == 8
+    assert rows[1]["plus_minus_per_40"] > rows[0]["plus_minus_per_40"]
 
 
 # --------------------------------------------------------- on/off y duplas --

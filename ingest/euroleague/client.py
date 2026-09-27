@@ -82,6 +82,36 @@ class EuroleagueClient:
         response.raise_for_status()
         return response.json()["data"]
 
+    def fetch_club_people(self, season: int, club_code: str) -> List[Dict[str, Any]]:
+        """Plantilla de un club con su FICHA FÍSICA — ver `ingest/euroleague/roster.py`.
+
+        Mismo backend y mismo patrón de hallazgo que `fetch_clubs` (probando
+        rutas plausibles, sin documentación oficial): `GET /v2/competitions/
+        {code}/seasons/{code}{season}/clubs/{club}/people` devuelve una LISTA
+        (no un `{"data": [...]}` como `clubs`, ojo) con un objeto por miembro
+        del club. Verificado en vivo el 2026-09-10 contra `BAS`.
+
+        De cada uno interesa `person`: `code` (id de jugador de Euroliga, el
+        mismo espacio que el `Player_ID` del boxscore salvo por el prefijo
+        `P` — comprobado, 21 de 23 de la plantilla del Baskonia casaban con
+        los `player_external_ids` ya guardados), `height` en centímetros,
+        `weight` en kilos, `birthDate` y `country.name`. Es la ÚNICA de las
+        tres fuentes del proyecto que publica altura y peso.
+
+        `type == "J"` distingue jugador de cuerpo técnico, igual que
+        `team_member_role` en el scraper de baskonia.com.
+        """
+        url = (
+            f"{CLUBS_BASE_URL}/v2/competitions/{self.competition_code}"
+            f"/seasons/{self.competition_code}{season}/clubs/{club_code}/people"
+        )
+        response = requests.get(url, headers={"Accept": "application/json"}, timeout=30)
+        response.raise_for_status()
+        payload = response.json()
+        # Tolerante con las dos formas: lista pelada (lo que devuelve hoy) o
+        # envuelta en `{"data": [...]}` como el endpoint de clubes de al lado.
+        return payload["data"] if isinstance(payload, dict) else payload
+
     def fetch_game_metadata(self, season: int, game_code: int) -> Any:
         return self._metadata.get_game_metadata(season, game_code)
 

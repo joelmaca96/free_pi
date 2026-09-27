@@ -111,6 +111,38 @@ def test_select_top_signals_caps_at_max_signals():
     assert len(sg.select_top_signals(candidates, max_signals=5)) == 5
 
 
+def test_select_top_signals_does_not_let_one_family_take_every_card():
+    """Caso real de `data/baskonia.db`: `relevance` (|efecto| × peso) no es comparable entre
+    familias — las de rotación miden el efecto en puntos porcentuales de reparto de minutos y
+    salían un orden de magnitud por encima, quedándose con las cinco tarjetas. Con candidatos de
+    otras familias por debajo, la selección tiene que mezclar."""
+    rotation = [_signal(p_value=0.001, effect=25.0, weight=60.0, family="rotation") for _ in range(5)]
+    others = [
+        _signal(p_value=0.001, effect=4.0, weight=25.0, family="player"),
+        _signal(p_value=0.001, effect=4.0, weight=32.0, family="team"),
+        _signal(p_value=None, effect=15.0, min_effect=0.0, family="load"),
+    ]
+
+    survivors = sg.select_top_signals(rotation + others, max_signals=5)
+
+    assert len(survivors) == 5
+    assert {s.family for s in survivors} == {"rotation", "player", "team", "load"}
+    # La familia dominante sigue abriendo (dentro de cada familia manda la relevancia)...
+    assert survivors[0].family == "rotation"
+    # ...pero solo llena huecos cuando las demás ya no tienen candidatos.
+    assert sum(s.family == "rotation" for s in survivors) == 2
+
+
+def test_select_top_signals_fills_with_one_family_when_it_is_the_only_one():
+    """El reparto por rondas no debe dejar tarjetas vacías: si solo hay una familia con
+    candidatos, esa se lleva las cinco (es la respuesta correcta, no un desequilibrio)."""
+    candidates = [_signal(p_value=0.001, effect=float(i + 1), min_effect=0.5, family="team") for i in range(8)]
+    survivors = sg.select_top_signals(candidates, max_signals=5)
+    assert [s.family for s in survivors] == ["team"] * 5
+    # Dentro de la familia, por relevancia decreciente.
+    assert [s.effect for s in survivors] == [8.0, 7.0, 6.0, 5.0, 4.0]
+
+
 def test_select_top_signals_empty_is_a_valid_answer():
     """"Sin cambios significativos esta semana" (§2) — lista vacía, no una excepción."""
     assert sg.select_top_signals([]) == []

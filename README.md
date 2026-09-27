@@ -17,7 +17,11 @@ contrato común y parser, orquestados por `ingest/run_all.py`:
   quintetos reconstruidos desde play-by-play, tiros con coordenadas reales.
 - **`ingest/euroleague/`** — Euroliga vía la librería `euroleague_api`. Mismo tipo de datos que
   ACB, con ORtg/DRtg/pace estimados (fórmula Dean Oliver) al no haber un endpoint oficial
-  equivalente.
+  equivalente. Además, `roster.py` trae la **ficha física** (altura, peso, nacimiento,
+  nacionalidad) desde la API de plantillas de clubes: es la única de las tres fuentes que
+  publica altura y peso — ni el JSON de baskonia.com ni el boxscore de ACB los traen —, así que
+  esos campos solo están rellenos para jugadores de clubes de Euroliga (hoy ~37% de la tabla,
+  el Baskonia y todos sus rivales europeos incluidos).
 - **`ingest/baskonia_web/`** — plantilla y fotos del Baskonia desde `baskonia.com` (JSON
   embebido de la web oficial). Solo escribe `players`/`player_external_ids`; además descarga a
   disco (`data/player_photos/` por defecto) la foto real de cada jugador, para no depender de
@@ -99,6 +103,21 @@ python -m ingest.baskonia_web.cli
 `tools/init_scouting_db.py --force` borra y recrea el esquema (con los datos semilla) — solo
 para desarrollo/tests, nunca contra `data/baskonia.db` con datos reales sin backup previo.
 
+### Copias de seguridad
+
+Antes de correr cualquier cosa que escriba en la base de datos (`tools/fix_*.py`,
+`tools/retile_court_zones.py`, un `--force`):
+
+```bash
+python tools/backup_db.py --label pre-player-merge   # copia + rotación
+python tools/backup_db.py --prune-only --dry-run     # ver qué sobra, sin borrar
+```
+
+Usa la API de backup en línea de SQLite, no `cp`: el esquema corre en modo WAL, donde el
+fichero `.db` por sí solo no es la base de datos entera y una copia a mano se deja lo último
+escrito. Conserva las tres copias más recientes (`--keep`) y borra el resto — que es lo que
+evita que `data/` vuelva a llenarse de backups (llegó a tener diecisiete, 493 MB).
+
 ---
 
 ## 5. Interfaz web (`app/`)
@@ -127,6 +146,13 @@ código — ver [`.env.example`](.env.example) y el diseño.
 ```bash
 # Comprobar que el modelo configurado sabe usar herramientas, antes de nada
 .venv/Scripts/python.exe tools/assistant_smoke_test.py
+
+# Pasar el set dorado: 8 preguntas con aserciones deterministas (qué herramientas
+# se eligen, qué cifras salen, qué debe rechazarse) y cinco números por pregunta.
+# Es lo que dice si tocar el prompt o cambiar de modelo ha mejorado algo o no.
+# NO está en la suite de pytest: llama al proveedor de verdad.
+.venv/Scripts/python.exe tools/assistant_eval.py
+.venv/Scripts/python.exe tools/assistant_eval.py --dry-run   # valida el set, sin gastar cuota
 ```
 
 Diseño completo en

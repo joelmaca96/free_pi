@@ -1,0 +1,38 @@
+# Túnel de prueba SIN dominio propio (Cloudflare Quick Tunnel) — para que un
+# grupo reducido pruebe la interfaz desde fuera sin instalar nada, sin abrir
+# puertos en el router y sin Tailscale/VPN.
+#
+# OJO, limitaciones frente al túnel nombrado + Access documentado en
+# deploy/cloudflared/README.md:
+#   - La URL es aleatoria (*.trycloudflare.com) y CAMBIA cada vez que este
+#     servicio se reinicia (crash, reboot, `systemctl restart`) — hay que
+#     volver a mirar el log para coger la nueva.
+#   - Sin Cloudflare Access delante: cualquiera con el enlace entra, no hay
+#     filtro por email. Vale para una prueba corta y puntual, no para dejarlo
+#     mucho tiempo público.
+#
+# Cuando el grupo de prueba crezca o el enlace deba ser estable, migrar al
+# túnel nombrado + Access de deploy/cloudflared/README.md (docker-compose ya
+# trae el servicio `cloudflared` listo, solo hace falta el token) y entonces
+# se puede parar y deshabilitar este:
+#   sudo systemctl disable --now baskonia-quicktunnel.service
+#
+# Instalación:
+#   sudo cp deploy/systemd/baskonia-quicktunnel.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now baskonia-quicktunnel.service
+#   journalctl -u baskonia-quicktunnel.service | grep trycloudflare.com   # coger la URL
+
+[Unit]
+Description=Cloudflare Quick Tunnel (prueba) hacia la app Baskonia local
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/cloudflared tunnel --url http://localhost:8501
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
