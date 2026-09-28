@@ -44,10 +44,17 @@ las dos, así la resolución de identidad/carga se escribe una sola vez:
            # TRAMOS con reloj y marcador (`lineup_stints`). Una fuente que
            # entrega los quintetos ya agregados aquí no produce tramos: el
            # detalle por tiempo solo existe si hay play-by-play.
-  "shots": [{"player_id":.., "team_id":.., "x":.., "y":.., "made": bool}, ...],
+  "shots": [{"player_id":.., "team_id":.., "x":.., "y":.., "made": bool,
+             "quarter":.., "clock":.., "home_score":.., "away_score":..,
+             "is_fastbreak":.., "is_second_chance":.., "is_off_turnover":..}, ...],
            # x/y ya en la escala 0-500 de court_zones; la conversión desde el
            # sistema de coordenadas nativo de cada fuente es responsabilidad
            # del adapter de esa fuente (ver `ingest/acb/parser.py`).
+           # Desde "quarter" en adelante, todo opcional (2026-09-28): reloj
+           # y marcador (el de DESPUÉS del tiro) tal como los da la fuente, y
+           # las tres banderas de contexto (bool) — las que lleguen ausentes
+           # o en None las rellena `ingest.common.shot_context` a partir de
+           # "play_events" aquí mismo; "seconds" lo calcula parse_and_resolve.
   "events": [{"team_id":.., "quarter":.., "clock":.., "label":..}, ...],
   "score_progression": [{"step":.., "home":.., "away":..}, ...],
   "quarter_stats": [{"team_id":.., "quarter": 1..4, "points_for":.., "points_against":..}, ...],
@@ -63,7 +70,9 @@ las dos, así la resolución de identidad/carga se escribe una sola vez:
   "play_events": [  # opcional (Fase 2): eventos tipados con reloj exacto
       {"team_id":.., "player_id":.. (ids externos, o None), "quarter":.., "clock":..,
        "event_type": "steal"|"turnover"|"block"|"oreb"|"dreb"|
-       "assist"|"foul_drawn"|"foul_personal", "event_detail":.. (opcional),
+       "assist"|"foul_drawn"|"foul_personal"|"fg2_made"|"fg2_missed"|
+       "fg3_made"|"fg3_missed"|"ft_made"|"ft_missed"|"timeout",
+       "event_detail":.. (opcional),
        "home_score":.., "away_score":..},
       ...
   ],  # "seconds" NO se da aquí: lo calcula parse_and_resolve con
@@ -116,6 +125,7 @@ from ingest.common.schema_types import (
     ShotRecord,
     StintRecord,
 )
+from ingest.common.shot_context import fill_missing_shot_context
 from ingest.common.zones import MATE_ZONE_ID, classify_zone
 
 logger = logging.getLogger(__name__)
@@ -245,14 +255,27 @@ def parse_and_resolve(conn: Connection, raw: Dict[str, Any], source: str) -> Nor
     # dentro de 'Pintura', y sin `ORDER BY` en `classify_zone` qué zona "gana"
     # el solape no está garantizado — ver el comentario de `court_zones` en
     # `schema.sql`.
+    #
+    # Contexto (contraataque/segunda oportunidad/tras pérdida, 2026-09-28): lo
+    # que la fuente no dé se deriva aquí del play-by-play tipado, con ids
+    # EXTERNOS todavía (tiros y eventos se casan en el espacio de la fuente).
+    raw_shots = fill_missing_shot_context(
+        raw.get("shots", []), raw.get("play_events", []),
+        (raw["home_team"]["id"], raw["away_team"]["id"]),
+    )
     shots = [
         ShotRecord(
             player_id=player_lookup[row["player_id"]], team_id=team_lookup[row["team_id"]],
             pos_x=row["x"], pos_y=row["y"], made=row["made"],
             zone_id=MATE_ZONE_ID if not row.get("located", True) else classify_zone(conn, row["x"], row["y"]),
             located=row.get("located", True),
+            quarter=row.get("quarter"), game_clock=row.get("clock"),
+            seconds=_shot_seconds(row),
+            home_score=row.get("home_score"), away_score=row.get("away_score"),
+            is_fastbreak=row.get("is_fastbreak"), is_second_chance=row.get("is_second_chance"),
+            is_off_turnover=row.get("is_off_turnover"),
         )
-        for row in raw.get("shots", [])
+        for row in raw_shots
         if row["player_id"] in player_lookup
     ]
 
@@ -345,6 +368,21 @@ def parse_and_resolve(conn: Connection, raw: Dict[str, Any], source: str) -> Nor
         home_coach=raw.get("home_coach"), away_coach=raw.get("away_coach"),
         play_events=play_events, quarter_boxscore=quarter_boxscore, player_advanced=player_advanced,
     )
+
+
+def _shot_seconds(row: Dict[str, Any]) -> Optional[float]:
+    """Segundos desde el inicio de un tiro del contrato, o `None` si no trae reloj válido.
+
+    A diferencia de `play_events` (donde reloj y cuarto son obligatorios), en
+    `shots` son opcionales: un reloj que falte o no se entienda deja la
+    columna en NULL en vez de tumbar la carga del partido entero.
+    """
+    if not row.get("quarter") or not row.get("clock"):
+        return None
+    try:
+        return game_clock_to_seconds(row["quarter"], row["clock"])
+    except ValueError:
+        return None
 
 
 def _reconstruct_lineups_from_pbp(raw, starters, team_lookup, player_lookup, home_team_id, away_team_id):

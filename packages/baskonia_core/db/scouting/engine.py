@@ -148,6 +148,16 @@ _ADDITIVE_COLUMN_MIGRATIONS = [
     # porque su PK `(source, external_id)` impediría que DOS filas duplicadas
     # llevasen el mismo `clubId` — que es justo lo que las delata.
     ("teams", "acb_club_id", "INTEGER"),
+    # Tiros con reloj, marcador y contexto (2026-09-28, ver `shots` en
+    # `schema.sql` e `ingest/common/shot_context.py`).
+    ("shots", "quarter", "TEXT"),
+    ("shots", "game_clock", "TEXT"),
+    ("shots", "seconds", "REAL"),
+    ("shots", "home_score", "INTEGER"),
+    ("shots", "away_score", "INTEGER"),
+    ("shots", "is_fastbreak", "INTEGER"),
+    ("shots", "is_second_chance", "INTEGER"),
+    ("shots", "is_off_turnover", "INTEGER"),
 ]
 
 # Las VISTAS (`VIEW_NAMES`) no se migran con `ALTER TABLE`: se recrean enteras

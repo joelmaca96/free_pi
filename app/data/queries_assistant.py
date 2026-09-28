@@ -345,8 +345,10 @@ def game_play_events(_engine: Engine, game_id: str, event_type: Optional[str] = 
 
     Args:
         event_type: acota a un tipo ('steal', 'turnover', 'block', 'oreb',
-            'dreb', 'assist', 'foul_drawn', 'foul_personal'), o `None` para
-            todos.
+            'dreb', 'assist', 'foul_drawn', 'foul_personal' y, en partidos
+            reingeridos desde 2026-09-28, 'fg2_made', 'fg2_missed',
+            'fg3_made', 'fg3_missed', 'ft_made', 'ft_missed', 'timeout'), o
+            `None` para todos.
 
     Returns:
         `quarter, game_clock, event_type, event_detail, team_name,

@@ -487,7 +487,30 @@ CREATE TABLE shots (
   --     no había forma de distinguirlos aguas abajo.
   -- NULL = fila anterior a esta columna (ver `engine.py::
   --     _ADDITIVE_COLUMN_MIGRATIONS`); la interfaz la trata como 1.
-  located   INTEGER CHECK (located IN (0,1))
+  located   INTEGER CHECK (located IN (0,1)),
+  -- Reloj y contexto del tiro (2026-09-28). Todas nullable: NULL = partido
+  -- ingerido antes de esta fecha (hay que reingerirlo, ver
+  -- doc/features/ingestor/01_estado.md) o fuente sin el dato para ESE tiro.
+  -- `quarter`/`game_clock`/`seconds` en el mismo formato y escala que
+  -- `play_events` ('Q1'..'Q4'/'OTn', 'MM:SS' restantes, segundos desde el
+  -- inicio vía `ingest/common/game_clock.py`), así que un tiro se cruza con
+  -- `lineup_stints`/`play_events` con un `BETWEEN`.
+  quarter          TEXT,
+  game_clock       TEXT,
+  seconds          REAL,
+  -- Marcador tal como lo da la fuente EN ese tiro: en las dos fuentes es el
+  -- de DESPUÉS del tiro (un tiro anotado ya incluye sus propios puntos).
+  home_score       INTEGER,
+  away_score       INTEGER,
+  -- Contexto de la POSESIÓN en la que se tira (anotado o fallado), 0/1:
+  -- contraataque, segunda oportunidad (hubo rebote ofensivo propio antes) y
+  -- tras pérdida del rival. Euroliga los publica solo para tiros anotados y
+  -- se respetan; el resto (ACB entero, fallos de Euroliga) los deriva
+  -- `ingest/common/shot_context.py` del play-by-play tipado — ver ese
+  -- módulo para las definiciones exactas y el umbral de contraataque.
+  is_fastbreak     INTEGER CHECK (is_fastbreak IN (0,1)),
+  is_second_chance INTEGER CHECK (is_second_chance IN (0,1)),
+  is_off_turnover  INTEGER CHECK (is_off_turnover IN (0,1))
 );
 
 CREATE TABLE key_events (
@@ -508,9 +531,15 @@ CREATE TABLE key_events (
 -- `event_type` es uno de: 'steal', 'turnover', 'block', 'oreb', 'dreb',
 -- 'assist', 'foul_drawn', 'foul_personal' — ver
 -- doc/features/ingestor/02_plan_stats_completas.md §Fase 2 para el mapeo
--- `playType`/`PLAYTYPE` verificado en vivo en cada fuente. `event_detail`
--- guarda el código crudo de fuente SOLO para 'foul_personal' en ACB (6
--- subtipos sin semántica distinguible, ver ese mismo documento) — el conteo
+-- `playType`/`PLAYTYPE` verificado en vivo en cada fuente — y, desde
+-- 2026-09-28, 'fg2_made', 'fg2_missed', 'fg3_made', 'fg3_missed',
+-- 'ft_made', 'ft_missed' (tiros, con su jugador) y 'timeout' (tiempo muerto
+-- de EQUIPO, `player_id` NULL; los de televisión de Euroliga, sin equipo,
+-- no se cargan). Esos nombres son contrato: los lee también el cálculo de
+-- posesiones. Quien cuente eventos debe filtrar SIEMPRE por `event_type`.
+-- `event_detail` guarda el código crudo de fuente para 'foul_personal' en
+-- ACB (6 subtipos sin semántica distinguible, ver ese mismo documento) y
+-- 'dunk' para los mates de ACB (código 100, un 'fg2_made') — el conteo
 -- agregado de faltas sigue viniendo del boxscore (`player_game_stats.pf`),
 -- no de contar estas filas, así que un subtipo sin diferenciar no bloquea
 -- ningún análisis ya existente.

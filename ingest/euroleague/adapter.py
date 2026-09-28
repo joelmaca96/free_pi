@@ -31,6 +31,32 @@ temporada 2025 / gamecode 7 - Virtus Bologna vs Real Madrid):
   anotadas), `PERIOD` (1-4 cuartos, 5+ prórroga), `MARKERTIME`
   (`"MM:SS"` restantes en el periodo).
 
+TIROS CON RELOJ/CONTEXTO Y TIEMPOS MUERTOS (2026-09-28, verificado en vivo con
+16 partidos de la temporada 2025 — gamecodes 7/12/20/33/45/60/77/88/101/120/
+133/150/175/190/210/250, 2.462 filas de `ShotData`, 2.006 tiros de campo):
+
+- `ShotData` NO trae `PERIOD`: trae `MINUTE` (minuto de partido 1..40, 41+
+  prórroga, redondeado hacia arriba) y `CONSOLE` (`"MM:SS"`), más
+  `POINTS_A`/`POINTS_B` (marcador DESPUÉS del tiro) y `FASTBREAK`/
+  `SECOND_CHANCE`/`POINTS_OFF_TURNOVER` (`"0"`/`"1"` como texto). Su
+  `NUM_ANOT` es el `NUMBEROFPLAY` de la misma jugada en el play-by-play (todas
+  las filas casan, con el mismo tipo de acción), así que cuando hay PBP el
+  cuarto y el reloj se toman de ahí. OJO: `CONSOLE` falla en los minutos
+  exactos: de 64 tiros con segundos `00`, en 59 va un minuto por delante del
+  PBP (`"10:00"` donde el PBP dice `09:00`) y `MINUTE` acierta; en los otros
+  5 es al revés. Sin PBP se corrige con `MINUTE` (ver
+  `_shot_quarter_and_clock`): 2.001 de 2.006 tiros de campo quedan con el
+  mismo cuarto y reloj que el PBP.
+- Las tres banderas son de PUNTOS: solo valen 1 en tiros anotados (ningún
+  fallado las lleva a 1). Se pasan tal cual para los anotados y en
+  `None` para los fallados, donde las deriva
+  `ingest/common/shot_context.py` del play-by-play con el mismo significado
+  que en ACB (contexto de la posesión, anotado o no).
+- PBP: `2FGM/2FGA/3FGM/3FGA/FTM/FTA` pasan a `play_events` como
+  `fg2_made/fg2_missed/fg3_made/fg3_missed/ft_made/ft_missed`; `TOUT` (tiempo
+  muerto de equipo, con `CODETEAM`) como `timeout`. `TOUT_TV` (tiempo muerto
+  de televisión, sin equipo) se descarta a propósito: no lo pide nadie.
+
 `game_advanced_stats` se deriva agregando el boxscore por equipo (eFG%/TS%/
 TOV%/ORB% con las fórmulas estándar; `ortg`/`drtg`/`ast_pct`/`ft_rate`/
 `ast_to_ratio` con posesiones estimadas vía la fórmula Dean Oliver - fiel a
@@ -286,6 +312,10 @@ def _convert_play_by_play(records: List[dict], team_ids_by_code: Dict[str, str])
 _EVENT_TYPE_BY_PLAYTYPE = {
     "CM": "foul_personal", "RV": "foul_drawn", "ST": "steal", "TO": "turnover",
     "FV": "block", "O": "oreb", "D": "dreb", "AS": "assist",
+    # 2026-09-28: tiros (A = fallado) y tiempo muerto de EQUIPO. `TOUT_TV`
+    # queda fuera (sin `CODETEAM`, no es de ningún equipo) — ver docstring.
+    "2FGM": "fg2_made", "2FGA": "fg2_missed", "3FGM": "fg3_made", "3FGA": "fg3_missed",
+    "FTM": "ft_made", "FTA": "ft_missed", "TOUT": "timeout",
 }
 
 
@@ -329,6 +359,47 @@ def _convert_play_events(records: List[dict], team_ids_by_code: Dict[str, str]) 
             }
         )
     return events
+
+
+_SHOT_CONTEXT_COLUMNS = {
+    "is_fastbreak": "FASTBREAK", "is_second_chance": "SECOND_CHANCE", "is_off_turnover": "POINTS_OFF_TURNOVER",
+}
+
+
+def _flag_or_none(value: Any) -> Optional[bool]:
+    """`"1"`/`"0"` (texto en la fuente), `1`/`0` o NaN -> `True`/`False`/`None`."""
+    number = _int_or_none(value)  # `int("1")` ya acepta el texto de la fuente
+    return None if number is None else bool(number)
+
+
+def _shot_quarter_and_clock(row: dict, pbp_by_play: Dict[Any, dict]) -> tuple:
+    """`(quarter, clock)` de un tiro de `ShotData` — ver el docstring del módulo.
+
+    Primero la jugada del play-by-play con `NUMBEROFPLAY == NUM_ANOT` (fuente
+    de verdad del reloj en todo el resto de la ingesta). Sin PBP, se deriva de
+    `MINUTE` (minuto de partido redondeado hacia arriba: 1-10 = Q1, 41-45 =
+    OT1...) y `CONSOLE`, corrigiendo el minuto de más que trae `CONSOLE`
+    cuando los segundos son `00` con el propio `MINUTE`.
+    """
+    play = pbp_by_play.get(_int_or_none(row.get("NUM_ANOT")))
+    if play is not None and _int_or_none(play.get("PERIOD")) and play.get("MARKERTIME"):
+        return _period_to_quarter(int(play["PERIOD"])), str(play["MARKERTIME"])
+    minute = _int_or_none(row.get("MINUTE"))
+    console = str(row.get("CONSOLE") or "").strip()
+    if minute is None or minute < 1 or ":" not in console:
+        return None, None
+    if minute <= 40:
+        period, period_end = (minute - 1) // 10 + 1, 10 * ((minute - 1) // 10 + 1)
+    else:
+        overtime = (minute - 41) // 5 + 1
+        period, period_end = 4 + overtime, 40 + 5 * overtime
+    mm, _, ss = console.partition(":")
+    if ss.strip() == "00":
+        mm = str(period_end - minute)
+    try:
+        return _period_to_quarter(period), f"{int(mm):02d}:{int(ss):02d}"
+    except ValueError:
+        return None, None
 
 
 def _quarter_stats_from_events(events: List[dict], home_id: str, away_id: str) -> List[dict]:
@@ -433,6 +504,10 @@ def build_raw_game(
     quarter_stats = _quarter_stats_from_events(converted_pbp, home_team["id"], away_team["id"])
     play_events = _convert_play_events(play_by_play_records or [], team_ids_by_code)
 
+    pbp_by_play = {
+        _int_or_none(r.get("NUMBEROFPLAY")): r for r in (play_by_play_records or [])
+        if _int_or_none(r.get("NUMBEROFPLAY")) is not None
+    }
     shots = []
     for row in shot_records:
         coord_x, coord_y = row.get("COORD_X"), row.get("COORD_Y")
@@ -441,15 +516,24 @@ def build_raw_game(
         action = str(row.get("ID_ACTION", ""))
         made = action.endswith("M")  # p.ej. "2FGM" (anotado) vs "2FGA" (fallado)
         x, y = _rescale_shot_coords(float(coord_x), float(coord_y))
-        shots.append(
-            {
-                "player_id": _clean_id(row["ID_PLAYER"]),
-                "team_id": team_ids_by_code.get(_clean_id(row.get("TEAM", "")), row.get("TEAM")),
-                "x": x,
-                "y": y,
-                "made": made,
-            }
-        )
+        quarter, clock = _shot_quarter_and_clock(row, pbp_by_play)
+        shot = {
+            "player_id": _clean_id(row["ID_PLAYER"]),
+            "team_id": team_ids_by_code.get(_clean_id(row.get("TEAM", "")), row.get("TEAM")),
+            "x": x,
+            "y": y,
+            "made": made,
+            "quarter": quarter,
+            "clock": clock,
+            "home_score": _int_or_none(row.get("POINTS_A")),
+            "away_score": _int_or_none(row.get("POINTS_B")),
+        }
+        # Banderas de la fuente SOLO en anotados (son de puntos, ver
+        # docstring): en un fallado quedan en `None` y las deriva
+        # `shot_context` desde el play-by-play.
+        for key, column in _SHOT_CONTEXT_COLUMNS.items():
+            shot[key] = _flag_or_none(row.get(column)) if made else None
+        shots.append(shot)
 
     return {
         "game_id": str(metadata["Gamecode"]),

@@ -250,6 +250,83 @@ def test_load_game_is_idempotent_on_rerun(engine):
         assert conn.execute(text("SELECT COUNT(*) FROM game_referees WHERE game_id='acb-99001'")).scalar_one() == 2
 
 
+def test_load_game_writes_shot_clock_score_and_context(engine):
+    """Reloj, marcador y banderas de contexto (2026-09-28) viajan hasta `shots`;
+    una bandera `None` se queda en NULL, no en 0."""
+    from sqlalchemy import text
+
+    game = _sample_game()
+    game.shots = [
+        ShotRecord(player_id="howard", team_id="bas", pos_x=250, pos_y=400, made=True, zone_id=1,
+                   quarter="Q4", game_clock="02:10", seconds=2270.0, home_score=80, away_score=78,
+                   is_fastbreak=True, is_second_chance=False, is_off_turnover=True),
+        ShotRecord(player_id="howard", team_id="bas", pos_x=260, pos_y=410, made=False, zone_id=1),
+    ]
+    with engine.begin() as conn:
+        load_game(conn, game)
+
+    with engine.connect() as conn:
+        rows = conn.execute(text(
+            "SELECT quarter, game_clock, seconds, home_score, away_score,"
+            " is_fastbreak, is_second_chance, is_off_turnover FROM shots WHERE game_id='acb-99001' ORDER BY id"
+        )).all()
+    assert tuple(rows[0]) == ("Q4", "02:10", 2270.0, 80, 78, 1, 0, 1)
+    assert tuple(rows[1]) == (None,) * 8
+
+
+def test_quarter_fouls_still_count_only_fouls_with_shots_and_timeouts_in_play_events(engine):
+    """Desde 2026-09-28 `play_events` trae también tiros y tiempos muertos: las
+    faltas por cuarto derivadas no deben moverse por ello (mismos 2-1 que
+    `test_load_game_inserts_all_child_tables`)."""
+    from sqlalchemy import text
+
+    game = _sample_game()
+    game.play_events += [
+        PlayEvent(team_id="bas", player_id="howard", quarter="Q1", game_clock="06:00", seconds=240.0,
+                  event_type=event_type, home_score=4, away_score=2)
+        for event_type in ("fg2_made", "fg2_missed", "fg3_made", "fg3_missed", "ft_made", "ft_missed")
+    ] + [
+        PlayEvent(team_id="rm", player_id=None, quarter="Q1", game_clock="05:30", seconds=270.0,
+                  event_type="timeout", home_score=6, away_score=2),
+    ]
+    with engine.begin() as conn:
+        load_game(conn, game)
+
+    with engine.connect() as conn:
+        assert conn.execute(
+            text("SELECT fouls_for, fouls_against FROM game_team_quarter_stats"
+                 " WHERE game_id='acb-99001' AND team_id='bas' AND quarter=1")
+        ).first() == (2, 1)
+        assert conn.execute(
+            text("SELECT COUNT(*) FROM play_events WHERE game_id='acb-99001' AND event_type='timeout'"
+                 " AND player_id IS NULL")
+        ).scalar_one() == 1
+
+
+def test_shot_context_columns_reach_a_db_created_before_them():
+    """Una BD real con `shots` de antes del 2026-09-28 gana las columnas nuevas
+    con `init_scouting_db` (migración aditiva), sin perder los tiros cargados."""
+    from sqlalchemy import text
+
+    from packages.baskonia_core.db.scouting import create_scouting_engine, init_scouting_db
+
+    eng = create_scouting_engine("sqlite:///:memory:")
+    with eng.begin() as conn:
+        conn.execute(text("CREATE TABLE seasons (id INTEGER PRIMARY KEY, label TEXT)"))
+        conn.execute(text(
+            "CREATE TABLE shots (id INTEGER PRIMARY KEY AUTOINCREMENT, game_id TEXT, player_id TEXT,"
+            " zone_id INTEGER, pos_x REAL, pos_y REAL, made INTEGER, located INTEGER)"
+        ))
+        conn.execute(text("INSERT INTO shots (game_id, player_id, pos_x, pos_y, made) VALUES ('g', 'p', 1, 2, 1)"))
+    init_scouting_db(eng)
+    with eng.connect() as conn:
+        columns = {row[1] for row in conn.execute(text("PRAGMA table_info(shots)"))}
+        assert conn.execute(text("SELECT COUNT(*) FROM shots WHERE seconds IS NULL")).scalar_one() == 1
+    assert {"quarter", "game_clock", "seconds", "home_score", "away_score",
+            "is_fastbreak", "is_second_chance", "is_off_turnover"} <= columns
+    eng.dispose()
+
+
 def test_list_existing_external_ids_filtra_por_fuente_y_temporada(engine):
     """Devuelve solo los ids de la fuente/temporada pedidas, sin el prefijo."""
     with engine.begin() as conn:

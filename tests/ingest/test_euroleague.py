@@ -468,3 +468,110 @@ def test_missing_free_throws_stay_null_instead_of_becoming_zero():
 
     howard = next(p for p in raw["players"] if p["player_id"] == "EL-HOWARD")
     assert howard["ftm"] is None and howard["fta"] is None
+
+
+# ---- tiros con reloj/contexto y tiempos muertos (2026-09-28) ----
+# Columnas verificadas en vivo en 16 partidos de 2025 (ver docstring del
+# adapter): `ShotData` sin `PERIOD` pero con `MINUTE`/`CONSOLE`/`NUM_ANOT`/
+# `POINTS_A/B` y las banderas como TEXTO "0"/"1" (solo a 1 en anotados); el
+# PBP con `TOUT` (equipo) y `TOUT_TV` (sin equipo) y NaN en `POINTS_A/B` fuera
+# de las jugadas que anotan.
+
+_CTX_PBP_DF = pd.DataFrame(
+    [
+        {"NUMBEROFPLAY": 10, "PERIOD": 1, "MARKERTIME": "09:50", "CODETEAM": "MAD", "PLAYER_ID": "EL-RIVAL1",
+         "PLAYTYPE": "2FGA", "POINTS_A": None, "POINTS_B": None},
+        {"NUMBEROFPLAY": 11, "PERIOD": 1, "MARKERTIME": "09:48", "CODETEAM": "BAS", "PLAYER_ID": "EL-HOWARD",
+         "PLAYTYPE": "D", "POINTS_A": None, "POINTS_B": None},
+        {"NUMBEROFPLAY": 12, "PERIOD": 1, "MARKERTIME": "09:44", "CODETEAM": "BAS", "PLAYER_ID": "EL-HOWARD",
+         "PLAYTYPE": "2FGM", "POINTS_A": 2, "POINTS_B": 0},
+        {"NUMBEROFPLAY": 13, "PERIOD": 1, "MARKERTIME": "09:05", "CODETEAM": "MAD", "PLAYER_ID": "EL-RIVAL1",
+         "PLAYTYPE": "TO", "POINTS_A": None, "POINTS_B": None},
+        {"NUMBEROFPLAY": 14, "PERIOD": 1, "MARKERTIME": "09:05", "CODETEAM": "BAS", "PLAYER_ID": "EL-HOWARD",
+         "PLAYTYPE": "ST", "POINTS_A": None, "POINTS_B": None},
+        {"NUMBEROFPLAY": 15, "PERIOD": 1, "MARKERTIME": "09:00", "CODETEAM": "BAS", "PLAYER_ID": "EL-HOWARD",
+         "PLAYTYPE": "3FGA", "POINTS_A": None, "POINTS_B": None},
+        {"NUMBEROFPLAY": 16, "PERIOD": 1, "MARKERTIME": "08:59", "CODETEAM": "BAS", "PLAYER_ID": "",
+         "PLAYTYPE": "TOUT", "POINTS_A": None, "POINTS_B": None},
+        {"NUMBEROFPLAY": 17, "PERIOD": 1, "MARKERTIME": "08:59", "CODETEAM": "", "PLAYER_ID": "",
+         "PLAYTYPE": "TOUT_TV", "POINTS_A": None, "POINTS_B": None},
+        {"NUMBEROFPLAY": 18, "PERIOD": 1, "MARKERTIME": "08:40", "CODETEAM": "MAD", "PLAYER_ID": "EL-RIVAL1",
+         "PLAYTYPE": "FTM", "POINTS_A": 2, "POINTS_B": 1},
+        {"NUMBEROFPLAY": 19, "PERIOD": 1, "MARKERTIME": "08:40", "CODETEAM": "MAD", "PLAYER_ID": "EL-RIVAL1",
+         "PLAYTYPE": "FTA", "POINTS_A": None, "POINTS_B": None},
+    ]
+)
+
+_CTX_SHOTS_DF = pd.DataFrame(
+    [
+        {"NUM_ANOT": 10, "ID_PLAYER": "EL-RIVAL1", "TEAM": "MAD", "ID_ACTION": "2FGA", "COORD_X": 100.0,
+         "COORD_Y": 300.0, "MINUTE": 1, "CONSOLE": "09:50", "POINTS_A": 0, "POINTS_B": 0,
+         "FASTBREAK": "0", "SECOND_CHANCE": "0", "POINTS_OFF_TURNOVER": "0"},
+        # Anotado: la fuente dice "no contraataque" aunque sea a 4 s de un
+        # rebote — su bandera manda sobre la derivación.
+        {"NUM_ANOT": 12, "ID_PLAYER": "EL-HOWARD", "TEAM": "BAS", "ID_ACTION": "2FGM", "COORD_X": 0.0,
+         "COORD_Y": 100.0, "MINUTE": 1, "CONSOLE": "09:44", "POINTS_A": 2, "POINTS_B": 0,
+         "FASTBREAK": "0", "SECOND_CHANCE": "0", "POINTS_OFF_TURNOVER": "0"},
+        # Fallado tras robo: la fuente lo trae a "0" (sus banderas son de
+        # PUNTOS), así que se deriva. `CONSOLE` con el minuto de más real.
+        {"NUM_ANOT": 15, "ID_PLAYER": "EL-HOWARD", "TEAM": "BAS", "ID_ACTION": "3FGA", "COORD_X": 600.0,
+         "COORD_Y": 300.0, "MINUTE": 1, "CONSOLE": "10:00", "POINTS_A": 2, "POINTS_B": 0,
+         "FASTBREAK": "0", "SECOND_CHANCE": "0", "POINTS_OFF_TURNOVER": "0"},
+        {"NUM_ANOT": 18, "ID_PLAYER": "EL-RIVAL1", "TEAM": "MAD", "ID_ACTION": "FTM", "COORD_X": -1,
+         "COORD_Y": -1, "MINUTE": 2, "CONSOLE": "08:40", "POINTS_A": 2, "POINTS_B": 1,
+         "FASTBREAK": "0", "SECOND_CHANCE": "0", "POINTS_OFF_TURNOVER": "0"},
+    ]
+)
+
+
+def _ctx_raw(with_pbp=True):
+    return build_raw_game(
+        METADATA, BOXSCORE_DF.to_dict("records"), _CTX_SHOTS_DF.to_dict("records"),
+        _CTX_PBP_DF.to_dict("records") if with_pbp else None,
+    )
+
+
+def test_euroleague_play_events_include_shots_and_only_team_timeouts():
+    raw = _ctx_raw()
+    types = [event["event_type"] for event in raw["play_events"]]
+    assert types == [
+        "fg2_missed", "dreb", "fg2_made", "turnover", "steal", "fg3_missed", "timeout", "ft_made", "ft_missed",
+    ]  # TOUT_TV (sin equipo) no entra
+    timeout = raw["play_events"][6]
+    assert timeout["team_id"] == "BAS" and timeout["player_id"] is None
+    made = raw["play_events"][2]
+    assert (made["home_score"], made["away_score"]) == (2, 0)
+
+
+def test_euroleague_shots_take_clock_from_pbp_and_keep_source_flags_only_when_made():
+    raw = _ctx_raw()
+    miss_rival, made, miss_three = raw["shots"]  # el libre (-1,-1) sigue fuera
+    assert (made["quarter"], made["clock"], made["home_score"], made["away_score"]) == ("Q1", "09:44", 2, 0)
+    assert made["is_fastbreak"] is False  # bandera de la fuente, tal cual
+    assert miss_three["clock"] == "09:00"  # del PBP, no del `CONSOLE` erróneo
+    assert miss_three["is_fastbreak"] is None  # fallado: se deja para derivar
+    assert miss_rival["team_id"] == "MAD"
+
+
+def test_euroleague_missed_shot_context_is_derived_from_pbp(engine):
+    raw = _ctx_raw()
+    with engine.begin() as conn:
+        load_game(conn, parse_and_resolve(conn, raw))
+    with engine.connect() as conn:
+        rows = dict(
+            (row[0], tuple(row[1:])) for row in conn.execute(text(
+                "SELECT game_clock, seconds, is_fastbreak, is_second_chance, is_off_turnover"
+                " FROM shots WHERE game_id = 'euroleague-305'"
+            ))
+        )
+    assert rows["09:44"] == (16.0, 0, 0, 0)  # anotado: bandera de la fuente (no contraataque)
+    assert rows["09:00"] == (60.0, 1, 0, 1)  # fallado 5 s tras robo: derivado
+    assert rows["09:50"] == (10.0, 0, 0, 0)
+
+
+def test_euroleague_shot_clock_without_pbp_fixes_console_with_minute():
+    """Sin PBP, `CONSOLE` "10:00" con `MINUTE`=1 es en realidad 09:00 (verificado en vivo)."""
+    raw = _ctx_raw(with_pbp=False)
+    clocks = [(shot["quarter"], shot["clock"]) for shot in raw["shots"]]
+    assert clocks == [("Q1", "09:50"), ("Q1", "09:44"), ("Q1", "09:00")]
+    assert raw["play_events"] == []

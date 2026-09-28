@@ -29,7 +29,15 @@ from assistant.capabilities import probe
 from assistant.llm import LLMError, build_llm_client
 from components.ask_assistant import ask_assistant_button
 from components.avatar import player_avatar_html, team_crest_html
-from components.court import shot_chart, shot_chart_caption, zone_breakdown, zone_heatmap, zone_heatmap_caption
+from components.court import (
+    SHOT_CONTEXT_CAPTION,
+    shot_chart,
+    shot_chart_caption,
+    shot_context_filter,
+    zone_breakdown,
+    zone_heatmap,
+    zone_heatmap_caption,
+)
 from components.glossary import glossary_expander, help_text
 from components.header import page_header
 from components.lineups import season_lineups_section
@@ -878,7 +886,13 @@ if shots_df.empty:
 else:
     players = ["Todos"] + sorted(shots_df["player_name"].unique().tolist())
     player_choice = st.selectbox("Jugador", options=players, key="rival_shots_player_filter")
-    filtered_df = shots_df if player_choice == "Todos" else shots_df[shots_df["player_name"] == player_choice]
+    # Contexto del tiro (2026-09-28): solo si esta BD tiene tiros con reloj.
+    shot_context = shot_context_filter("rival_shots_context") if probe(engine).shot_clock else None
+    context_df = (
+        shots_df if shot_context is None
+        else queries.team_shots_season(engine, rival_team_id, scouting_season_id, shot_context)
+    )
+    filtered_df = context_df if player_choice == "Todos" else context_df[context_df["player_name"] == player_choice]
 
     zones_df = queries.court_zones(engine)
     # Con "Todos", el agregado oficial por equipo (`game_zone_stats`, vía
@@ -905,11 +919,21 @@ else:
     # revisión, su fondo también parte "Ala izq./der." por la línea real de
     # triple — ver `court.py::_wing_split_layers` — aunque la tabla de abajo,
     # atada a `game_zone_stats` con "Todos", siga sin poder desglosarlas).
-    if player_choice == "Todos":
+    #
+    # Con un contexto elegido, el acierto por zona sale de esos mismos tiros
+    # (ver el mismo bloque en `estado_equipo.py`).
+    player_id = None
+    if player_choice != "Todos":
+        player_id = shots_df.loc[shots_df["player_name"] == player_choice, "player_id"].iloc[0]
+    if shot_context is not None:
+        zone_df = queries.shot_zone_profile_in_context(
+            engine, rival_team_id, scouting_season_id, shot_context, player_id
+        )
+        zone_scope = "team" if player_id is None else "player"
+    elif player_id is None:
         zone_df = queries.team_zone_profile(engine, rival_team_id, scouting_season_id)
         zone_scope = "team"
     else:
-        player_id = filtered_df["player_id"].iloc[0]
         zone_df = queries.player_zone_profile(engine, player_id, scouting_season_id)
         zone_scope = "player"
 
@@ -919,15 +943,20 @@ else:
     # `use_container_width`/`width="stretch"` — ver `court.py`) y ya trae de
     # serie el icono de pantalla completa de Streamlit al pasar el ratón por
     # encima, para verlo grande sin perder el layout de dos columnas.
-    col_shots, col_zones = st.columns(2)
-    with col_shots:
-        st.altair_chart(shot_chart(filtered_df, zones_df))
-        st.caption(shot_chart_caption(filtered_df))
-    with col_zones:
-        st.markdown("**Acierto por zona**")
-        st.altair_chart(zone_heatmap(zone_df, zones_df))
-        st.caption(zone_heatmap_caption(zone_df))
-    zone_breakdown(zone_df, len(filtered_df), scope=zone_scope)
+    if filtered_df.empty:
+        st.info("Sin tiros en ese contexto para esta selección.")
+    else:
+        col_shots, col_zones = st.columns(2)
+        with col_shots:
+            st.altair_chart(shot_chart(filtered_df, zones_df))
+            st.caption(shot_chart_caption(filtered_df))
+        with col_zones:
+            st.markdown("**Acierto por zona**")
+            st.altair_chart(zone_heatmap(zone_df, zones_df))
+            st.caption(zone_heatmap_caption(zone_df))
+        zone_breakdown(zone_df, len(filtered_df), scope=zone_scope)
+    if shot_context is not None:
+        st.caption(SHOT_CONTEXT_CAPTION)
 
 st.divider()
 

@@ -472,3 +472,126 @@ def test_free_throws_reach_the_database_and_the_average_views(engine):
             text("SELECT opp_ftm, opp_fta FROM team_stats_combined WHERE team_id = 'bas'")
         ).first()
         assert (opp.opp_ftm, opp.opp_fta) == (16, 20)
+
+
+# --- Tiros con reloj/contexto y tiempos muertos (2026-09-28) -----------------
+# Formas de payload fieles a lo verificado en vivo en el partido 104465:
+# `shotPoints[i]` trae `quarter`/`minute`/`second`/`scoreHome`/`scoreAway`
+# (marcador DESPUÉS del tiro) y el mismo tiro aparece en `plays` con el mismo
+# reloj; 113 = tiempo muerto de equipo con `playerLicenseId=None`.
+
+
+def _acb_boxscore_two_players():
+    def team(team_id, name, player_id):
+        row = {
+            "player": {"id": player_id, "firstName": "Nombre", "lastName": f"Apellido{player_id}",
+                       "nickname": None, "shirtNumber": "7", "gameRole": "Base"},
+            "playTime": "30:00", "isStarted": True, "points": 5,
+            "twoPointersMade": 1, "twoPointersAttempted": 2, "threePointersMade": 1, "threePointersAttempted": 2,
+            "freeThrowsMade": 0, "freeThrowsAttempted": 0, "totalRebounds": 2, "assists": 0,
+        }
+        totals = {
+            "points": 5, "twoPointersMade": 1, "twoPointersAttempted": 2, "threePointersMade": 1,
+            "threePointersAttempted": 2, "freeThrowsMade": 0, "freeThrowsAttempted": 0, "turnovers": 1,
+            "offRebounds": 1, "defRebounds": 1, "assists": 0, "steals": 1, "blocks": 0,
+        }
+        return {"team": {"id": team_id, "fullName": name},
+                "statsByPeriods": [{"quarter": 0, "stats": {"players": [row], "team": {}, "total": totals}}]}
+
+    return {"matchFinished": True, "teamBoxscores": [team(10, "Local ACB", 501), team(20, "Visitante ACB", 601)]}
+
+
+def _play(order, play_type, local, minute, second, player, home, away, quarter=1):
+    return {"order": order, "playType": play_type, "local": local, "quarter": quarter, "minute": minute,
+            "second": second, "playerLicenseId": player, "scoreHome": home, "scoreAway": away, "playerStats": {}}
+
+
+_ACB_PLAYS = [
+    _play(1, 599, True, 10, 0, 501, 0, 0),
+    _play(2, 599, False, 10, 0, 601, 0, 0),
+    _play(10, 97, False, 9, 50, 601, 0, 0),    # visitante falla de 2
+    _play(11, 104, True, 9, 48, 501, 0, 0),    # rebote defensivo local
+    _play(12, 93, True, 9, 44, 501, 2, 0),     # canasta a 4 s del rebote: contraataque
+    _play(13, 106, False, 9, 30, 601, 2, 0),   # pérdida visitante...
+    _play(14, 103, True, 9, 30, 501, 2, 0),    # ...con robo local, mismo segundo
+    _play(15, 98, True, 9, 20, 501, 2, 0),     # triple fallado tras pérdida
+    _play(16, 101, True, 9, 18, 501, 2, 0),    # rebote ofensivo
+    _play(17, 94, True, 9, 15, 501, 5, 0),     # triple: segunda oportunidad + tras pérdida
+    _play(18, 113, False, 9, 15, None, 5, 0),  # tiempo muerto del visitante
+    _play(19, 92, False, 9, 0, 601, 5, 1),     # libre anotado
+    _play(20, 96, False, 9, 0, 601, 5, 1),     # libre fallado
+    _play(21, 100, True, 8, 30, 501, 7, 1),    # mate
+    _play(22, 121, True, 10, 0, None, 7, 1, quarter=2),  # inicio de periodo: no es evento tipado
+]
+
+_ACB_SHOT_POINTS = [
+    {"id": 1, "posX": 2000, "posY": -1500, "playType": 97, "quarter": 1, "minute": 9, "second": 50,
+     "local": False, "scoreHome": 0, "scoreAway": 0, "playerLicenseId": 601},
+    {"id": 2, "posX": 1000, "posY": 500, "playType": 93, "quarter": 1, "minute": 9, "second": 44,
+     "local": True, "scoreHome": 2, "scoreAway": 0, "playerLicenseId": 501},
+    {"id": 3, "posX": 7000, "posY": 0, "playType": 98, "quarter": 1, "minute": 9, "second": 20,
+     "local": True, "scoreHome": 2, "scoreAway": 0, "playerLicenseId": 501},
+    {"id": 4, "posX": 7000, "posY": 500, "playType": 94, "quarter": 1, "minute": 9, "second": 15,
+     "local": True, "scoreHome": 5, "scoreAway": 0, "playerLicenseId": 501},
+    {"id": 5, "posX": 0, "posY": 0, "playType": 92, "quarter": 1, "minute": 9, "second": 0,
+     "local": False, "scoreHome": 5, "scoreAway": 1, "playerLicenseId": 601},
+    {"id": 6, "posX": 0, "posY": 0, "playType": 100, "quarter": 1, "minute": 8, "second": 30,
+     "local": True, "scoreHome": 7, "scoreAway": 1, "playerLicenseId": 501},
+]
+
+
+def _acb_raw_with_shots_and_pbp():
+    from ingest.acb.adapter import build_raw_game
+
+    match = {"id": 104465, "homeTeamId": 10, "awayTeamId": 20, "homeScore": 7, "awayScore": 1,
+             "startDateTime": "2025-10-05T18:00:00Z"}
+    return build_raw_game(
+        match, _acb_boxscore_two_players(), season=2025,
+        shots={"shotPoints": copy.deepcopy(_ACB_SHOT_POINTS)}, play_by_play={"plays": copy.deepcopy(_ACB_PLAYS)},
+    )
+
+
+def test_acb_shots_carry_the_clock_and_score_of_match_shots():
+    raw = _acb_raw_with_shots_and_pbp()
+    by_clock = {shot["clock"]: shot for shot in raw["shots"]}
+    assert len(raw["shots"]) == 5  # el libre (92) sigue fuera de `shots`
+    assert by_clock["09:44"]["quarter"] == "Q1"
+    assert (by_clock["09:44"]["home_score"], by_clock["09:44"]["away_score"]) == (2, 0)
+    assert by_clock["08:30"]["located"] is False  # el mate, igual que antes
+
+
+def test_acb_play_events_include_shots_and_team_timeouts():
+    raw = _acb_raw_with_shots_and_pbp()
+    types = [event["event_type"] for event in raw["play_events"]]
+    for expected in ("fg2_made", "fg2_missed", "fg3_made", "fg3_missed", "ft_made", "ft_missed", "timeout"):
+        assert expected in types
+    timeout = next(event for event in raw["play_events"] if event["event_type"] == "timeout")
+    assert timeout["team_id"] == "20" and timeout["player_id"] is None
+    assert (timeout["quarter"], timeout["clock"]) == ("Q1", "09:15")
+    dunk = next(event for event in raw["play_events"] if event["event_detail"] == "dunk")
+    assert dunk["event_type"] == "fg2_made"
+    # Quinteto inicial (599) e inicio de periodo (121) no son eventos tipados.
+    assert len(raw["play_events"]) == 12
+
+
+def test_acb_shot_context_is_derived_and_loaded(engine):
+    raw = _acb_raw_with_shots_and_pbp()
+    with engine.begin() as conn:
+        load_game(conn, parse_and_resolve(conn, raw))
+
+    with engine.connect() as conn:
+        rows = conn.execute(text(
+            "SELECT game_clock, quarter, seconds, home_score, away_score,"
+            " is_fastbreak, is_second_chance, is_off_turnover"
+            " FROM shots WHERE game_id = 'acb-104465' ORDER BY seconds"
+        )).all()
+        timeouts = conn.execute(text(
+            "SELECT COUNT(*) FROM play_events WHERE game_id = 'acb-104465' AND event_type = 'timeout'"
+            " AND player_id IS NULL"
+        )).scalar_one()
+    by_clock = {row[0]: tuple(row) for row in rows}
+    assert by_clock["09:44"][1:] == ("Q1", 16.0, 2, 0, 1, 0, 0)   # contraataque
+    assert by_clock["09:20"][5:] == (0, 0, 1)                     # tras pérdida (10 s: ya no es contraataque)
+    assert by_clock["09:15"][5:] == (0, 1, 1)                     # segunda oportunidad + tras pérdida
+    assert by_clock["09:50"][5:] == (0, 0, 0)                     # posesión sin inicio conocido
+    assert timeouts == 1
