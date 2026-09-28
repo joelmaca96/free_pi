@@ -1,6 +1,6 @@
 # Propuestas de nuevas funciones para el cuerpo técnico
 
-Índice de las ideas propuestas el **2026-08-28** (01-11) y el **2026-09-27** (12-14). Cada una tiene su propio documento, en el
+Índice de las ideas propuestas el **2026-08-28** (01-11), el **2026-09-27** (12-14) y el **2026-09-28** (15-18). Cada una tiene su propio documento, en el
 orden en que se presentaron (impacto/esfuerzo descendente). **Son propuestas, no estado**, salvo
 donde el propio documento diga otra cosa (la 01 ya está implementada). El estado real del
 proyecto vive en `doc/features/ingestor/01_estado.md` y en el código.
@@ -38,7 +38,11 @@ accionable pesa menos que una peor pero exportable.
 | 11 ✅ | [Similitud de jugadores](11_similitud_de_jugadores.md) | Buscar entre los 968 jugadores quién se parece a X (fichajes y preparación del rival) | Completos |
 | 12 ✅ | [Impacto ajustado y constructor de quintetos](12_impacto_ajustado_y_constructor.md) | RAPM (+/- descontando compañeros y rivales) y los mejores quintetos con los disponibles | Completos |
 | 13 ✅ | [Patrón de rotación del rival](13_patron_de_rotacion.md) | Quién sale, cuándo descansan sus principales, quién cierra y en qué minutos sufre | Completos |
-| 14 | [Hoja de ruta](14_hoja_de_ruta.md) | Siguientes funciones (plan de rotación, predicción, minutos, momentos clave) y mejoras | — |
+| 14 | [Hoja de ruta](14_hoja_de_ruta.md) | Siguientes funciones y mejoras; sus A1-A4 y A6 ya están implementadas (15-18 y 12 §6) | — |
+| 15 ✅ | [Plan de rotación contra el rival](15_plan_de_rotacion.md) | Cuando el rival sienta a X o flojea, nuestros mejores quintetos contra SU quinteto habitual | Completos |
+| 16 ✅ | [Predicción del partido](16_prediccion_del_partido.md) | Margen esperado y % de victoria, desglosados en nivel, campo y descanso, con prueba hacia atrás | Completos |
+| 17 ✅ | [Planificador de minutos](17_planificador_de_minutos.md) | Reparto de los 200 minutos que maximiza la proyección con topes de carga y cobertura de posición | Completos |
+| 18 ✅ | [Momentos clave del partido](18_momentos_clave.md) | Probabilidad de victoria en directo: las jugadas que decidieron el partido y lista de clips | Completos |
 
 ## Descartada de momento
 

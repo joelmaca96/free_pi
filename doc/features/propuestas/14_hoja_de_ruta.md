@@ -1,6 +1,9 @@
 # 14. Hoja de ruta: de visor de datos a ayuda a la decisión
 
-**Estado:** propuesta · **Fecha:** 2026-09-27 · **Índice:** [00_indice.md](00_indice.md)
+**Estado:** A1 → [15](15_plan_de_rotacion.md), A2 → [16](16_prediccion_del_partido.md),
+A3 → [17](17_planificador_de_minutos.md), A4 → [18](18_momentos_clave.md) y A6 → §6 de
+[12](12_impacto_ajustado_y_constructor.md) IMPLEMENTADAS (2026-09-28); A5 y el bloque B, pendientes ·
+**Fecha:** 2026-09-27 · **Índice:** [00_indice.md](00_indice.md)
 
 Revisión del repositorio tras implementar las propuestas 01-13. Con las 13 hechas, la aplicación
 ya **explica** (rotaciones, calidad de tiro, on/off, señales) y empieza a **recomendar**
