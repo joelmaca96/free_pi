@@ -316,7 +316,9 @@ competition_id)` igual que ACB — necesario desde que hay dos fuentes escribien
   nombres (`ingest/common/identity.py`, `_KNOWN_TEAM_ALIASES`) cubre los casos conocidos
   detectados hasta ahora (p.ej. "Kosner Baskonia"/"Bitci Baskonia"), pero es una lista
   mantenida a mano, no una solución genérica — un patrocinador nuevo no listado crearía un
-  equipo duplicado hasta que se añada su alias.
+  equipo duplicado hasta que se añada su alias. **Resuelto para ACB el 2026-09-28** con el
+  `clubId` estable de la API (ver la sección "Identidad de club sin alias a mano" al final);
+  entre fuentes (ACB ↔ Euroliga) el alias sigue haciendo falta.
 - **Euroliga a escala de temporada completa** (ver 2.3) es el hueco más urgente si se quiere un
   backfill fiable de ambas competiciones de una sentada.
 - **Clutch stats / on-off / segmentos de 2 min** (ver 2.2): con los datos ya disponibles de ACB
@@ -463,3 +465,122 @@ puntos y no posesiones, y todo el On/Off/duplas/RAPM iba por 40 minutos.
   segundos puntos y posesiones pueden caer en tramos contiguos distintos (error de una posesión
   que se compensa al agregar). Un tramo muy corto puede quedar con 0 posesiones y puntos, o al
   revés: los per-100 solo tienen sentido agregados (jugador, pareja, trío), no por tramo suelto.
+
+## Identidad de club sin alias a mano (2026-09-28)
+
+**Problema.** El mismo club acababa en varias filas de `teams` (~23 pares en `data/baskonia.db`)
+porque `resolve_or_create_team` emparejaba por `(source, external_id)` y luego por nombre
+normalizado, y el nombre cambia con el patrocinador. `_KNOWN_TEAM_ALIASES` tapaba los casos ya
+vistos; un patrocinador nuevo creaba un duplicado en silencio hasta que alguien editaba la lista.
+
+### Qué es estable en cada fuente (verificado en vivo)
+
+- **ACB: `clubId`.** Todo objeto de equipo de la API lo trae: `teams[]` de
+  `seasondata/Competition/matches`, `teamBoxscores[].team` de `matchdata/Result/boxscores` y
+  `teams.home/away` de `matchdata/MatchHeader/match-header`. Recorriendo las ediciones 86-91:
+  - el `id` de equipo cambia en **cada** edición, no solo con el patrocinador (Real Madrid:
+    3674, 4239, 4345, 4407, 4476);
+  - `clubId` no cambia nunca: Manresa = 10 como "BAXI Manresa" (4340 en 2024-25, 4414 en
+    2025-26) y como "Kids&Us Manresa" (4471 en 2026-27); Lleida = 658 como Hiopos/Amara/iLERNA;
+    Burgos = 549 como "Burgos Grupo de Santiago"/"Recoletas Salud San Pablo Burgos"; Granada =
+    592 como Coviran/"Stellantis&You"; Bilbao = 4; Barça = 2; Baskonia = 3;
+  - `abbreviatedName` NO sirve (cambia con el patrocinador: `BAX` → `K&U`, `HIO` → `LLE` →
+    `ILE`), ni la ruta del escudo (se renueva por temporada), ni `shortName`.
+  - **Trampa:** los equipos de cantera comparten el `clubId` de su club. En las semanas de la
+    edición 90 contaminadas con Liga U (`competitionId` 134, en el propio objeto de equipo y en
+    el `match-header`) salen "Barça Atlètic" (clubId 2), "Fundacion CB Canarias" (28, el de La
+    Laguna Tenerife), "Unicaja Alhaurín de la Torre" (14)... Por eso el `clubId` solo se usa si
+    el `competitionId` **del equipo** es una competición cargada (1 Liga Endesa, 2 Copa, 3
+    Supercopa): `ingest/acb/adapter.py::senior_acb_club_id`.
+- **Euroliga: `code`** del club (`BAS`, `MAD`...), el mismo en calendario, boxscore y catálogo
+  de clubes. Ya era el `external_id` de `source='euroleague'`, así que no hacía falta nada nuevo.
+- **Entre fuentes no hay clave común**: "Barça" (ACB) ↔ "FC Barcelona" (Euroliga) sigue
+  necesitando `_KNOWN_TEAM_ALIASES`.
+
+### Diseño
+
+1. **`teams.acb_club_id`** (columna nueva, nullable, migración aditiva en `engine.py`). Columna y no
+   un `source` nuevo en `team_external_ids` porque: el `CHECK (source IN (...))` no se puede
+   alterar en SQLite sin recrear la tabla; y la PK `(source, external_id)` impediría que dos
+   filas duplicadas llevasen el mismo `clubId`, que es justo lo que las delata. Sin `UNIQUE` por
+   lo mismo.
+2. **`resolve_or_create_team(..., acb_club_id=...)`**: orden external_id → `acb_club_id` →
+   nombre normalizado → crear. La fila resuelta gana el `acb_club_id` si no lo tenía (las filas
+   antiguas se rellenan solas cuando una ingesta vuelve a ver al equipo). Nunca se pisa un
+   `acb_club_id` distinto (se avisa), y un emparejamiento por nombre con una fila de OTRO
+   `clubId` se rechaza (fila aparte, que el detector marca por nombre). Lo pasan
+   `build_raw_game` (partidos jugados, vía `raw_game.parse_and_resolve`) y el calendario futuro
+   (`fetch_season_scheduled_matches` → `build_scheduled_matchup` → `run_upcoming`, que es donde
+   aparece primero el patrocinador nuevo de cada temporada). `run_upcoming` localiza además al
+   equipo propio por su `clubId` antes que por nombre.
+3. **Colisiones exactas** (`find_team_identity_collisions`): mismo nombre normalizado **o** mismo
+   `acb_club_id`. `tools/fix_team_identity.py` agrupa por las dos claves (unión: un grupo de
+   tres enlazado por alias y por `clubId` sale como uno) y **bloquea** (⛔) un grupo cuyas filas
+   llevan `acb_club_id` distintos: ACB dice que son dos clubes, así que el grupo viene de un alias
+   demasiado laxo y se corrige en `names.py`, no fusionando. El superviviente hereda el
+   `acb_club_id` del grupo.
+4. **Sugerencias difusas** (`find_team_identity_suggestions`), **nunca** vinculan ni fusionan.
+   Candidatos: dos filas que comparten una palabra "de núcleo" (≥4 letras, fuera de un puñado de
+   palabras genéricas como `real`, `gran`, `fundacion`; no es una lista de patrocinadores). Se
+   descartan si hay prueba de que son dos clubes: jugaron (o tienen calendario) la misma
+   competición la misma temporada, se enfrentaron, `acb_club_id` distintos o `code` de Euroliga
+   distintos. `ambiguous=True` si alguno de los dos tiene otro candidato incompatible con el
+   primero. Contra los pares de `_KNOWN_TEAM_ALIASES`, el difuso encuentra 27 de 28 por su cuenta
+   (solo "Barça" ~ "FC Barcelona" no comparte palabra).
+   - **Por qué no hay emparejamiento difuso automático al ingerir**: la señal que separa un
+     cambio de patrocinador de dos clubes de la misma ciudad (Efes/Fenerbahçe en `istanbul`,
+     Maccabi/Hapoel en `aviv`, Zvezda/Partizan en `belgrade`) es que los segundos juegan la misma
+     liga la misma temporada, y una fila que aparece por primera vez aún no ha jugado nada: el
+     primer partido de un recién ascendido es indistinguible del de un patrocinador nuevo. Fundir
+     dos clubes es irreversible; un duplicado se detecta y se arregla. Con el `clubId` de ACB el
+     difuso ya solo hace falta como red para Euroliga y cruces entre fuentes.
+5. **`ingest/run_all.py`**: la comprobación final imprime las colisiones exactas y las
+   sugerencias (estas no ponen `identity_check` en AVISO). `--merge-team-duplicates` (opt-in, no
+   está en `baskonia-ingest.service`) hace copia con `tools/backup_db.py` (etiqueta
+   `pre-fusion-clubes`, sin rotar las antiguas) y fusiona con
+   `tools/fix_team_identity.py::merge_exact_duplicates`, solo colisiones exactas; si la copia
+   falla no fusiona nada y la ejecución sale con error. Un grupo bloqueado (⛔) se deja fuera y se
+   informa, sin impedir la fusión de los demás (en la CLI de la herramienta, en cambio, aborta).
+
+### Cómo fusionar los ~23 pares ya cargados en `data/baskonia.db`
+
+En la Pi, desde `/home/pi/free_pi` (en Windows, `.venv/Scripts/python.exe`):
+
+```bash
+# 0. Parar la ingesta programada mientras tanto (opcional pero recomendable)
+sudo systemctl stop baskonia-ingest.timer
+
+# 1. Copia consistente (API de backup de SQLite, válida con la BD en uso)
+.venv/bin/python tools/backup_db.py --label pre-fusion-clubes
+
+# 2. Diagnóstico: grupos, superviviente elegido, filas que se mueven y bloqueos (⛔)
+.venv/bin/python tools/fix_team_identity.py
+
+# 3a. Fusionar (aborta entero si hay algún ⛔; excluye ese grupo con --skip-id TEAM_ID)
+.venv/bin/python tools/fix_team_identity.py --apply
+
+# 3b. ...o, equivalente, en la próxima ingesta (copia automática + fusión de lo exacto;
+#     los grupos ⛔ se saltan y se informan):
+.venv/bin/python -m ingest.run_all --season 2026 --merge-team-duplicates
+
+# 4. Comprobar: debe decir "Sin colisiones de identidad de club"
+.venv/bin/python tools/fix_team_identity.py
+
+sudo systemctl start baskonia-ingest.timer
+```
+
+Deshacer: parar el timer y la app, y copiar la copia de `data/` encima de `data/baskonia.db`
+(borrando antes cualquier `baskonia.db-wal`/`-shm` suelto). Si el diagnóstico avisa de
+"jugadores con el mismo nombre en el grupo", se miran después con `tools/fix_player_identity.py`
+(esta herramienta mueve jugadores, no los fusiona).
+
+### Limitaciones
+
+- `acb_club_id` solo se rellena en filas que una ingesta vuelve a ver: una fila de una temporada
+  antigua que ya no se reingiere se queda sin él (sus duplicados siguen detectándose por
+  nombre/alias como antes). Reingerir la temporada (`run_single_game` o un backfill) lo rellena.
+- Las sugerencias dependen de tener partidos o calendario cargados de los dos equipos para
+  descartar a los de la misma ciudad; una fila sin partidos todavía puede salir sugerida (por
+  eso no se aplica nada solo).
+- Supuesto no verificable: que ACB no reasigne un `clubId` a otro club (p.ej. tras una
+  desaparición/refundación). No hay caso visto en las ediciones 86-91.

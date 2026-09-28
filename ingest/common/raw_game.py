@@ -8,6 +8,8 @@ las dos, así la resolución de identidad/carga se escribe una sola vez:
 {
   "game_id": "...", "date": "YYYY-MM-DD", "season": 2025, "competition": "ACB",
   "home_team": {"id": "...", "name": "..."}, "away_team": {"id": "...", "name": "..."},
+                 # + "acb_club_id" opcional en cada equipo (solo ACB: `clubId`
+                 # estable del club, ver `resolve_or_create_team`)
   "home_score": 88, "away_score": 82, "pace": 71.2, "narrative": None,
   "team_stats": [{"team_id":.., "efg_pct":.., "ts_pct":.., "tov_pct":.., "orb_pct":..,
                   "ortg":.., "drtg":.., "ast_pct":.., "stl_pct":.., "blk_pct":..,
@@ -124,8 +126,16 @@ def parse_and_resolve(conn: Connection, raw: Dict[str, Any], source: str) -> Nor
     season_id = get_or_create_season(conn, raw["season"])
     competition_id = get_competition_id(conn, raw["competition"])
 
-    home_team_id = resolve_or_create_team(conn, source, raw["home_team"]["id"], raw["home_team"]["name"])
-    away_team_id = resolve_or_create_team(conn, source, raw["away_team"]["id"], raw["away_team"]["name"])
+    # `acb_club_id`: identificador estable del club que solo trae ACB (ver
+    # `resolve_or_create_team`); las demás fuentes no lo ponen y queda `None`.
+    home_team_id = resolve_or_create_team(
+        conn, source, raw["home_team"]["id"], raw["home_team"]["name"],
+        acb_club_id=raw["home_team"].get("acb_club_id"),
+    )
+    away_team_id = resolve_or_create_team(
+        conn, source, raw["away_team"]["id"], raw["away_team"]["name"],
+        acb_club_id=raw["away_team"].get("acb_club_id"),
+    )
 
     team_lookup: Dict[str, str] = {
         raw["home_team"]["id"]: home_team_id,

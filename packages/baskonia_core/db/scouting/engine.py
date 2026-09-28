@@ -140,6 +140,14 @@ _ADDITIVE_COLUMN_MIGRATIONS = [
     # tipados y se recalculen (loader o `tools/backfill_stint_possessions.py`).
     ("lineup_stints", "possessions_for", "REAL"),
     ("lineup_stints", "possessions_against", "REAL"),
+
+    # `clubId` estable de ACB (ver el comentario de `teams.acb_club_id` en
+    # `schema.sql` y `ingest/common/identity.py::resolve_or_create_team`).
+    # Columna y no un `source` nuevo en `team_external_ids` porque el CHECK
+    # de `source` no se puede alterar en SQLite sin recrear la tabla, y
+    # porque su PK `(source, external_id)` impediría que DOS filas duplicadas
+    # llevasen el mismo `clubId` — que es justo lo que las delata.
+    ("teams", "acb_club_id", "INTEGER"),
 ]
 
 # Las VISTAS (`VIEW_NAMES`) no se migran con `ALTER TABLE`: se recrean enteras

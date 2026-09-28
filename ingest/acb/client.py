@@ -372,6 +372,8 @@ class AcbClient:
             `local/features/003-vista-plantilla/01_design.md` §9, que documentaba
             este hueco como sin resolver).
         """
+        from .adapter import senior_acb_club_id  # import diferido: evita ciclo con adapter
+
         edition_id = season_to_edition_id(season)
         anchor = self._get_matches_page(edition_id, week_id=None)
         anchor_week = anchor["selectedFilters"]["week"]
@@ -388,6 +390,7 @@ class AcbClient:
                 teams_by_id[str(team["id"])] = {
                     "name": team.get("shortName") or team.get("fullName") or str(team["id"]),
                     "logo_url": team.get("logo"),
+                    "acb_club_id": senior_acb_club_id(team),
                 }
 
         _collect(anchor)

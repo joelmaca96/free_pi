@@ -17,6 +17,19 @@ estas colisiones se detecten hoy (sin el alias, "Casademont Zgz" y
 alias NO hace es fusionar las filas que se crearon ANTES de añadirlo: eso es
 esto, una migración de datos de una vez.
 
+(2026-09-28) El `id` de ACB cambia en realidad en CADA edición, no solo con
+el patrocinador — pero el mismo payload trae un `clubId` que no cambia nunca
+(verificado en vivo, ver `doc/features/ingestor/01_estado.md`). La ingesta lo
+guarda en `teams.acb_club_id` y empareja por él, así que un patrocinador
+nuevo ya no crea duplicado aunque no haya alias. Y dos filas con el mismo
+`acb_club_id` son un grupo EXACTO más para esta herramienta (ver
+`_collision_groups`), sin alias de por medio. Lo contrario también cuenta: un
+grupo formado por nombre cuyas filas llevan `acb_club_id` DISTINTOS se
+bloquea (⛔), porque ACB dice que son dos clubes.
+
+Desde `ingest/run_all.py --merge-team-duplicates` se reutiliza
+`merge_exact_duplicates` (con copia de seguridad previa automática).
+
 Mientras están separadas, cualquier agregado por `team_id` de ese club
 (récord, carga de minutos, descanso entre partidos, H2H...) ve solo una parte
 de sus partidos, y el escudo/los jugadores pueden colgar de la fila
@@ -115,24 +128,48 @@ _TEAM_TABLES = [
 
 
 def _collision_groups(conn) -> List[List[str]]:
-    """Grupos de `teams.id` que normalizan al mismo nombre, de 2 en adelante.
+    """Grupos de `teams.id` que son el mismo club, de 2 en adelante.
 
     `find_team_identity_collisions` devuelve PARES (uno por cada equipo
     adicional), pero un club puede estar partido en tres o cuatro filas
     (Lleida: `amara-lleida`, `cochesinternet`, `hiopos-lleid`,
-    `ilerna-lleid`). Se agrupa por el mismo nombre normalizado que usa el
-    detector, así que un grupo de N sale como un grupo, no como N-1 pares
-    sueltos que habría que fusionar en cadena.
+    `ilerna-lleid`). Se agrupa por las mismas dos claves exactas que usa el
+    detector — nombre normalizado y `teams.acb_club_id` —, uniendo en un solo
+    grupo lo que enlace cualquiera de las dos (un "Kids&Us Manresa" sin alias
+    que comparte `acb_club_id` con "BAXI Manresa", que a su vez comparte
+    nombre normalizado con "Occident Manresa", es UN grupo de tres). Así un
+    grupo de N sale como un grupo, no como N-1 pares sueltos que habría que
+    fusionar en cadena.
     """
+    rows = conn.execute(text("SELECT id, name, acb_club_id FROM teams ORDER BY id")).all()
+    parent: Dict[str, str] = {row.id: row.id for row in rows}
+
+    def find(team_id: str) -> str:
+        while parent[team_id] != team_id:
+            parent[team_id] = parent[parent[team_id]]
+            team_id = parent[team_id]
+        return team_id
+
+    for key_of in (lambda r: ("name", normalize_name(r.name)), lambda r: ("club", r.acb_club_id)):
+        first_by_key: Dict[tuple, str] = {}
+        for row in rows:
+            key = key_of(row)
+            if key[1] is None:
+                continue
+            if key in first_by_key:
+                parent[find(row.id)] = find(first_by_key[key])
+            else:
+                first_by_key[key] = row.id
+
     grouped: Dict[str, List[str]] = defaultdict(list)
-    for row in conn.execute(text("SELECT id, name FROM teams ORDER BY id")).all():
-        grouped[normalize_name(row.name)].append(row.id)
-    return [ids for _key, ids in sorted(grouped.items()) if len(ids) > 1]
+    for row in rows:
+        grouped[find(row.id)].append(row.id)
+    return sorted(ids for ids in grouped.values() if len(ids) > 1)
 
 
 def _team_info(conn, team_id: str) -> dict:
     row = conn.execute(
-        text("SELECT name, is_own_team, logo_url FROM teams WHERE id = :id"), {"id": team_id}
+        text("SELECT name, is_own_team, logo_url, acb_club_id FROM teams WHERE id = :id"), {"id": team_id}
     ).one()
     games = conn.execute(
         text("SELECT COUNT(*) FROM games WHERE home_team_id = :id OR away_team_id = :id"),
@@ -155,6 +192,7 @@ def _team_info(conn, team_id: str) -> dict:
         "name": row.name,
         "is_own_team": bool(row.is_own_team),
         "logo_url": row.logo_url,
+        "acb_club_id": row.acb_club_id,
         "games": games,
         "players": players,
         "upcoming": upcoming,
@@ -331,11 +369,18 @@ def _plan(conn) -> List[dict]:
             for table, keys in _UNIQUE_KEYS_WITH_TEAM
             for key in _key_conflicts(conn, table, keys, group)
         ]
+        # Dos `acb_club_id` distintos en el grupo = ACB dice que son DOS
+        # clubes: el grupo lo ha formado un nombre (un alias demasiado laxo),
+        # y fusionarlo sería fundir dos clubes. Se bloquea igual que un choque
+        # de clave: eso se arregla en `names.py`, no aquí.
+        club_ids = sorted({info["acb_club_id"] for info in infos if info["acb_club_id"] is not None})
         plan.append(
             {
                 "survivor": survivor,
                 "losers": losers,
                 "logo_from": logo_from,
+                "acb_club_id": club_ids[0] if len(club_ids) == 1 else None,
+                "club_id_conflict": club_ids if len(club_ids) > 1 else [],
                 "conflicts": _game_key_conflicts(conn, group, survivor["id"]),
                 "key_conflicts": conflicts,
                 "zone_merges": _zone_stat_overlaps(conn, group),
@@ -373,6 +418,11 @@ def _diagnose(conn, plan: List[dict]) -> None:
             )
         for table, key in entry["key_conflicts"]:
             print(f"      ⛔ {table}: dos filas del club para la misma clave {key}. Revísalo a mano antes.")
+        if entry["club_id_conflict"]:
+            print(
+                f"      ⛔ ACB dice que son clubes distintos (clubId {entry['club_id_conflict']}): "
+                "el grupo sale de un nombre/alias demasiado laxo. Corrige _KNOWN_TEAM_ALIASES, no fusiones."
+            )
         dupes = _same_name_players(conn, [survivor["id"]] + [loser["id"] for loser in entry["losers"]])
         if dupes:
             print(
@@ -382,9 +432,22 @@ def _diagnose(conn, plan: List[dict]) -> None:
         print()
 
 
+def _is_blocked(entry: dict) -> bool:
+    """`True` si el grupo no se puede fusionar sin revisión a mano (⛔ en el diagnóstico)."""
+    return bool(entry["conflicts"] or entry["key_conflicts"] or entry["club_id_conflict"])
+
+
 def _apply(conn, plan: List[dict]) -> None:
     for entry in plan:
         survivor_id = entry["survivor"]["id"]
+        # El superviviente se queda con el `clubId` de ACB del grupo (si el
+        # grupo tiene uno): es lo que hará que la siguiente ingesta del club,
+        # con el nombre que sea, caiga en esta fila.
+        if entry.get("acb_club_id") is not None and entry["survivor"].get("acb_club_id") is None:
+            conn.execute(
+                text("UPDATE teams SET acb_club_id = :club WHERE id = :id"),
+                {"club": entry["acb_club_id"], "id": survivor_id},
+            )
         if entry["logo_from"]:
             conn.execute(
                 text("UPDATE teams SET logo_url = :logo WHERE id = :id"),
@@ -422,6 +485,51 @@ def _apply(conn, plan: List[dict]) -> None:
                     {"new": survivor_id, "old": loser["id"]},
                 )
             conn.execute(text("DELETE FROM teams WHERE id = :id"), {"id": loser["id"]})
+
+
+def merge_exact_duplicates(engine, skip_ids=()) -> dict:
+    """Fusiona todos los grupos de colisión EXACTA que se puedan fusionar sin revisión.
+
+    Lo mismo que `--apply`, empaquetado para `ingest/run_all.py
+    --merge-team-duplicates`, con una diferencia a propósito: aquí un grupo
+    bloqueado (⛔: el mismo partido cargado dos veces, una clave única que
+    chocaría, o `acb_club_id` distintos) NO aborta la fusión de los demás —
+    se deja fuera y se devuelve en `blocked` para revisarlo a mano. En la CLI
+    sí aborta todo, porque ahí hay alguien delante que puede usar
+    `--skip-id`; en una ingesta desatendida, parar la fusión entera por un
+    grupo raro dejaría los otros veinte sin arreglar.
+
+    NO hace copia de seguridad: eso es cosa de quien llama (`run_all` la hace
+    con `tools/backup_db.py` antes de llamar aquí, y la CLI lo pide en el
+    docstring del módulo).
+
+    Returns:
+        `{"merged_clubs": N, "absorbed_rows": M, "merged": [(superviviente,
+        [absorbidos])], "blocked": [[ids del grupo]], "remaining": [pares]}`.
+    """
+    skip_ids = set(skip_ids)
+    with engine.connect() as conn:
+        plan = [
+            entry for entry in _plan(conn)
+            if not (set(entry["group"]) & skip_ids)
+        ]
+    blocked = [entry for entry in plan if _is_blocked(entry)]
+    mergeable = [entry for entry in plan if not _is_blocked(entry)]
+    remaining: List[Tuple[str, str]] = []
+    if mergeable:
+        with engine.begin() as conn:
+            _apply(conn, mergeable)
+    with engine.connect() as conn:
+        remaining = find_team_identity_collisions(conn)
+    return {
+        "merged_clubs": len(mergeable),
+        "absorbed_rows": sum(len(entry["losers"]) for entry in mergeable),
+        "merged": [
+            (entry["survivor"]["id"], [loser["id"] for loser in entry["losers"]]) for entry in mergeable
+        ],
+        "blocked": [entry["group"] for entry in blocked],
+        "remaining": remaining,
+    }
 
 
 def main() -> None:
@@ -464,7 +572,7 @@ def main() -> None:
         print("Ejecuta de nuevo con --apply para escribir los cambios.")
         return
 
-    blocked = [entry for entry in plan if entry["conflicts"] or entry["key_conflicts"]]
+    blocked = [entry for entry in plan if _is_blocked(entry)]
     if blocked:
         print(
             "Abortado: "
