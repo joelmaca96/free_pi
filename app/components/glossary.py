@@ -416,6 +416,52 @@ TERMS: Dict[str, Term] = {
         "escalado a 40 minutos. Los puntos de cada tramo de quinteto se reparten por tiempo entre los "
         "bloques que toca: aproximación, no canasta a canasta.",
     ),
+    # --- planificador de minutos (propuesta 17) --
+    "planned_minutes": Term(
+        "Plan (min)", "Minutos planificados para el próximo partido",
+        "Reparto de los 200 minutos de jugador (5 × 40) que maximiza el margen proyectado con los topes, "
+        "mínimos y disponibles de la tabla. Totales del partido, no la rotación concreta.",
+    ),
+    "minutes_cap": Term(
+        "Tope", "Máximo de minutos del jugador en el partido",
+        "Sugerido por la carga: el tope general, rebajado a lo que le falta para cruzar el aviso de minutos "
+        "en 7 días y a un tope de descanso corto si llega con dos días o menos tras un partido largo. El "
+        "entrenador lo corrige en la tabla.",
+    ),
+    "minutes_floor": Term(
+        "Mín.", "Mínimo de minutos del jugador en el partido",
+        "Minutos que tiene que jugar pase lo que pase (rodaje, un plan táctico concreto). Por defecto 0: "
+        "juega lo que dicte el modelo.",
+    ),
+    "recent_avg_minutes": Term(
+        "Media reciente", "Media de minutos en los últimos partidos",
+        "Media de minutos en los partidos que SÍ jugó de los cinco últimos del equipo antes de la fecha "
+        "del partido. En blanco si no jugó ninguno (lesión o recién llegado).",
+    ),
+    "projected_margin": Term(
+        "Margen proyectado", "Diferencia de puntos esperada frente a un rival medio",
+        "Suma de RAPM × minutos / 40 de todos los jugadores: cada minuto de un jugador sustituye a uno "
+        "medio. Modelo aditivo, sin química ni ventaja de campo: sirve para comparar repartos, no para "
+        "pronosticar el marcador.",
+    ),
+    "rapm_prudent": Term(
+        "RAPM prudente", "RAPM menos su incertidumbre",
+        "RAPM menos media desviación típica a posteriori, que es mayor cuantos menos minutos tiene el "
+        "jugador en el ajuste. Con el criterio prudente, un jugador con poca muestra solo gana minutos si "
+        "su ventaja esperada lo compensa.",
+    ),
+    "binding_constraint": Term(
+        "Qué lo limita", "Restricción que fija los minutos del jugador",
+        "Por qué juega esos minutos y no más ni menos: su tope (por carga, descanso corto, general o del "
+        "entrenador), su mínimo, la cobertura de posición, que completa los 200 minutos o que su valor "
+        "queda por debajo de los que juegan.",
+    ),
+    "position_coverage": Term(
+        "Cobertura", "Minutos mínimos por posición",
+        "40 minutos de base y 40 de pívot entre todos los de esa posición. Es la condición exacta para que "
+        "exista una rotación con uno de cada en pista en todo momento (con nadie por encima de 40 "
+        "minutos). 'Ala-pívot' no cuenta como pívot.",
+    ),
 }
 
 

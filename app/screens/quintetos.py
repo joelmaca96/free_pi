@@ -40,6 +40,7 @@ import streamlit as st
 from assistant.capabilities import probe
 from components.glossary import glossary_expander, help_text
 from components.impact import impact_section, lineup_builder_section
+from components.minutes_plan import minutes_plan_section
 from components.header import page_header
 from data import queries, queries_assistant
 from data.db import get_read_engine
@@ -277,6 +278,10 @@ if capabilities.lineup_stints:
     )
     lineup_builder_section(engine, team_id, season_id, competition_id, team_label, positions)
     st.divider()
+    # Propuesta 17: minutos del próximo partido, solo para el equipo propio.
+    if team_id == own_team_id:
+        minutes_plan_section(engine, team_id, season_id, competition_id, team_label, positions)
+        st.divider()
 
 # ------------------------------------------------------------------ con y sin --
 st.subheader("Con y sin")
