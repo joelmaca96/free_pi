@@ -73,6 +73,18 @@ de la 07).
 - La posición solo existe para la plantilla propia (baskonia_web): con un rival, la restricción
   "un base y un pívot" se desactiva sola.
 - Todo en diferencia de puntos, no en posesiones.
+- **Campo neutral**: `games` no marca los partidos en pista neutral (Copa, Final Four), así que
+  el ajuste les aplica igualmente la ventaja de campo al equipo que figura como local
+  (`home_team_id`). Son pocos partidos por temporada y el término de campo es de control (no se
+  enseña como dato de jugador); el efecto sobre el RAPM de cada jugador es despreciable.
+- **Canasta y cambio en el mismo segundo**: si los tramos de los dos equipos no coinciden en el
+  marcador de una frontera (el orden de la fuente decide a qué quinteto va la canasta),
+  `build_segments` se queda con uno; el error es de una canasta entre dos segmentos contiguos y
+  se compensa en la suma. En simulación a través de la reconstrucción real de la ingesta
+  (`test_segments_match_the_real_score_of_ingested_games`), sin empates de segundo cada segmento
+  cuadra exactamente con el marcador; con empates forzados, ~0,5% de los segmentos se desvían.
+- **Tramos solapados del mismo equipo** (dato roto): se toma el primero por hora de inicio; no
+  se ha visto en los datos servidos.
 
 ## 6. RAPM con prior de la temporada anterior (A6)
 
@@ -103,9 +115,12 @@ año manda el punto de partida; con muchos, los datos (a λ = 1200 minutos, mita
   `impact.prior_from_fit`.
 
 **Datos y caché** (`queries_assistant.season_impact(engine, season_id, competition_id,
-use_prior=True)`): la temporada anterior es la de `id` inmediatamente inferior con partidos
-cargados (`queries_assistant.previous_season`, mismo orden que `queries.list_seasons`), con el
-mismo filtro de competición. Su ajuste es la misma función con `use_prior=False`, así que tiene su
+use_prior=True)`): la temporada anterior es la inmediatamente anterior **por el año de inicio
+de su etiqueta** ('2024-2025' → 2024) con partidos cargados (`queries_assistant.previous_season`).
+No por `id`: el `id` es autoincremental y sigue el orden de ingesta, así que una temporada
+histórica cargada después de la actual tendría `id` mayor y, por `id`, tomaría de prior la
+temporada siguiente (auditoría 2026-09-28). Con el mismo filtro de competición: si la temporada
+anterior no tiene tramos en esa competición, no hay prior (no se busca más atrás). Su ajuste es la misma función con `use_prior=False`, así que tiene su
 propia entrada de caché y se calcula una sola vez. Sin temporada anterior, o sin tramos en ella,
 el resultado es idéntico al de antes. Devuelve además `prior_season` (`{"id", "label"}` o `None`).
 
@@ -116,9 +131,15 @@ el resultado es idéntico al de antes. Devuelve además `prior_season` (`{"id", 
   ella, dos columnas más: **Punto de partida** (el β₀ de cada jugador, en blanco si no jugó la
   temporada anterior) y **Solo esta temporada** (el RAPM sin prior), para ver cuánto ha movido el
   prior a cada uno. El pie de la tabla dice de qué temporada sale.
-- El **constructor** usa el mismo ajuste (lee la misma casilla).
+- El **constructor** y el **planificador de minutos** (propuesta 17) usan el mismo ajuste: leen
+  la misma casilla a través de `components.impact.page_season_impact` (antes de la auditoría del
+  2026-09-28 el planificador ignoraba la casilla y seguía con prior al desmarcarla). Las páginas
+  sin casilla (plan de rotación en "Próximo rival", informe PPT, herramientas del asistente sin
+  `use_prior`) usan el valor por defecto: con prior si hay temporada anterior.
 - `lineup_builder` del asistente acepta `use_prior` (por defecto `true`), devuelve
   `rapm_no_prior`/`prior` por jugador y `prior_season`, y avisa en `warnings` cuando hay prior.
+  Rechaza (`fail`) fijos sin tramos con el equipo (un id de otro equipo salía en sus quintetos
+  como jugador medio) y más de cinco fijos, y avisa cuando no hay quintetos que proponer.
 - Glosario: `rapm_prior` ("Punto de partida") y `rapm_no_prior` ("Solo esta temporada").
 
 **Alternativa descartada: agrupar temporadas** (un solo ajuste con las dos temporadas y peso

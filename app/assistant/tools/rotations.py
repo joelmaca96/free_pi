@@ -142,13 +142,29 @@ def lineup_builder(
         )
 
     unavailable = set(unavailable or [])
+    fixed = sorted({p for p in (must_include or []) if p not in unavailable})
+    # `best_lineups` mete a los fijos en el grupo aunque no sean candidatos:
+    # un id de otro equipo (o mal resuelto) saldría en "los mejores quintetos
+    # de" este equipo como jugador medio sin que nadie lo note.
+    outsiders = [p for p in fixed if p not in team_minutes.index]
+    if outsiders:
+        return fail(
+            "jugador fuera del equipo",
+            detail=(
+                f"{', '.join(names.get(p, p) for p in outsiders)} no tiene tramos con {team_id} en la "
+                f"temporada {season}: no puede ser fijo en sus quintetos."
+            ),
+            suggestion="Comprueba el player_id con resolve_entity (y que sea de este equipo).",
+        )
+    if len(fixed) > 5:
+        return fail("demasiados fijos", detail=f"must_include trae {len(fixed)} jugadores; un quinteto tiene 5.")
     candidates = [
         p for p in team_minutes.index
         if team_minutes[p] >= 100.0 and p not in unavailable
     ]
     best = impact.best_lineups(
         fit["players"], candidates, observed=impact.observed_lineups(segments, team_id),
-        must_include=[p for p in (must_include or []) if p not in unavailable], top=max(1, min(int(limit), 10)),
+        must_include=fixed, top=max(1, min(int(limit), 10)),
     )
     team_rapm = fit["players"][fit["players"]["player_id"].isin(team_minutes.index)].assign(
         player_name=lambda df: df["player_id"].map(names),
@@ -170,6 +186,10 @@ def lineup_builder(
         "Di siempre los minutos reales que ese quinteto ha jugado junto a la proyección.",
         f"RAPM con menos de {impact.MIN_RELIABLE_MINUTES:.0f} minutos (reliable=false) no sirve para decidir.",
     ]
+    if best.empty:
+        warnings.append(
+            "No hay quintetos que proponer: menos de cinco disponibles con 100 minutos o más con el equipo."
+        )
     if prior_season:
         warnings.append(
             f"RAPM con la temporada {prior_season['label']} como punto de partida (prior: su RAPM "

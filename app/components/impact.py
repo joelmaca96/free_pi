@@ -7,8 +7,13 @@ cómo se enseña.
 
 **Prior de la temporada anterior** (propuesta 12 §6): la casilla "Usar la
 temporada anterior como punto de partida" vive en la sección de RAPM y la
-lee también el constructor (misma clave de `st.session_state`), así que las
-dos secciones enseñan SIEMPRE el mismo ajuste.
+leen también el constructor y el planificador de minutos
+(`components/minutes_plan.py`) a través de `page_season_impact`, así que
+todas las secciones de la pantalla de quintetos enseñan SIEMPRE el mismo
+ajuste. Las páginas sin la casilla (plan de rotación de "Próximo rival",
+informe PPT, herramientas del asistente sin `use_prior`) usan el valor por
+defecto de `season_impact`: con prior si hay temporada anterior, que es
+también el valor por defecto de la casilla.
 
 Se importa con el mismo doble camino que el resto de `app/`.
 """
@@ -63,6 +68,18 @@ def _use_prior(engine, season_id: int, *, widget: bool) -> tuple:
     else:
         value = st.session_state.get(_USE_PRIOR_KEY, previous is not None)
     return bool(value) and previous is not None, previous
+
+
+def page_season_impact(engine, season_id: int, competition_id: Optional[int]) -> dict:
+    """`queries_assistant.season_impact` con el prior que marca la casilla de la sección de RAPM.
+
+    Para las secciones que van DESPUÉS de `impact_section` en la misma
+    pantalla (constructor, planificador de minutos): leen la casilla sin
+    pintarla, así que usan exactamente el mismo ajuste (y la misma entrada de
+    caché) que la tabla de RAPM.
+    """
+    use_prior, _ = _use_prior(engine, season_id, widget=False)
+    return queries_assistant.season_impact(engine, season_id, competition_id, use_prior=use_prior)
 
 
 def _lineup_label(players, names: Dict[str, str]) -> str:
@@ -180,8 +197,7 @@ def lineup_builder_section(
         "que ese quinteto exacto ha hecho de verdad al lado."
     )
     # Mismo ajuste que la sección de RAPM: lee su casilla, no pinta otra.
-    use_prior, _ = _use_prior(engine, season_id, widget=False)
-    data = queries_assistant.season_impact(engine, season_id, competition_id, use_prior=use_prior)
+    data = page_season_impact(engine, season_id, competition_id)
     fit, segments, names = data["fit"], data["segments"], data["names"]
     team_minutes = impact.team_player_minutes(segments, team_id)
     if team_minutes.empty:

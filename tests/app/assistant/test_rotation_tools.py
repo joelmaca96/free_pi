@@ -105,3 +105,39 @@ def test_lineup_builder_can_ignore_the_previous_season(engine, league_ctx):
     assert result["data"]["prior_season"] is None
     assert not any("punto de partida" in warning for warning in result["meta"]["warnings"])
     assert "prior" not in result["data"]["player_impact"][0]
+
+
+def test_lineup_builder_rejects_fixed_players_from_another_team(engine, ctx):
+    """Regresión: un fijo sin tramos con el equipo (id de un rival) salía en sus quintetos como jugador medio."""
+    _seed(engine)
+    ctx.capabilities = probe(engine)
+
+    result = ToolCatalog(ctx).execute(
+        "1", "lineup_builder", {"team_id": "bas", "must_include": ["v1"]}
+    ).result
+
+    assert result["error"] == "jugador fuera del equipo"
+    assert "Valencia 0" in result["detail"]
+
+
+def test_lineup_builder_rejects_more_than_five_fixed_players(engine, ctx):
+    _seed(engine)
+    ctx.capabilities = probe(engine)
+
+    fixed = ["howard", "moneke", "codi", "sedekerskis", "kotsar", "nikos"]
+    result = ToolCatalog(ctx).execute("1", "lineup_builder", {"team_id": "bas", "must_include": fixed}).result
+
+    assert result["error"] == "demasiados fijos"
+
+
+def test_lineup_builder_explains_an_empty_proposal(engine, ctx):
+    _seed(engine)
+    ctx.capabilities = probe(engine)
+
+    result = ToolCatalog(ctx).execute(
+        "1", "lineup_builder", {"team_id": "bas", "unavailable": ["howard", "moneke", "codi"]}
+    ).result
+
+    assert "error" not in result, result
+    assert result["data"]["best_lineups"] == []
+    assert any("No hay quintetos que proponer" in w for w in result["meta"]["warnings"])

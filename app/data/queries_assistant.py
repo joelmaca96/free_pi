@@ -2085,16 +2085,26 @@ def foul_drawing_leaders(
 def previous_season(_engine: Engine, season_id: int) -> Optional[dict]:
     """La temporada anterior a `season_id` con partidos cargados: `{"id", "label"}` o `None`.
 
-    "Anterior" = el `id` más alto por debajo de `season_id` (el mismo orden
-    que `queries.list_seasons`, que va por `id` y no por la etiqueta). Se
-    salta una temporada sin partidos cargados: existir en `seasons` sin un
-    solo partido (el calendario ingerido y nada más) no aporta prior.
+    "Anterior" = la más reciente por AÑO DE INICIO de la etiqueta
+    ('2024-2025' → 2024) por debajo de la de `season_id`, no por `id`: el
+    `id` es autoincremental (`ingest.common.identity.get_or_create_season`)
+    y sigue el orden de INGESTA, así que cargar una temporada histórica
+    después de la actual le daría un `id` mayor — y por `id` la temporada
+    vieja tomaría de prior la NUEVA (información del futuro) y la actual se
+    quedaría sin prior. Si alguna etiqueta no empieza por un año se vuelve
+    al orden por `id` (el de `queries.list_seasons`). Se salta una
+    temporada sin partidos cargados: existir en `seasons` sin un solo
+    partido (el calendario ingerido y nada más) no aporta prior.
     Sin caché propia: `list_seasons` ya está cacheada.
     """
     seasons = queries.list_seasons(_engine)
-    if seasons.empty:
+    if seasons.empty or season_id not in set(seasons["id"].astype(int)):
         return None
-    earlier = seasons[(seasons["id"] < season_id) & (seasons["games"] > 0)].sort_values("id")
+    start_year = pd.to_numeric(seasons["label"].astype(str).str.extract(r"^\s*(\d{4})")[0], errors="coerce")
+    order = start_year if start_year.notna().all() else seasons["id"]
+    seasons = seasons.assign(_order=order.to_numpy())
+    current = seasons.loc[seasons["id"].astype(int) == int(season_id), "_order"].iloc[0]
+    earlier = seasons[(seasons["_order"] < current) & (seasons["games"] > 0)].sort_values(["_order", "id"])
     if earlier.empty:
         return None
     row = earlier.iloc[-1]
