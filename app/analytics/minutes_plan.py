@@ -63,7 +63,8 @@ topes, mínimos, suelos o el total. Los tests lo comparan con fuerza bruta.
 incertidumbre es mucho mayor para quien ha jugado poco. `risk_adjusted_rapm`
 resta `κ` desviaciones típicas a posteriori (`τ·√(λ/(n+λ))`, con `n` minutos
 en el ajuste): un jugador con pocos minutos solo gana minutos si su ventaja
-esperada lo compensa. Con `κ = 0` es el RAPM puro.
+esperada lo compensa. Con `κ = 0` es el RAPM puro. Con el prior de la
+temporada anterior la fórmula no cambia (mismo λ; ver `rapm_posterior_sd`).
 
 **Topes por carga.** `load_caps` traduce el calendario en un tope por jugador
 (reglas en `LoadRules`, todas parametrizables): el tope general, rebajado a lo
@@ -336,8 +337,12 @@ def relax_caps(
     plantilla por debajo de 200 minutos, o a los bases por debajo de sus 40:
     el plan no existiría, y un error no ayuda a nadie el día de partido. Se
     suben solo los topes que NO ha fijado el entrenador (`cap_source !=
-    "entrenador"`), de los disponibles, sin pasar de 40, en dos pasos:
+    "entrenador"`), de los disponibles, sin pasar de 40, en tres pasos:
 
+    0. Un tope sugerido por debajo del MÍNIMO que ha fijado el entrenador
+       sube hasta ese mínimo: el mínimo es decisión suya y la sugerencia no
+       puede contradecirla (un tope fijado por él sí se respeta, y el plan
+       dirá que mínimo y tope chocan).
     1. Por cada suelo de posición que no se alcanza, el mismo `δ_g` (minutos
        enteros, el menor posible) a los jugadores de esa posición.
     2. Si el total sigue sin llegar a `total`, el mismo `δ` a todos.
@@ -346,8 +351,8 @@ def relax_caps(
     paso no toca nada: el plan dirá que no es factible y por qué.
 
     Args:
-        players: `available, max_minutes` y, opcionales, `position`,
-            `cap_source`, `cap_detail` (como en `plan_minutes`).
+        players: `available, max_minutes` y, opcionales, `min_minutes`,
+            `position`, `cap_source`, `cap_detail` (como en `plan_minutes`).
         position_floors: los mismos suelos que se pasarán a `plan_minutes`.
 
     Returns:
@@ -355,7 +360,9 @@ def relax_caps(
         hecha, vacía si no hacía falta ninguna.
     """
     df = players.copy().reset_index(drop=True)
-    for column, default in (("cap_source", "general"), ("cap_detail", ""), ("position", None)):
+    for column, default in (
+        ("cap_source", "general"), ("cap_detail", ""), ("position", None), ("min_minutes", 0.0),
+    ):
         if column not in df.columns:
             df[column] = default
     available = df["available"].fillna(False).astype(bool).to_numpy()
@@ -363,6 +370,16 @@ def relax_caps(
     adjustable = available & (df["cap_source"].fillna("general") != "entrenador").to_numpy()
     details = df["cap_detail"].fillna("").astype(str).tolist()
     notes = []
+
+    mins = np.clip(df["min_minutes"].astype(float).fillna(0.0).to_numpy(), 0.0, GAME_MINUTES)
+    below_min = np.flatnonzero(adjustable & (mins > caps + _EPS))
+    for i in below_min:
+        caps[i] = mins[i]
+        note = f"subido a su mínimo ({mins[i]:.0f})"
+        details[i] = f"{details[i]}, {note}" if details[i] else note
+    if below_min.size:
+        names = df["player_name"].astype(str).tolist() if "player_name" in df.columns else [str(i) for i in df.index]
+        notes.append("hasta su mínimo los topes sugeridos de " + ", ".join(names[i] for i in below_min))
 
     def raise_to(members: np.ndarray, target: float, label: str) -> None:
         def capacity(delta: float) -> float:
@@ -400,6 +417,14 @@ def rapm_posterior_sd(fit_minutes, *, ridge: float = RIDGE_LAMBDA, prior_sd: flo
     Aproximación de diseño ortogonal (cada jugador como si su columna no se
     solapara con las demás): exacta en el límite, y sobre todo MONÓTONA en
     los minutos, que es lo único que necesita la opción prudente.
+
+    Vale igual con el RAPM con prior de la temporada anterior
+    (`impact.fit_rapm(prior=...)`): el prior solo mueve la MEDIA a priori
+    (β₀ en lugar de 0) y mantiene el mismo λ, y en el modelo bayesiano del
+    ridge la varianza a posteriori no depende de esa media. Es conservadora
+    para quien trae prior (alrededor de un buen punto de partida la
+    incertidumbre real es menor que τ), lo mismo que ya asume `fit_rapm` al
+    no cambiar λ.
     """
     n = np.clip(np.asarray(fit_minutes, dtype=float), 0.0, None)
     return prior_sd * np.sqrt(ridge / (n + ridge))
@@ -482,6 +507,23 @@ def _norm(label) -> str:
     if label is None or (isinstance(label, float) and math.isnan(label)):
         return ""
     return str(label).strip().lower()
+
+
+def applicable_position_floors(
+    available_positions: Sequence, floors: Mapping[str, float] = DEFAULT_POSITION_FLOORS
+) -> tuple:
+    """Suelos de posición que se pueden exigir con estos disponibles.
+
+    Sin ningún disponible de una posición (los dos pívots lesionados), su
+    cobertura es imposible por definición: se quita en vez de dejar el plan
+    sin solución, y se dice cuál. Pantalla y asistente usan esta misma regla.
+
+    Returns:
+        `(suelos aplicables, [posiciones sin ningún disponible])`.
+    """
+    present = {_norm(p) for p in available_positions}
+    kept = {label: minutes for label, minutes in floors.items() if _norm(label) in present}
+    return kept, sorted(label for label in floors if label not in kept)
 
 
 def optimise_minutes(

@@ -24,13 +24,13 @@ try:  # pragma: no cover - ver nota en app/assistant/tools/context.py
     from app.analytics import impact
     from app.analytics import minutes_plan as mp
     from app.components.glossary import glossary_expander, help_text
-    from app.components.impact import page_season_impact
+    from app.components.impact import _use_prior, page_season_impact
     from app.data import queries
 except ImportError:  # pragma: no cover
     from analytics import impact
     from analytics import minutes_plan as mp
     from components.glossary import glossary_expander, help_text
-    from components.impact import page_season_impact
+    from components.impact import _use_prior, page_season_impact
     from data import queries
 
 _PLAN = "#104281"
@@ -56,7 +56,9 @@ def minutes_plan_section(
     )
 
     # Mismo ajuste (con o sin temporada anterior) que la tabla de RAPM y el
-    # constructor de esta pantalla: lee su casilla.
+    # constructor de esta pantalla: lee su casilla. `use_prior` también entra
+    # en la clave del editor (cambiar el ajuste reordena la tabla).
+    use_prior, _ = _use_prior(engine, season_id, widget=False)
     data = page_season_impact(engine, season_id, competition_id)
     fit, segments, names = data["fit"], data["segments"], data["names"]
     team_minutes = impact.team_player_minutes(segments, team_id)
@@ -74,7 +76,7 @@ def minutes_plan_section(
     col_date, col_cap, col_mode = st.columns([2, 2, 3])
     with col_date:
         reference_date = st.date_input(
-            "Fecha del partido", value=default_date, key=f"minutes_plan_date_{team_id}",
+            "Fecha del partido", value=default_date, key=f"minutes_plan_date_{team_id}_{season_id}",
             help="La carga se cuenta en los días ANTERIORES a esta fecha. Por defecto, el próximo partido del "
             "calendario o, si no hay uno cercano, uno hipotético tres días después del último jugado.",
         )
@@ -110,10 +112,16 @@ def minutes_plan_section(
         f"≤{rules.short_rest_days} días de descanso tras un partido de {rules.short_rest_last_game:.0f}+ min."
     )
 
-    # La clave del editor lleva lo que cambia los topes sugeridos: al mover la
-    # fecha o el tope general, la tabla vuelve a las sugerencias en vez de
-    # arrastrar ediciones hechas sobre otras.
-    editor_key = f"minutes_plan_editor_{team_id}_{reference_date.isoformat()}_{general_cap}"
+    # La clave del editor lleva todo lo que cambia la tabla de partida: al
+    # mover la fecha o el tope general, la tabla vuelve a las sugerencias en
+    # vez de arrastrar ediciones hechas sobre otras; y como `data_editor`
+    # guarda las ediciones por POSICIÓN de fila, y la tabla se ordena por
+    # RAPM, cambiar de temporada, competición o prior (otro orden) no puede
+    # reaplicarlas a otros jugadores.
+    editor_key = (
+        f"minutes_plan_editor_{team_id}_{season_id}_{competition_id}_{use_prior}_"
+        f"{reference_date.isoformat()}_{general_cap}"
+    )
     edited = st.data_editor(
         base,
         hide_index=True,
@@ -136,10 +144,12 @@ def minutes_plan_section(
                 "Media reciente", format="%.1f", help=help_text("recent_avg_minutes")
             ),
             "min_minutes": st.column_config.NumberColumn(
-                "Mín.", min_value=0, max_value=40, step=1, format="%.0f", help=help_text("minutes_floor")
+                "Mín.", min_value=0, max_value=40, step=1, format="%.0f", required=True,
+                help=help_text("minutes_floor"),
             ),
             "max_minutes": st.column_config.NumberColumn(
-                "Tope", min_value=0, max_value=40, step=1, format="%.0f", help=help_text("minutes_cap")
+                "Tope", min_value=0, max_value=40, step=1, format="%.0f", required=True,
+                help=help_text("minutes_cap"),
             ),
         },
     )
@@ -159,7 +169,13 @@ def minutes_plan_section(
         help=help_text("position_coverage") if known_positions else "No hay posición cargada para todos los disponibles.",
         key=f"minutes_plan_positions_{team_id}",
     )
-    floors = mp.DEFAULT_POSITION_FLOORS if require and known_positions else None
+    floors = None
+    if require and known_positions:
+        # Misma regla que el asistente: sin ningún disponible de una posición
+        # (los dos pívots fuera), su cobertura es imposible y no se exige.
+        floors, missing = mp.applicable_position_floors(available["position"])
+        if missing:
+            st.caption(f"Sin ningún disponible de posición {', '.join(missing)}: esa cobertura no se exige.")
 
     # Semana cargada: si con los topes SUGERIDOS no salen los 200 minutos (o
     # los 40 de una posición), se suben lo justo —los que ha fijado el
@@ -167,7 +183,7 @@ def minutes_plan_section(
     edited, relax_notes = mp.relax_caps(edited, position_floors=floors)
     if relax_notes:
         st.warning(
-            "Con los topes por carga no había reparto posible: se han subido " + "; ".join(relax_notes)
+            "Con los topes sugeridos no había reparto posible (o chocaban con un mínimo fijado): se han subido " + "; ".join(relax_notes)
             + " (los que has cambiado a mano no se tocan). Es la señal de una semana para dosificar a alguien "
             "del todo o dar minutos al fondo de armario."
         )
@@ -249,8 +265,12 @@ def minutes_plan_section(
         "Σ RAPM × minutos / 40, sin química ni encaje. Reparte TOTALES, no la rotación: la cobertura de 40 "
         "minutos de base y de pívot garantiza que existe una rotación con uno de cada en pista siempre, pero "
         "cuál es sigue siendo cosa del banquillo. Los topes por carga son una regla de calendario sobre "
-        "minutos de partido (sin entrenamientos ni datos médicos), y no hay prórroga. RAPM de "
-        "una sola temporada: con poca muestra, usa el criterio prudente."
+        "minutos de partido (sin entrenamientos ni datos médicos), y no hay prórroga. RAPM "
+        + (
+            "con la temporada anterior como punto de partida (el de la casilla de arriba)"
+            if fit.get("prior_used") else "de una sola temporada"
+        )
+        + ": con poca muestra, usa el criterio prudente."
     )
     glossary_expander(
         ["planned_minutes", "minutes_cap", "minutes_floor", "recent_avg_minutes", "projected_margin",
