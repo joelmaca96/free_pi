@@ -91,3 +91,21 @@ def test_no_screen_asks_for_a_term_that_does_not_exist():
 def test_the_screens_actually_use_the_glossary():
     """Guarda contra el propio test de arriba: sin llamadas, no probaría nada."""
     assert len({key for _, key in _requested_keys()}) > 20
+
+
+def test_no_term_is_defined_twice():
+    """Una clave repetida en `TERMS` no falla: la segunda pisa a la primera en silencio.
+
+    Pasó al juntar las propuestas 16 y 18 (las dos definían `win_probability`
+    con significados distintos: la previa y la en directo).
+    """
+    import ast
+
+    tree = ast.parse((_APP / "components" / "glossary.py").read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.AnnAssign) and getattr(node.target, "id", None) == "TERMS":
+            keys = [k.value for k in node.value.keys]
+            duplicated = sorted({k for k in keys if keys.count(k) > 1})
+            assert not duplicated, f"claves repetidas en TERMS: {duplicated}"
+            return
+    raise AssertionError("no se encontró TERMS en glossary.py")

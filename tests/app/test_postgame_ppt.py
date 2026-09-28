@@ -186,3 +186,44 @@ def test_build_postgame_ppt_player_slide_contains_the_chosen_highlights():
     assert "Markus Howard" in all_text
     assert "9/11 en triples" in all_text
     assert "5 pérdidas" in all_text
+
+
+# ------------------------------------------- momentos clave (propuesta 18) --
+
+
+def _moment(rank=1, **overrides):
+    base = {
+        "rank": rank, "quarter_start": "Q4", "clock_start": "02:30", "quarter_end": "Q4", "clock_end": "01:30",
+        "score_before": "77-77", "score_after": "82-77", "points_for": 5, "points_against": 0,
+        "wp_before": 0.55, "wp_after": 0.93, "wpa": 0.38,
+        "lineup_own": "Marcus Howard · Chima Moneke · Codi Miller-McIntyre · Nikos Rogkavopoulos · Maik Kotsar",
+    }
+    base.update(overrides)
+    return base
+
+
+def test_build_postgame_ppt_adds_the_key_moments_slide_after_the_cover():
+    rows = [_row(player_id="howard")]
+    moments = [_moment(1), _moment(2, wpa=-0.12, wp_before=0.6, wp_after=0.48, lineup_own=None)]
+
+    data = postgame_ppt.build_postgame_ppt(rows, {"howard": ["18 puntos"]}, {"subtitle": ""}, key_moments=moments)
+    prs = Presentation(io.BytesIO(data))
+
+    assert len(prs.slides) == 1 + 1 + len(rows)
+    slide = list(prs.slides)[1]
+    texts = [shape.text_frame.text for shape in slide.shapes if shape.has_text_frame]
+    assert any("decidieron el partido" in t for t in texts)
+    table = next(shape.table for shape in slide.shapes if shape.has_table)
+    assert table.cell(1, 5).text == "+38 pp"
+    assert table.cell(2, 6).text == "—"
+
+
+def test_build_postgame_ppt_without_key_moments_keeps_the_old_layout():
+    rows = [_row(player_id="howard")]
+    data = postgame_ppt.build_postgame_ppt(rows, {"howard": ["18 puntos"]}, {"subtitle": ""}, key_moments=[])
+    assert len(Presentation(io.BytesIO(data)).slides) == 1 + len(rows)
+
+
+def test_key_moments_rows_never_breaks_the_ppt():
+    """Sin base de datos válida (o sin play-by-play), la diapositiva simplemente no sale."""
+    assert postgame_ppt._key_moments_rows(None, "g5", "bas") is None
