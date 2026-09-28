@@ -430,7 +430,15 @@ CREATE TABLE lineup_stints (
   end_seconds    REAL NOT NULL,
   points_for     INTEGER NOT NULL,
   points_against INTEGER NOT NULL,
-  margin_start   INTEGER NOT NULL   -- marcador (a favor - en contra) al abrir el tramo
+  margin_start   INTEGER NOT NULL,  -- marcador (a favor - en contra) al abrir el tramo
+  -- Posesiones ESTIMADAS del equipo del tramo y de su rival dentro de la
+  -- ventana [start_seconds, end_seconds), derivadas de `play_events` (FGA +
+  -- 0.44·FTA − OREB + TOV) y reescaladas por partido a la referencia de
+  -- `game_advanced_stats` — ver `ingest/common/possessions.py`. Nullable:
+  -- columnas añadidas (2026-09-28) sobre BDs ya cargadas. NULL = partido sin
+  -- tiros tipados en `play_events` (ingesta anterior), no "cero posesiones".
+  possessions_for     REAL,
+  possessions_against REAL
 );
 
 CREATE TABLE lineup_stint_players (

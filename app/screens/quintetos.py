@@ -95,12 +95,20 @@ if comp_choice != "Todas":
 
 team_label = team_names.get(team_id, team_id)
 
-st.caption(
-    "El On/Off es de CONTEXTO, no de calidad del jugador: compartir pista siempre con los "
-    "mejores infla el número, y al revés (§5). Todo va en diferencia por 40 minutos y no por 100 "
-    "posesiones: `lineup_stints` no guarda posesiones por tramo, y estimarlas sería inventar una "
-    "precisión que el dato no tiene."
-)
+if capabilities.stint_possessions:
+    st.caption(
+        "El On/Off es de CONTEXTO, no de calidad del jugador: compartir pista siempre con los "
+        "mejores infla el número, y al revés (§5). Va en diferencia por 40 minutos y, al lado, en "
+        "net rating por 100 posesiones ESTIMADAS tramo a tramo desde el play-by-play (tiros, "
+        "libres, rebotes ofensivos y pérdidas), ajustadas al total del partido."
+    )
+else:
+    st.caption(
+        "El On/Off es de CONTEXTO, no de calidad del jugador: compartir pista siempre con los "
+        "mejores infla el número, y al revés (§5). Todo va en diferencia por 40 minutos y no por 100 "
+        "posesiones: esta base de datos no tiene posesiones por tramo (necesitan los tiros del "
+        "play-by-play), y estimarlas a ojo sería inventar una precisión que el dato no tiene."
+    )
 
 st.divider()
 
@@ -130,13 +138,20 @@ if capabilities.lineup_stints:
         # que `diff_shrunk` en la tabla de calidad de tiro: es la única forma
         # honesta de decir "todavía no se sabe" en vez de mentir con un 0.
         table.loc[~table["reliable"], "on_off_shrunk"] = float("nan")
+        # Por 100 posesiones solo con la capacidad encendida (columna presente
+        # Y con dato). Mismo corte de muestra que el On/Off por 40: el número
+        # sin regularizar de quien no llega al mínimo no se enseña.
+        per_100_columns = []
+        if capabilities.stint_possessions:
+            table.loc[~table["reliable"], "on_off_100"] = float("nan")
+            per_100_columns = ["on_net_100", "off_net_100", "on_off_100"]
         st.dataframe(
             table,
             hide_index=True,
             width="stretch",
             column_order=[
                 "player_name", "on_minutes", "on_per_40", "off_minutes", "off_per_40",
-                "on_off_shrunk", "muestra",
+                "on_off_shrunk", *per_100_columns, "muestra",
             ],
             column_config={
                 "player_name": st.column_config.TextColumn("Jugador"),
@@ -155,6 +170,15 @@ if capabilities.lineup_stints:
                 "on_off_shrunk": st.column_config.NumberColumn(
                     "On/Off", format="%+.1f", help=help_text("on_off")
                 ),
+                "on_net_100": st.column_config.NumberColumn(
+                    "Net 100 con él", format="%+.1f", help=help_text("on_net_100")
+                ),
+                "off_net_100": st.column_config.NumberColumn(
+                    "Net 100 sin él", format="%+.1f", help=help_text("off_net_100")
+                ),
+                "on_off_100": st.column_config.NumberColumn(
+                    "On/Off 100", format="%+.1f", help=help_text("on_off_100")
+                ),
                 "muestra": st.column_config.TextColumn("Muestra", help=help_text("sample_flag")),
             },
         )
@@ -163,7 +187,10 @@ if capabilities.lineup_stints:
             f"Por debajo de {queries_assistant.ON_OFF_MIN_MINUTES:.0f} minutos en pista, en blanco: "
             "insuficiente para decidir nada."
         )
-        glossary_expander(["on_minutes", "on_per_40", "off_minutes", "off_per_40", "on_off", "sample_flag"])
+        glossary_expander(
+            ["on_minutes", "on_per_40", "off_minutes", "off_per_40", "on_off", "sample_flag"]
+            + (["on_net_100", "off_net_100", "on_off_100"] if per_100_columns else [])
+        )
 
     st.divider()
 
@@ -237,26 +264,30 @@ if capabilities.lineup_stints:
         )
     else:
         ranked = reliable_trios.sort_values("plus_minus_per_40_shrunk", ascending=False)
+        trio_shown = ["jugadores", "minutes", "plus_minus_per_40_shrunk"]
+        if capabilities.stint_possessions:
+            trio_shown.append("net_rating_100")
         trio_columns = {
             "jugadores": st.column_config.TextColumn("Trío", width="large"),
             "minutes": st.column_config.NumberColumn("Min. juntos", format="%.1f", help=help_text("lineup_minutes")),
             "plus_minus_per_40_shrunk": st.column_config.NumberColumn(
                 "+/- por 40", format="%+.1f", help=help_text("plus_minus_per_40")
             ),
+            "net_rating_100": st.column_config.NumberColumn(
+                "Net 100", format="%+.1f", help=help_text("net_rating_100")
+            ),
         }
         best_col, worst_col = st.columns(2)
         with best_col:
             st.caption("Mejores")
             st.dataframe(
-                ranked.head(10)[["jugadores", "minutes", "plus_minus_per_40_shrunk"]],
+                ranked.head(10)[trio_shown],
                 hide_index=True, width="stretch", column_config=trio_columns,
             )
         with worst_col:
             st.caption("Peores")
             st.dataframe(
-                ranked.tail(10).sort_values("plus_minus_per_40_shrunk")[
-                    ["jugadores", "minutes", "plus_minus_per_40_shrunk"]
-                ],
+                ranked.tail(10).sort_values("plus_minus_per_40_shrunk")[trio_shown],
                 hide_index=True, width="stretch", column_config=trio_columns,
             )
         st.caption(

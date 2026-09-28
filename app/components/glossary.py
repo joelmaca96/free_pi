@@ -541,6 +541,30 @@ TERMS: Dict[str, Term] = {
         "pista (en puntos porcentuales). Todos los quintetos de un equipo suman su probabilidad final "
         "menos la de salida. Dice cuándo se ganó o perdió el partido, no quién jugó mejor.",
     ),
+    # --- posesiones por tramo --
+    "on_net_100": Term(
+        "Net 100 con él", "Net rating por 100 posesiones, con él en pista",
+        "Puntos anotados menos encajados por cada 100 posesiones del equipo mientras jugaba. Las "
+        "posesiones se estiman tramo a tramo desde el play-by-play (tiros de campo + 0,44 × libres − "
+        "rebotes ofensivos + pérdidas) y se ajustan al total del partido: es una estimación.",
+    ),
+    "off_net_100": Term(
+        "Net 100 sin él", "Net rating por 100 posesiones, sin él en pista",
+        "Lo mismo que 'Net 100 con él', pero en los tramos en que estaba en el banquillo. Es la "
+        "referencia con la que se compara para sacar el On/Off por 100 posesiones.",
+    ),
+    "on_off_100": Term(
+        "On/Off 100", "Net rating por 100 posesiones con él, menos sin él",
+        "El On/Off contado por posesiones en vez de por minutos: no premia jugar en tramos de ritmo "
+        "alto ni castiga los de ritmo lento. Sigue siendo de contexto, no de calidad, y va sin "
+        "regularizar (en blanco por debajo del mínimo de minutos).",
+    ),
+    "net_rating_100": Term(
+        "Net 100", "Net rating por 100 posesiones juntos",
+        "Puntos anotados menos encajados por cada 100 posesiones mientras esa pareja o trío "
+        "coincidían en pista, con las posesiones estimadas tramo a tramo desde el play-by-play. Sin "
+        "regularizar: con pocos minutos juntos, léase con el +/- por 40 al lado.",
+    ),
 }
 
 

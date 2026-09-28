@@ -96,8 +96,14 @@ datos:
 - **Reloj de posesión** y **marca de tiempo en los tiros**: `shots` guarda `game_id`,
   `player_id`, `zone_id`, `pos_x`, `pos_y`, `made`, `located` — y nada de tiempo. Por eso ningún
   análisis puede cruzar *dónde* se tira con *cuándo* se tira (ver §5 del documento 02).
-- **Posesiones por tramo**: `lineup_stints` guarda puntos, no posesiones, así que los ratings
-  por 100 posesiones a nivel de quinteto hay que estimarlos (ver §5 del documento 07).
+- ~~**Posesiones por tramo**~~ **RESUELTO en ingesta (2026-09-28), pendiente de datos.**
+  `lineup_stints.possessions_for`/`possessions_against` se estiman tramo a tramo desde
+  `play_events` (FGA + 0,44·FTA − OREB + TOV, reescalado por partido a la referencia de
+  `game_advanced_stats`; ver `ingest/common/possessions.py`). Dependen de los tiros tipados en
+  `play_events` (`fg2_made`...`ft_missed`): hasta reingerir con ellos y pasar
+  `tools/backfill_stint_possessions.py --apply`, las columnas siguen en NULL y la interfaz se
+  queda en diferencia por 40 (capacidad `stint_possessions`). Con dato, On/Off y tríos enseñan
+  además net rating por 100 posesiones — **estimado**, como pide el §5 del documento 07.
 
 Todo lo propuesto en esta carpeta es factible **sin** ninguna de esas cuatro cosas. Si algún día
 entran (o entra tracking), se abre otro nivel, sobre todo para 01, 02 y 08.

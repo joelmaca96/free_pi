@@ -135,6 +135,11 @@ _ADDITIVE_COLUMN_MIGRATIONS = [
     # (`ingest/euroleague/roster.py`). `height_cm` ya existía en `schema.sql`
     # pero sin nadie que la escribiera; `weight_kg` es nueva.
     ("players", "weight_kg", "INTEGER"),
+    # Posesiones por tramo (2026-09-28), derivadas de `play_events` por
+    # `ingest/common/possessions.py` — NULL hasta que el partido tenga tiros
+    # tipados y se recalculen (loader o `tools/backfill_stint_possessions.py`).
+    ("lineup_stints", "possessions_for", "REAL"),
+    ("lineup_stints", "possessions_against", "REAL"),
 ]
 
 # Las VISTAS (`VIEW_NAMES`) no se migran con `ALTER TABLE`: se recrean enteras
