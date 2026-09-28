@@ -71,3 +71,37 @@ def test_rotation_plan_tool_refuses_our_own_team(engine, ctx):
     result = ToolCatalog(ctx).execute("1", "rotation_plan_vs_rival", {"team_id": "bas"}).result
 
     assert result["error"] == "mismo equipo"
+
+
+def test_rotation_plan_tool_fails_without_our_own_stints(engine, ctx):
+    """Regresión: sin tramos propios el "plan" eran solo las ventanas del rival, sin avisar."""
+    with engine.begin() as conn:
+        for i, pid in enumerate(_VAL):
+            conn.execute(
+                text("INSERT OR IGNORE INTO players (id, team_id, name, number, position) VALUES (:p, 'val', :n, :i, '')"),
+                {"p": pid, "n": f"Valencia {i}", "i": i},
+            )
+    add_stints(engine, [
+        ("g5", "val", 0.0, 420.0, 10, 10, 0, _VAL[:5]),
+        ("g5", "val", 420.0, 720.0, 0, 10, 0, ["v6", "v2", "v3", "v4", "v5"]),
+        ("g5", "val", 720.0, 2400.0, 45, 45, -10, _VAL[:5]),
+    ])
+    ctx.capabilities = probe(engine)
+
+    result = ToolCatalog(ctx).execute("1", "rotation_plan_vs_rival", {"team_id": "val"}).result
+
+    assert result["error"] == "sin tramos propios"
+
+
+def test_rotation_plan_tool_warns_when_fewer_than_five_are_available(engine, ctx):
+    """Regresión: con menos de cinco disponibles no hay quintetos, y el modelo tiene que saberlo."""
+    _seed(engine)
+    ctx.capabilities = probe(engine)
+
+    result = ToolCatalog(ctx).execute(
+        "1", "rotation_plan_vs_rival", {"team_id": "val", "unavailable": ["kotsar", "codi", "howard", "sedekerskis"]}
+    ).result
+
+    assert "error" not in result, result
+    assert all(w["lineups"] == [] for w in result["data"]["windows"])
+    assert any("Menos de cinco disponibles" in warning for warning in result["meta"]["warnings"])

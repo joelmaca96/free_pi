@@ -290,19 +290,22 @@ def engine():
     st.cache_data.clear()
 
 
-def test_plan_from_the_database_end_to_end(engine):
-    """`team_stint_rows` de los dos equipos + ajuste de la temporada → plan con nombres reales."""
-    val = ["v1", "v2", "v3", "v4", "v5", "v6"]
-    bas_start = ["howard", "moneke", "codi", "sedekerskis", "kotsar"]
-    bas_bench = ["howard", "moneke", "nikos", "lutse", "costello"]
-    stints = [
-        ("bas", 0.0, 600.0, 16, 10, 0, bas_start),
-        ("bas", 600.0, 900.0, 9, 5, 6, bas_bench),
-        ("bas", 900.0, 2400.0, 40, 40, 10, bas_start),
-        ("val", 0.0, 420.0, 10, 10, 0, val[:5]),
-        ("val", 420.0, 720.0, 0, 10, 0, val[1:]),
-        ("val", 720.0, 2400.0, 45, 45, -10, val[:5]),
-    ]
+_DB_VAL = ["v1", "v2", "v3", "v4", "v5", "v6", "v7"]
+_DB_BAS_START = ["howard", "moneke", "codi", "sedekerskis", "kotsar"]
+_DB_BAS_BENCH = ["howard", "moneke", "nikos", "lutse", "costello"]
+_DB_STINTS = [
+    ("bas", 0.0, 600.0, 16, 10, 0, _DB_BAS_START),
+    ("bas", 600.0, 900.0, 9, 5, 6, _DB_BAS_BENCH),
+    ("bas", 900.0, 2400.0, 40, 40, 10, _DB_BAS_START),
+    ("val", 0.0, 420.0, 10, 10, 0, _DB_VAL[:5]),
+    ("val", 420.0, 720.0, 0, 10, 0, ["v6", "v2", "v3", "v4", "v5"]),
+    ("val", 720.0, 2400.0, 45, 45, -10, _DB_VAL[:5]),
+]
+
+
+def _seed_db(engine, stints=_DB_STINTS):
+    """Valencia (`v1..v6`) y los tramos dados en el partido `g5` del seed (temporada 1)."""
+    val = _DB_VAL
     with engine.begin() as conn:
         for i, pid in enumerate(val):
             conn.execute(
@@ -323,6 +326,10 @@ def test_plan_from_the_database_end_to_end(engine):
                     {"s": stint_id, "p": pid},
                 )
 
+
+def test_plan_from_the_database_end_to_end(engine):
+    """`team_stint_rows` de los dos equipos + ajuste de la temporada → plan con nombres reales."""
+    _seed_db(engine)
     from app.data import queries_assistant
 
     data = queries_assistant.season_impact(engine, 1, None)
@@ -340,3 +347,38 @@ def test_plan_from_the_database_end_to_end(engine):
     assert "v1" not in rest["rival_five"]
     assert any("cuando descansa Valencia 0" in line for line in lines)
     assert any("Marcus Howard" in line for line in lines)
+
+
+#: Valencia con `v1` como jugador de MÁS minutos (los demás titulares también
+#: descansan, seis minutos cada pareja), para que su descanso 8-12 salga con
+#: los valores por defecto (`KEY_PLAYERS`), como en el dossier.
+_DB_VAL_KEY = [
+    ("val", 0.0, 420.0, 10, 10, 0, _DB_VAL[:5]),
+    ("val", 420.0, 720.0, 0, 10, 0, ["v6", "v2", "v3", "v4", "v5"]),
+    ("val", 720.0, 1500.0, 45, 45, -10, _DB_VAL[:5]),
+    ("val", 1500.0, 1860.0, 0, 0, -10, ["v1", "v6", "v7", "v4", "v5"]),
+    ("val", 1860.0, 2000.0, 0, 0, -10, _DB_VAL[:5]),
+    ("val", 2000.0, 2360.0, 0, 0, -10, ["v1", "v2", "v3", "v6", "v7"]),
+    ("val", 2360.0, 2400.0, 0, 0, -10, _DB_VAL[:5]),
+]
+
+
+def test_rotation_plan_bullets_for_the_dossier(engine):
+    from app.reports import scouting_ppt
+
+    _seed_db(engine, _DB_STINTS[:3] + _DB_VAL_KEY)
+
+    bullets = scouting_ppt.rotation_plan_bullets(engine, "val", "bas", 1, "Valencia Basket", True)
+
+    assert any(line.startswith("Min 8-12 (descansa Valencia 0") for line in bullets)
+    assert all("contra su quinteto" in line for line in bullets)
+
+
+def test_rotation_plan_bullets_skip_the_slide_without_our_lineups(engine):
+    """Regresión: sin tramos propios salía una diapositiva de "plan" con solo las ventanas del rival."""
+    from app.reports import scouting_ppt
+
+    _seed_db(engine, _DB_VAL_KEY)
+
+    assert queries.team_stint_rows(engine, "val", 1).shape[0] > 0
+    assert scouting_ppt.rotation_plan_bullets(engine, "val", "bas", 1, "Valencia Basket", True) == []

@@ -97,8 +97,34 @@ más tamaño". Lo que sí cambia de ventana a ventana, y es lo accionable, es:
 - Si la temporada de scouting es una anterior (rival sin partidos aún en la seleccionada), nuestra
   plantilla y nuestra rotación habitual también son de esa temporada: el selector de disponibles
   permite corregirlo, pero los fichajes nuevos no aparecen.
-- Las ventanas usan el patrón de **toda la temporada** (no el selector "últimos N" de la 13).
+- Las ventanas usan el patrón de **toda la temporada** (no el selector "últimos N" de la 13). Por
+  eso sus jugadores clave y su quinteto habitual pueden incluir a alguien que ya no está (traspaso,
+  lesión larga): no hay selector de disponibles del rival.
+- Un descanso de sus principales entra como ventana **aunque el rival no flojee en él** (la frase
+  enseña su +/- en esa ventana; si es positivo, no es un sitio donde atacar). Dos peores bloques
+  contiguos (p.ej. 17-20 y 21-24) salen como dos ventanas.
+- **Lo habitual nuestro no pasa el filtro de posiciones**: con "al menos un base y un pívot", el
+  mejor quinteto propuesto puede proyectar menos que lo habitual (`gain_vs_usual` < 0) y la frase
+  dice entonces que lo habitual ya vale.
 - Posiciones solo para la plantilla propia; no se usan las del rival.
+- **Prior**: el plan usa `season_impact` con sus valores por defecto (con la temporada anterior
+  como punto de partida si existe, igual que la casilla de "Quintetos" por defecto); no lee esa
+  casilla, que vive en otra pantalla. El pie de la sección y el aviso de la herramienta lo dicen.
+
+## 6 bis. Auditoría (2026-09-28)
+
+- La herramienta `rotation_plan_vs_rival` devolvía un "plan" con solo las ventanas del rival cuando
+  nuestro equipo no tenía tramos en esa temporada: ahora falla con `sin tramos propios`. Con menos
+  de cinco disponibles avisa en `warnings` (antes, `lineups` vacíos sin explicación).
+- `scouting_ppt.rotation_plan_bullets` añadía la diapositiva del plan sin ningún quinteto propio
+  (mismo caso), en contra de su docstring: ahora devuelve `[]` y la diapositiva no se añade.
+- Pie de la sección y avisos de la herramienta: dicen si el RAPM lleva la temporada anterior como
+  punto de partida.
+- Comprobado sin cambios: signo de la proyección y de la ventaja de campo (el ajuste la estima a
+  favor del local), minutos 1..40 coherentes con la 13 (descansos, bloques de 4 y bloques de 1),
+  exclusión del que descansa en el quinteto rival, `gain_vs_usual` = mejor − habitual contra el
+  mismo rival (campo y rival se cancelan), salida JSON de la herramienta sin `NaN`, y coste: el
+  plan tarda ~0,4 s sobre una liga de ~740 partidos (el ajuste, cacheado, aparte).
 
 ## 7. Siguiente paso natural
 
