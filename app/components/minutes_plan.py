@@ -2,7 +2,8 @@
 
 El cálculo vive en `app/analytics/minutes_plan.py`; el RAPM sale del mismo
 ajuste cacheado que el constructor de quintetos
-(`queries_assistant.season_impact`) y la carga de `queries.rolling_load`
+(`queries_assistant.season_impact` vía `components.impact.page_season_impact`,
+que respeta la casilla del prior de la sección de RAPM) y la carga de `queries.rolling_load`
 (la misma de "Carga acumulada" en "Estado del equipo"). Aquí solo se decide
 cómo se enseña y qué puede tocar el entrenador.
 
@@ -23,12 +24,14 @@ try:  # pragma: no cover - ver nota en app/assistant/tools/context.py
     from app.analytics import impact
     from app.analytics import minutes_plan as mp
     from app.components.glossary import glossary_expander, help_text
-    from app.data import queries, queries_assistant
+    from app.components.impact import page_season_impact
+    from app.data import queries
 except ImportError:  # pragma: no cover
     from analytics import impact
     from analytics import minutes_plan as mp
     from components.glossary import glossary_expander, help_text
-    from data import queries, queries_assistant
+    from components.impact import page_season_impact
+    from data import queries
 
 _PLAN = "#104281"
 _RECENT = "#b8c4d6"
@@ -52,7 +55,9 @@ def minutes_plan_section(
         "de cada jugador — sugerido por su carga de los últimos días y corregible aquí."
     )
 
-    data = queries_assistant.season_impact(engine, season_id, competition_id)
+    # Mismo ajuste (con o sin temporada anterior) que la tabla de RAPM y el
+    # constructor de esta pantalla: lee su casilla.
+    data = page_season_impact(engine, season_id, competition_id)
     fit, segments, names = data["fit"], data["segments"], data["names"]
     team_minutes = impact.team_player_minutes(segments, team_id)
     roster = queries.roster_cards(engine, team_id, season_id)

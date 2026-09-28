@@ -342,6 +342,152 @@ def test_previous_season_skips_seasons_without_games(engine):
     assert queries_assistant.previous_season(engine, 3) == {"id": 1, "label": "2025-2026"}
 
 
+def test_previous_season_follows_the_label_not_the_insertion_order(engine):
+    """Temporada histórica ingerida DESPUÉS de la actual: `id` mayor pero anterior en el calendario.
+
+    Regresión: por `id`, la 2024-2025 (id 2) tomaba de prior la 2025-2026
+    (información del futuro) y la 2025-2026 se quedaba sin prior.
+    """
+    from app.data import queries_assistant
+
+    _add_season(engine, 2, "2024-2025", [
+        ("bas", 0, 600, 10, 12, 0, _BAS_SEASON2),
+        ("val", 0, 600, 12, 10, 0, ["v1", "v2", "v3", "v4", "v5"]),
+    ])
+
+    assert queries_assistant.previous_season(engine, 1) == {"id": 2, "label": "2024-2025"}
+    assert queries_assistant.previous_season(engine, 2) is None
+    assert queries_assistant.previous_season(engine, 99) is None  # temporada inexistente
+    assert queries_assistant.season_impact(engine, 2)["prior_season"] is None
+    assert queries_assistant.season_impact(engine, 1)["prior_season"] == {"id": 2, "label": "2024-2025"}
+
+
+def test_sections_after_the_rapm_table_follow_its_prior_checkbox(monkeypatch):
+    """Constructor y planificador de minutos usan el MISMO ajuste que la tabla de RAPM.
+
+    Regresión: el planificador de minutos llamaba a `season_impact` sin
+    `use_prior` y seguía con prior aunque el entrenador desmarcara la casilla.
+    """
+    from streamlit.testing.v1 import AppTest
+
+    from app.data import queries_assistant
+
+    calls = []
+
+    def fake_season_impact(_engine, season_id, competition_id=None, use_prior=True):
+        calls.append(use_prior)
+        return {"fit": impact.fit_rapm(pd.DataFrame()), "segments": pd.DataFrame(), "names": {},
+                "prior_season": None}
+
+    monkeypatch.setattr(queries_assistant, "previous_season", lambda _e, _s: {"id": 1, "label": "2025-2026"})
+    monkeypatch.setattr(queries_assistant, "season_impact", fake_season_impact)
+    monkeypatch.setattr(queries, "roster_cards", lambda *a, **k: pd.DataFrame())
+    monkeypatch.setattr(queries, "rolling_load", lambda *a, **k: pd.DataFrame())
+
+    def page():
+        from app.components import impact as impact_ui
+        from app.components.minutes_plan import minutes_plan_section
+
+        impact_ui._use_prior(None, 2, widget=True)  # la casilla de la sección de RAPM
+        impact_ui.lineup_builder_section(None, "bas", 2, None, "Baskonia", {})
+        minutes_plan_section(None, "bas", 2, None, "Baskonia", {})
+
+    app = AppTest.from_function(page, default_timeout=30)
+    app.run()
+    assert not app.exception
+    assert calls == [True, True]
+
+    calls.clear()
+    app.checkbox(key="impact_use_prior").uncheck().run()
+    assert not app.exception
+    assert calls == [False, False]
+
+
+def _ingested_game_rows(seed):
+    """Partido simulado que pasa por la reconstrucción REAL de la ingesta (huecos de 4 en pista y prórroga).
+
+    Devuelve las filas (tramo, jugador) como las de `season_stint_rows` y los
+    eventos, para comparar cada segmento con el marcador de verdad.
+    """
+    from ingest.common.lineups import PlayByPlayEvent, reconstruct_lineups
+
+    rng = np.random.default_rng(seed)
+    roster = {"H": [f"h{i}" for i in range(10)], "A": [f"a{i}" for i in range(10)]}
+    on = {t: set(ps[:5]) for t, ps in roster.items()}
+    bench = {t: set(ps[5:]) for t, ps in roster.items()}
+    end = 2700.0 if seed % 3 == 0 else 2400.0
+    events, t = [], 0.0
+    while True:
+        t += rng.exponential(20)
+        if t >= end - 60:
+            break
+        team = str(rng.choice(["H", "A"]))
+        if rng.random() < 0.6:
+            events.append(PlayByPlayEvent(team_id=team, type="score", seconds=t, points=int(rng.integers(1, 4))))
+            continue
+        out, inn = str(rng.choice(sorted(on[team]))), str(rng.choice(sorted(bench[team])))
+        t_in = t + (rng.uniform(5, 40) if rng.random() < 0.15 else 0.0)  # a veces, hueco con cuatro
+        events += [PlayByPlayEvent(team_id=team, type="sub_out", seconds=t, player_id=out),
+                   PlayByPlayEvent(team_id=team, type="sub_in", seconds=t_in, player_id=inn)]
+        on[team] = (on[team] - {out}) | {inn}
+        bench[team] = (bench[team] - {inn}) | {out}
+    stints = reconstruct_lineups("H", "A", roster["H"][:5], roster["A"][:5], events, game_end_seconds=end).stints
+    rows = pd.DataFrame([
+        {"stint_id": f"{seed}-{k}", "game_id": f"g{seed}", "team_id": s.team_id, "is_home": int(s.team_id == "H"),
+         "start_seconds": s.start_seconds, "end_seconds": s.end_seconds, "points_for": s.points_for,
+         "points_against": s.points_against, "margin_start": s.margin_start, "player_id": p}
+        for k, s in enumerate(stints) for p in s.player_ids
+    ])
+    return rows, events
+
+
+def test_segments_match_the_real_score_of_ingested_games():
+    """Cada segmento, con los tramos tal como los guarda la ingesta, trae la diferencia EXACTA del local.
+
+    Sin eventos en el mismo segundo que una frontera (esa ambigüedad está
+    documentada en `build_segments`), con huecos de cuatro en pista y prórroga.
+    """
+    checked = 0
+    for seed in range(12):
+        rows, events = _ingested_game_rows(seed)
+        segments = impact.build_segments(rows)
+        assert segments["end_seconds"].max() == rows["end_seconds"].max()
+        for seg in segments.itertuples():
+            real = sum(
+                (e.points if e.team_id == "H" else -e.points)
+                for e in events
+                if e.type == "score" and seg.start_seconds < e.seconds <= seg.end_seconds
+            )
+            assert seg.margin_delta == real
+            checked += 1
+    assert checked > 300
+
+
+def test_normal_equations_equal_the_dense_design_and_the_prior_solves_the_objective():
+    """`bincount` = XᵀWX y XᵀWy de la matriz densa; con prior, el gradiente del objetivo es 0."""
+    segments, _ = _simulated_segments(n_segments=300)
+    players = sorted(set().union(*segments["home_players"], *segments["away_players"]))
+    idx, signs, weights, target = impact._design(segments, {p: i for i, p in enumerate(players)})
+    xtx, xty = impact._normal_equations(idx, signs, weights, target, len(players))
+
+    dense = np.zeros((len(segments), len(players) + 1))
+    for i, row in enumerate(idx):
+        dense[i, row[:5]] = 1.0
+        dense[i, row[5:]] = -1.0
+    dense[:, -1] = 1.0
+    np.testing.assert_allclose(xtx, dense.T @ (weights[:, None] * dense), atol=1e-9)
+    np.testing.assert_allclose(xty, dense.T @ (weights * target), atol=1e-9)
+
+    prior = {p: float(v) for p, v in zip(players, np.random.default_rng(5).normal(0, 3, len(players)))}
+    beta0, _ = impact._prior_vector(players, prior, 0.7, 0.0)
+    beta = impact._solve(xtx, xty, impact.RIDGE_LAMBDA, beta0)
+    penalty = np.full(len(beta), impact.RIDGE_LAMBDA)
+    penalty[-1] = 1e-6
+    gradient = dense.T @ (weights * (dense @ beta - target)) + penalty * (beta - beta0)
+    assert np.abs(gradient).max() < 1e-6
+    assert beta0[-1] == 0.0  # la ventaja de campo no tiene prior
+
+
 # ------------------------------------------------ RAPM con prior (A6) --
 
 def _old_fit_rapm_beta(segments, ridge=impact.RIDGE_LAMBDA):
