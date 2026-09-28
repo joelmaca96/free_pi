@@ -11,6 +11,8 @@ igual que `lineup_builder` (`tools/rotations.py`).
 """
 import datetime as dt
 
+import numpy as np
+
 from .base import ToolContext, artifact, fail, ok, records, register, schema
 
 try:  # pragma: no cover - ver nota en tools/context.py
@@ -67,6 +69,13 @@ def _minutes_map(value) -> dict:
             },
             "general_cap": {"type": "number", "description": "Tope de quien no tiene carga (32)."},
             "prudent": {"type": "boolean", "description": "Penalizar RAPM con poca muestra."},
+            "use_prior": {
+                "type": "boolean",
+                "description": (
+                    "RAPM con la temporada anterior como punto de partida, como lineup_builder (por defecto "
+                    "sí; false = solo esta temporada, encogida hacia 0)."
+                ),
+            },
         },
         required=[],
     ),
@@ -84,10 +93,11 @@ def minutes_plan(
     min_minutes: dict = None,
     general_cap: float = None,
     prudent: bool = False,
+    use_prior: bool = True,
 ) -> dict:
     team = team_id or ctx.own_team_id
     season = ctx.season_id if season_id is None else int(season_id)
-    data = queries_assistant.season_impact(ctx.engine, season, competition_id)
+    data = queries_assistant.season_impact(ctx.engine, season, competition_id, use_prior=bool(use_prior))
     fit, segments, names = data["fit"], data["segments"], data["names"]
     team_minutes = impact.team_player_minutes(segments, team)
     roster = queries.roster_cards(ctx.engine, team, season)
@@ -116,6 +126,10 @@ def minutes_plan(
     players = mp.build_plan_input(fit["players"], team_minutes, roster, summary, caps, names, default_max=rules.default_max)
 
     out = set(unavailable or [])
+    known_ids = set(players["player_id"])
+    unknown = sorted(
+        (out | set(_minutes_map(max_minutes)) | set(_minutes_map(min_minutes))) - known_ids, key=str
+    )
     players.loc[players["player_id"].isin(out), "available"] = False
     for pid, cap in _minutes_map(max_minutes).items():
         mask = players["player_id"] == pid
@@ -130,14 +144,21 @@ def minutes_plan(
         "Modelo aditivo (RAPM × minutos / 40, sin química): reparte TOTALES del partido, no la rotación.",
         "Los topes por carga son una regla de calendario sobre minutos de partido, no datos médicos.",
     ]
+    if unknown:
+        warnings.append(
+            f"Ids que no son de la plantilla de {team} y se han ignorado: {', '.join(map(str, unknown))} "
+            "(usa los player_id de resolve_entity)."
+        )
+    prior_season = data.get("prior_season") if fit.get("prior_used") else None
+    if prior_season:
+        warnings.append(
+            f"RAPM con la temporada {prior_season['label']} como punto de partida (como lineup_builder y la "
+            "pantalla por defecto)."
+        )
     available = players[players["available"]]
     floors = None
     if not available.empty and all(isinstance(p, str) and p.strip() for p in available["position"]):
-        floors = {
-            label: minutes for label, minutes in mp.DEFAULT_POSITION_FLOORS.items()
-            if (available["position"].str.strip().str.lower() == label.lower()).any()
-        }
-        missing = sorted(set(mp.DEFAULT_POSITION_FLOORS) - set(floors))
+        floors, missing = mp.applicable_position_floors(available["position"])
         if missing:
             warnings.append(f"Sin ningún disponible de posición {', '.join(missing)}: esa cobertura no se exige.")
     else:
@@ -145,7 +166,10 @@ def minutes_plan(
 
     players, relax_notes = mp.relax_caps(players, position_floors=floors)
     if relax_notes:
-        warnings.append("Con los topes por carga no había reparto posible: se han subido " + "; ".join(relax_notes) + ".")
+        warnings.append(
+            "Con los topes sugeridos no había reparto posible (o chocaban con un mínimo fijado): se han subido "
+            + "; ".join(relax_notes) + "."
+        )
 
     value_column = "prudent" if prudent else "rapm"
     result = mp.plan_minutes(players, value_column=value_column, position_floors=floors)
@@ -158,13 +182,14 @@ def minutes_plan(
         "player_id", "player_name", "position", "rapm", "planned_minutes", "recent_avg_minutes", "delta",
         "max_minutes", "binding", "detail", "explanation",
     ]]
+    recent_margin = mp.recent_distribution_margin(players)
     payload = {
         "game_date": reference_date.isoformat(),
         "rest_days": rest,
         "criterion": "prudente" if prudent else "esperanza",
         "projected_margin": round(result["projected_margin"], 2),
-        "recent_distribution_margin": round(mp.recent_distribution_margin(players), 2)
-        if players["recent_avg_minutes"].notna().any() else None,
+        # NaN (ningún disponible con minutos recientes) no es JSON válido.
+        "recent_distribution_margin": None if np.isnan(recent_margin) else round(recent_margin, 2),
         "position_floors": floors or {},
         "plan": records(plan_rows),
     }

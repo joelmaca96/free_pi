@@ -353,3 +353,34 @@ def test_relax_caps_does_nothing_when_not_needed():
 
     assert notes == []
     assert (relaxed["max_minutes"] == 32.0).all()
+
+
+def test_relax_caps_lifts_a_suggested_cap_to_the_coach_minimum_but_not_a_coach_cap():
+    """El mínimo lo fija el entrenador: un tope SUGERIDO por debajo sube hasta él; uno suyo, no."""
+    roster = _roster()
+    roster["cap_source"] = "general"
+    roster["cap_detail"] = ""
+    roster.loc[roster["player_id"] == "howard", ["min_minutes", "max_minutes", "cap_source", "cap_detail"]] = [
+        30.0, 26.0, "carga", "114 min en 7 días",
+    ]
+    roster.loc[roster["player_id"] == "codi", ["min_minutes", "max_minutes", "cap_source"]] = [30.0, 20.0, "entrenador"]
+
+    relaxed, notes = mp.relax_caps(roster)
+
+    rows = relaxed.set_index("player_id")
+    assert rows.loc["howard", "max_minutes"] == 30.0
+    assert rows.loc["howard", "cap_detail"] == "114 min en 7 días, subido a su mínimo (30)"
+    assert rows.loc["codi", "max_minutes"] == 20.0  # el choque del entrenador lo explica el plan
+    assert notes == ["hasta su mínimo los topes sugeridos de Howard"]
+    result = mp.plan_minutes(relaxed)
+    assert not result["feasible"] and "Codi" in result["message"] and "Howard" not in result["message"]
+    relaxed.loc[relaxed["player_id"] == "codi", "min_minutes"] = 0.0
+    assert _minutes(mp.plan_minutes(relaxed))["howard"] == pytest.approx(30.0)
+
+
+def test_applicable_position_floors_drop_positions_with_nobody_available():
+    floors, missing = mp.applicable_position_floors(["Base", " base ", "Ala-pívot", "Alero"])
+
+    assert floors == {"Base": 40.0}
+    assert missing == ["Pívot"]  # "Ala-pívot" no cubre pívot
+    assert mp.applicable_position_floors(["Pívot", "Base"]) == (mp.DEFAULT_POSITION_FLOORS, [])
