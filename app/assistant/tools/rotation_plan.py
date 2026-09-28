@@ -83,8 +83,18 @@ def rotation_plan_vs_rival(
         )
     data = queries_assistant.season_impact(ctx.engine, season, None)
     fit, segments, names = data["fit"], data["segments"], data["names"]
+    own_candidates = rpl.default_candidates(segments, own)
+    if not own_candidates or fit["players"].empty:
+        # Sin tramos propios en esa temporada no hay quintetos que proponer: el
+        # "plan" serían solo las ventanas del rival (eso ya es team_rotation_pattern).
+        return fail(
+            "sin tramos propios",
+            detail=f"No hay tramos con los diez jugadores en pista de {own} en la temporada {season}: "
+            "no se pueden proyectar nuestros quintetos contra los del rival.",
+            suggestion="Usa team_rotation_pattern para ver solo la rotación del rival.",
+        )
     unavailable = set(unavailable or [])
-    candidates = [p for p in rpl.default_candidates(segments, own) if p not in unavailable]
+    candidates = [p for p in own_candidates if p not in unavailable]
     if is_home is None:
         is_home = _is_home_from_calendar(ctx, team_id)
 
@@ -134,6 +144,17 @@ def rotation_plan_vs_rival(
     ]
     if is_home is None:
         warnings.append("Sin saber si jugamos en casa: la proyección no incluye ventaja de campo.")
+    if plan[0]["lineups"].empty:
+        warnings.append(
+            f"Menos de cinco disponibles ({len(candidates)}): no hay quintetos que proponer, solo las "
+            "ventanas del rival. Dilo en vez de inventar un quinteto."
+        )
+    prior_season = data.get("prior_season") if fit.get("prior_used") else None
+    if prior_season:
+        warnings.append(
+            f"RAPM con la temporada {prior_season['label']} como punto de partida (prior), igual que el "
+            "constructor de quintetos por defecto."
+        )
     if season_warning:
         warnings.insert(0, season_warning)
     return ok(

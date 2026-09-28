@@ -933,7 +933,7 @@ def rotation_plan_bullets(
     dossier se genera antes de saber quién está lesionado, y la pantalla deja
     ajustarlo. Frases compactas y como mucho cuatro ventanas, para que quepan
     en una diapositiva de viñetas. Lista vacía si falta algún equipo en los
-    tramos: la diapositiva no se añade.
+    tramos o no hay quintetos propios que proponer: la diapositiva no se añade.
     """
     data = queries_assistant.season_impact(engine, season_id, None)
     plan = rotation_plan.build_plan(
@@ -947,6 +947,11 @@ def rotation_plan_bullets(
         top=1,
         max_windows=4,
     )
+    # Sin quintetos propios (nuestro equipo sin tramos en esa temporada, o
+    # menos de cinco con minutos) la diapositiva serían solo las ventanas del
+    # rival, que ya están en la de rotación: no se añade.
+    if not plan or plan[0]["lineups"].empty:
+        return []
     return rotation_plan.plan_insights(rival_name, plan, data["names"], compact=True)
 
 

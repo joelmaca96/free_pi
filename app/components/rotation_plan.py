@@ -151,10 +151,16 @@ def rotation_plan_section(
 
     home = rpl.home_term(fit["home_advantage"], bool(is_home))
     venue = "en casa" if is_home else "fuera"
+    prior_season = data.get("prior_season") if fit.get("prior_used") else None
+    prior_text = (
+        f" (con {prior_season['label']} como punto de partida, como el RAPM de \"Quintetos\" por defecto)"
+        if prior_season else ""
+    )
     st.caption(
-        f"RAPM de la temporada de scouting, con los dos equipos en el mismo ajuste. Jugamos {venue}: la "
-        f"ventaja de campo que estima el ajuste suma {home:+.1f} por 40 a cada proyección. Modelo aditivo: el ORDEN de nuestros quintetos es el mismo en todas "
-        "las ventanas (restar un rival no reordena); lo que cambia es el margen esperado y, sobre todo, "
+        f"RAPM de la temporada de scouting{prior_text}, con los dos equipos en el mismo ajuste. "
+        f"Jugamos {venue}: la ventaja de campo que estima el ajuste suma {home:+.1f} por 40 a cada "
+        "proyección. Modelo aditivo: el ORDEN de nuestros quintetos es el mismo en todas las ventanas "
+        "(restar un rival no reordena); lo que cambia es el margen esperado y, sobre todo, "
         "cuánto se gana respecto a lo que solemos tener en pista en esos minutos. No capta química ni "
         "emparejamientos concretos: es un punto de partida para la pizarra, no un sustituto del criterio."
     )
