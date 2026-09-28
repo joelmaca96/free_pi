@@ -70,3 +70,29 @@ def test_game_prediction_fails_usefully_without_calendar(league_ctx):
 def test_game_prediction_rejects_a_bad_date(league_ctx):
     result = ToolCatalog(league_ctx).execute("1", "game_prediction", {"opponent_id": "uni", "date": "5/3/2027"}).result
     assert result["error"] == "fecha inválida"
+
+
+def test_game_prediction_fails_for_a_rival_without_games(league_ctx):
+    """Regresión: un id que no existe (o un nombre en vez de id) salía como "equipo medio" con una
+    predicción de aspecto normal."""
+    result = ToolCatalog(league_ctx).execute("1", "game_prediction", {"opponent_id": "Real Madrid"}).result
+    assert result["error"] == "sin datos"
+    assert "resolve_entity" in result["suggestion"]
+
+
+def test_game_prediction_ignores_the_calendar_venue_for_another_date(engine, league_ctx):
+    """Regresión: con una fecha distinta de la del calendario, se usaba la pista (y la competición) del
+    partido del calendario, que es OTRO partido."""
+    match_day = TODAY + dt.timedelta(days=3)
+    with engine.begin() as conn:
+        conn.execute(text(
+            "INSERT INTO upcoming_matchups (opponent_team_id, competition_id, match_date, is_home, season_id)"
+            " VALUES ('val', 1, :date, 1, :season)"
+        ), {"date": match_day.isoformat(), "season": LEAGUE_SEASON_ID})
+    catalog = ToolCatalog(league_ctx)
+    same = catalog.execute("1", "game_prediction", {"opponent_id": "val", "date": match_day.isoformat()}).result
+    assert same["data"]["venue"] == "home"
+    other_day = (TODAY + dt.timedelta(days=20)).isoformat()
+    other = catalog.execute("2", "game_prediction", {"opponent_id": "val", "date": other_day}).result
+    assert other["data"]["venue"] == "neutral"
+    assert other["data"]["match_date"] == other_day

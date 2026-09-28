@@ -62,6 +62,10 @@ def game_prediction(
         opponent_id = matchup["opponent_team_id"]
     else:
         matchup = queries_prediction.upcoming_matchup_vs(ctx.engine, opponent_id, ctx.today)
+    if matchup is not None and date is not None and str(matchup["match_date"])[:10] != date:
+        # Otra fecha que la del calendario = otro partido: su pista y su
+        # competición no valen para este (p. ej. la Copa en sede neutral).
+        matchup = None
     if matchup is not None:
         competition = matchup["competition"]
         if is_home is None:
@@ -91,6 +95,14 @@ def game_prediction(
             suggestion="Prueba con la temporada anterior (season_id).",
         )
     pred, fit, bt = result["prediction"], result["fit"], result["backtest"]
+    if pred.rival_games == 0:
+        # Sin esto, un id mal escrito (o un nombre en vez de id) salía como
+        # "equipo medio" con una predicción aparentemente normal.
+        return fail(
+            "sin datos",
+            detail=f"El equipo {opponent_id} no tiene partidos en la temporada {season}: no hay nivel que estimarle.",
+            suggestion="Comprueba el id con resolve_entity o prueba con la temporada anterior (season_id).",
+        )
     rival_name = queries.team_name(ctx.engine, opponent_id) or opponent_id
     if min(pred.own_games, pred.rival_games) < _FEW_GAMES:
         warnings.append(

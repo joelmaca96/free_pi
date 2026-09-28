@@ -47,7 +47,10 @@ las dos):
    Descuenta la fuerza de los rivales enfrentados. Ridge `TEAM_RIDGE = 6` partidos equivalentes
    (σ del margen de un partido ≈ 11 puntos, σ de la fuerza real de un equipo ≈ 4,5 → σ²/τ² ≈ 6):
    un equipo con pocos partidos se acerca a un equipo medio. Los ratings se centran en 0.
-2. **Ventaja de campo**: término sin penalizar, **estimado de la liga**. Copa del Rey y Supercopa
+2. **Ventaja de campo**: **estimada de la liga**, con un ridge débil (`HOME_RIDGE = 30` partidos
+   equivalentes) hacia `HOME_PRIOR = 3` puntos — sin él, con un puñado de partidos todo el margen se
+   cargaba al campo (un único partido ganado de 10 por el local daba "+10 por jugar en casa"); con una
+   temporada entera el prior apenas mueve nada. Copa del Rey y Supercopa
    se tratan como sede neutral (`NEUTRAL_COMPETITIONS`): ni cuentan para estimarla ni se aplica.
 3. **Descanso**: días desde el partido anterior del equipo en cualquier competición (criterio de la
    propuesta [04](04_fatiga_y_calendario.md)), recortados a 1-4 días (el primer partido de la
@@ -89,5 +92,20 @@ cuenta hasta ese día (`queries_prediction.team_last_game_date`, en cualquier te
   `TEAM_RIDGE`/`REST_RIDGE`.
 - **Descanso ≠ viaje**: dos días en casa y dos días volviendo de Estambul cuentan igual (mismo
   límite que la propuesta 04).
+- **Sede neutral solo por nombre de competición** (`Copa del Rey`, `Supercopa`, los nombres que pone
+  `ingest/acb/adapter.py`): la Final Four de Euroliga también es en sede neutral y va con el nombre
+  "Euroliga", así que se trata como si hubiera local. Son 2-4 partidos por temporada.
+- **Identidades duplicadas de un mismo club** (`barca` en ACB y `fcb` en Euroliga, ver
+  [04](04_fatiga_y_calendario.md)) reparten sus partidos entre dos ratings encogidos hacia la media,
+  le cuentan mal el descanso (cada identidad ve la mitad de su calendario) y quitan uno de los
+  puentes ACB–Euroliga que anclan las dos escalas. No se arregla aquí (es de la ingesta). La
+  herramienta del asistente falla con "sin datos" si el rival pedido no tiene partidos en la temporada
+  (antes lo daba por "equipo medio"), la pantalla solo llega aquí con un rival con datos.
+- **Temporada de scouting de reserva**: si el rival aún no ha jugado en la temporada seleccionada, el
+  ajuste es el de su última temporada con datos (la misma que el resto de "Próximo rival", que ya lo
+  avisa arriba): son los niveles de entonces, no los de este verano.
+- El backtest se cachea aparte (`queries_prediction.season_backtest`, por temporada y fecha): son
+  ~1-2 s con una temporada de ~700 partidos y ~170 fechas (un reajuste por fecha) y no depende del
+  rival ni de la pista.
 - Queda por hacer el enganche con los umbrales de victoria (09): "para pasar del 45% al 60% hay que
   ganar el rebote por X".

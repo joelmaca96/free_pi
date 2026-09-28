@@ -112,6 +112,21 @@ def rest_until(engine: Engine, team_id: str, match_date: dt.date) -> Optional[in
 
 
 @st.cache_data(ttl=_TTL, show_spinner=False)
+def season_backtest(_engine: Engine, season_id: int, before: dt.date) -> Optional[dict]:
+    """`prediction.backtest` de la temporada con los partidos anteriores a `before`, cacheado aparte.
+
+    Es lo caro (un reajuste por fecha: ~1-2 s con una temporada de ~700
+    partidos) y solo depende de la temporada y la fecha, no del rival ni de
+    la pista: con su propia caché, predecir contra otro rival el mismo día
+    (el asistente lo hace) no lo repite.
+    """
+    games = season_game_results(_engine, season_id, before=before)
+    if games.empty:
+        return None
+    return prediction.backtest(prediction.prepare_games(games))
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
 def matchup_prediction(
     _engine: Engine,
     own_team_id: str,
@@ -157,7 +172,7 @@ def matchup_prediction(
     return {
         "prediction": pred,
         "fit": fit,
-        "backtest": prediction.backtest(prepared),
+        "backtest": season_backtest(_engine, season_id, match_date),
         "ratings": prediction.ratings_table(fit, names),
         "own_rest": own_rest,
         "rival_rest": rival_rest,

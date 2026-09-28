@@ -24,9 +24,14 @@ clubes que juegan las dos, y eso ancla las dos escalas). Una fila por partido:
   conserva un tercio de lo que dirían sus resultados. Sale del mismo
   argumento bayesiano que el λ del RAPM (propuesta 12): σ del margen de un
   partido ≈ 11 puntos, σ real de la fuerza de un equipo ≈ 4,5 → λ = σ²/τ² ≈ 6.
-- **Ventaja de campo**: columna sin penalizar, 1 en partidos con local de
-  verdad y 0 en los de sede neutral (Copa del Rey, Supercopa: ver
-  `NEUTRAL_COMPETITIONS`). Se estima de la liga, no se supone.
+- **Ventaja de campo**: columna 1 en partidos con local de verdad y 0 en
+  los de sede neutral (Copa del Rey, Supercopa: ver
+  `NEUTRAL_COMPETITIONS`). Se estima de la liga, no se supone, pero con un
+  ridge débil (`HOME_RIDGE`) hacia `HOME_PRIOR` puntos: sin él, con un
+  puñado de partidos (principio de temporada, seed) todo el margen se
+  cargaba al campo — un solo partido ganado de 10 por el local daba "+10 por
+  jugar en casa". Con una temporada entera (cientos de partidos) el prior
+  apenas mueve nada.
 - **Descanso**: días desde el partido anterior del equipo EN CUALQUIER
   competición (mismo criterio que `queries.rest_days`, propuesta 04),
   recortados a `[1, REST_CAP_DAYS]` — cinco días de descanso no son mejores
@@ -71,6 +76,11 @@ TEAM_RIDGE = 6.0
 #: Ridge del efecto del descanso, en partidos equivalentes: a priori ≈1
 #: punto por día de diferencia (σ²/τ² = 11²/1² ≈ 120).
 REST_RIDGE = 120.0
+#: Prior de la ventaja de campo (puntos; ACB y Euroliga rondan 3-4) y cuánto
+#: pesa, en partidos equivalentes: σ²/τ² con τ≈2 puntos de duda a priori →
+#: 11²/2² ≈ 30. Con 700 partidos el ajuste sale prácticamente libre.
+HOME_PRIOR = 3.0
+HOME_RIDGE = 30.0
 #: Tope de días de descanso que cuentan: 1 (back-to-back) … 4 o más.
 REST_CAP_DAYS = 4
 #: Techo del efecto por día de descanso, en puntos (restricción de signo y de
@@ -232,11 +242,14 @@ def fit_ratings(
         w = np.ones(n)
 
     penalty = np.full(n_teams + 2, float(team_ridge))
-    penalty[home_col] = 1e-6  # sin penalizar (solo estabilidad numérica)
+    penalty[home_col] = HOME_RIDGE
     penalty[rest_col] = float(rest_ridge) if rest_estimated else 1e6
+    # Ridge del campo hacia HOME_PRIOR (no hacia 0): se ajusta la desviación
+    # respecto del prior sobre `y0` y se le suma al final.
+    y0 = y - HOME_PRIOR * X[:, home_col]
     XtW = X.T * w
     A = XtW @ X + np.diag(penalty)
-    beta = np.linalg.solve(A, XtW @ y)
+    beta = np.linalg.solve(A, XtW @ y0)
 
     # Restricción de signo/tamaño del descanso: si el libre se sale de
     # [0, MAX_REST_EFFECT], se fija en el borde y se reajusta el resto.
@@ -244,7 +257,7 @@ def fit_ratings(
     if rest_estimated and not (0.0 <= rest_value <= MAX_REST_EFFECT):
         rest_value = min(max(rest_value, 0.0), MAX_REST_EFFECT)
         keep = [i for i in range(n_teams + 2) if i != rest_col]
-        y_adj = y - rest_value * X[:, rest_col]
+        y_adj = y0 - rest_value * X[:, rest_col]
         Xk = X[:, keep]
         XtWk = Xk.T * w
         beta_k = np.linalg.solve(XtWk @ Xk + np.diag(penalty[keep]), XtWk @ y_adj)
@@ -253,6 +266,7 @@ def fit_ratings(
         beta[rest_col] = rest_value
     elif not rest_estimated:
         beta[rest_col] = 0.0
+    beta[home_col] += HOME_PRIOR
 
     # σ de los residuos, con los grados de libertad efectivos del ridge y
     # encogida hacia PRIOR_SIGMA (ver docstring del módulo).
@@ -374,6 +388,7 @@ def _rest_text(days: Optional[int]) -> str:
 
 def fmt_points(value: float) -> str:
     """`+2,1` / `−1,5` (coma decimal y signo menos tipográfico), como en la interfaz."""
+    value = round(float(value), 1)  # el signo, del número que se enseña: nunca "−0,0"
     text = f"{abs(value):.1f}".replace(".", ",")
     return ("+" if value >= 0 else "−") + text
 
