@@ -568,6 +568,9 @@ with detail_col:
             if not foul_events_df.empty else foul_events_df
         )
         bonus_df = queries_assistant.foul_bonus_minutes(foul_events_df)
+        # Tiempos muertos de equipo (2026-09-28): vacío en partidos cargados
+        # antes, y entonces el gráfico simplemente no pinta la capa.
+        timeouts_df = queries.game_timeouts(engine, game_id)
 
         if stints_df.empty and steps_df.empty:
             st.info(
@@ -605,13 +608,15 @@ with detail_col:
                     stints_df, steps_df, runs_df, title="Baskonia",
                     fouls=personal_fouls_df[personal_fouls_df["team_id"] == team_id],
                     bonus=bonus_df[bonus_df["team_id"] == team_id],
+                    timeouts=timeouts_df[timeouts_df["team_id"] == team_id],
                 ),
                 width="stretch",
             )
             st.caption(
                 "Barras = minutos en pista · fondo = margen del marcador (🟢 a favor, 🔴 en contra) · "
                 "franjas sombreadas = parciales detectados con los umbrales de arriba · marca ámbar = "
-                "falta personal · raya ámbar discontinua = el equipo entra en bonus ese cuarto."
+                "falta personal · raya ámbar discontinua = el equipo entra en bonus ese cuarto"
+                + (" · raya azul = tiempo muerto pedido." if not timeouts_df.empty else ".")
             )
 
             if runs_df.empty:
@@ -694,12 +699,15 @@ with detail_col:
                             },
                         )
                     # Limitación que el entrenador tiene que ver AQUÍ y no
-                    # deducir (§5 de la propuesta): `shots` no guarda ni cuarto
-                    # ni reloj, así que ningún tiro puede salir en esta lista.
-                    st.caption(
-                        "⚠ Los tiros no salen en esta lista: la fuente no les guarda ni cuarto ni "
-                        "reloj. Los puntos se leen por el salto del marcador."
-                    )
+                    # deducir (§5 de la propuesta): en un partido cargado antes
+                    # del 2026-09-28 el play-by-play no trae los tiros, así que
+                    # ninguno puede salir en esta lista. Desde la reingesta sí
+                    # salen, y el aviso sobra.
+                    if events_df.empty or not events_df["event_type"].isin(queries.SHOT_EVENT_TYPES).any():
+                        st.caption(
+                            "⚠ Los tiros no salen en esta lista: este partido se cargó antes de que el "
+                            "play-by-play los incluyera. Los puntos se leen por el salto del marcador."
+                        )
 
             with st.expander(f"Rotaciones de {rival_name}"):
                 rival_stints = queries.game_stints(engine, game_id, rival_team_id)
@@ -716,6 +724,7 @@ with detail_col:
                             title=rival_name,
                             fouls=personal_fouls_df[personal_fouls_df["team_id"] == rival_team_id],
                             bonus=bonus_df[bonus_df["team_id"] == rival_team_id],
+                            timeouts=timeouts_df[timeouts_df["team_id"] == rival_team_id],
                         ),
                         width="stretch",
                     )

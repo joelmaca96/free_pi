@@ -178,3 +178,75 @@ def test_game_player_report_excludes_dnp_and_other_team(engine):
     # NULL de SQL == NaN en pandas para una columna sin dato: no hay tiros
     # con coordenadas en este partido, no que no lanzara ningún triple.
     assert df_bas["tpa"].isna().all()
+
+
+# --- Filtro de contexto del mapa de tiros y tiempos muertos (2026-09-28) ----
+
+
+def _add_context_shot(conn, zone_id, made, seconds, home, away, fastbreak=0, second=0, off_to=0, player="howard"):
+    conn.execute(
+        text(
+            "INSERT INTO shots (game_id, player_id, zone_id, pos_x, pos_y, made, located, quarter, game_clock,"
+            " seconds, home_score, away_score, is_fastbreak, is_second_chance, is_off_turnover)"
+            " VALUES ('g5', :player, :zone_id, 250.0, 400.0, :made, 1, 'Q4', '00:00', :seconds, :home, :away,"
+            " :fastbreak, :second, :off_to)"
+        ),
+        {"player": player, "zone_id": zone_id, "made": made, "seconds": seconds, "home": home, "away": away,
+         "fastbreak": fastbreak, "second": second, "off_to": off_to},
+    )
+
+
+def _context_fixture(engine):
+    with engine.begin() as conn:
+        _add_context_shot(conn, 1, 1, 600.0, 20, 18, fastbreak=1)            # Q2, contraataque
+        _add_context_shot(conn, 1, 0, 2200.0, 70, 67, second=1)              # último 5' apretado
+        _add_context_shot(conn, 2, 1, 2300.0, 80, 70, off_to=1)              # último 5' pero +10
+        _add_context_shot(conn, 1, 1, 2450.0, 88, 90, player="moneke")       # prórroga apretada
+        # Tiro viejo sin reloj ni banderas: solo sale con "Todos".
+        conn.execute(text(
+            "INSERT INTO shots (game_id, player_id, zone_id, pos_x, pos_y, made) VALUES ('g5', 'howard', 1, 250, 400, 0)"
+        ))
+
+
+def test_team_shots_season_context_filters(engine):
+    from app.data.queries import team_shots_season
+
+    _context_fixture(engine)
+    run = team_shots_season.__wrapped__
+    assert len(run(engine, "bas", 1)) == 5
+    assert len(run(engine, "bas", 1, "clutch")) == 2  # 2200 (+3) y la prórroga (-2); no el +10
+    assert len(run(engine, "bas", 1, "fastbreak")) == 1
+    assert len(run(engine, "bas", 1, "second_chance")) == 1
+    assert len(run(engine, "bas", 1, "off_turnover")) == 1
+    # El SQL se interpola: solo claves de la lista cerrada.
+    with pytest.raises(ValueError):
+        run(engine, "bas", 1, "made = 1 OR 1")
+
+
+def test_shot_zone_profile_in_context_matches_the_filtered_shots(engine):
+    from app.data.queries import shot_zone_profile_in_context
+
+    _context_fixture(engine)
+    team = shot_zone_profile_in_context.__wrapped__(engine, "bas", 1, "clutch")
+    assert (int(team["volume"].sum()), int(team["made"].sum())) == (2, 1)
+    assert float(team["fg_pct"].iloc[0]) == 50.0
+    howard = shot_zone_profile_in_context.__wrapped__(engine, "bas", 1, "clutch", "howard")
+    assert int(howard["volume"].sum()) == 1 and float(howard["fg_pct"].iloc[0]) == 0.0
+
+
+def test_game_timeouts_reads_only_team_timeouts_in_order(engine):
+    from app.data.queries import game_timeouts
+
+    with engine.begin() as conn:
+        for seconds, event_type, team in ((900.0, "timeout", "val"), (300.0, "timeout", "bas"), (400.0, "steal", "bas")):
+            conn.execute(
+                text(
+                    "INSERT INTO play_events (game_id, team_id, player_id, quarter, game_clock, seconds,"
+                    " event_type, home_score, away_score) VALUES ('g5', :team, NULL, 'Q1', '05:00', :seconds,"
+                    " :event_type, 10, 8)"
+                ),
+                {"team": team, "seconds": seconds, "event_type": event_type},
+            )
+    timeouts = game_timeouts.__wrapped__(engine, "g5")
+    assert timeouts["team_id"].tolist() == ["bas", "val"]
+    assert game_timeouts.__wrapped__(engine, "g1").empty

@@ -22,6 +22,7 @@ from sqlalchemy.engine import Connection, Engine
 
 from packages.baskonia_core.referees import canonical_referee_name
 
+from .possessions import update_stint_possessions
 from .schema_types import NormalizedGame
 
 logger = logging.getLogger(__name__)
@@ -75,6 +76,7 @@ def load_game(conn: Connection, game: NormalizedGame) -> None:
         _upsert_player_game_stats(conn, game.id, stat)
     _replace_lineups(conn, game.id, game.lineups)
     _replace_stints(conn, game.id, game.stints)
+    _update_stint_possessions(conn, game.id)
     _replace_shots(conn, game.id, game.shots)
     _replace_zone_stats_from_shots(conn, game.id, game.shots)
     _replace_key_events(conn, game.id, game.key_events)
@@ -239,6 +241,8 @@ def _quarter_foul_stats(events: List, quarter_stats: List) -> Dict[tuple, tuple]
         return {}
     counts: Dict[tuple, int] = {}
     for event in events:
+        # Solo faltas: desde 2026-09-28 `play_events` trae también tiros y
+        # tiempos muertos, que no deben contar aquí.
         if event.event_type != "foul_personal":
             continue
         quarter = _quarter_label_to_int(event.quarter)
@@ -422,13 +426,41 @@ def _replace_stints(conn: Connection, game_id: str, stints: List) -> None:
             )
 
 
+def _update_stint_possessions(conn: Connection, game_id: str) -> None:
+    """Posesiones por tramo, DERIVADAS de `play_events` + `lineup_stints` ya escritos.
+
+    Mismo patrón que `_quarter_foul_stats`: no vienen del adapter, se calculan
+    aquí tras cargar eventos y tramos (ver `ingest/common/possessions.py`).
+    Lee lo ya guardado en la BD, así que da lo mismo que el backfill
+    (`tools/backfill_stint_possessions.py`). NULL si el partido no tiene tiros
+    tipados. Un fallo aquí no tumba la carga del partido: es un dato derivado
+    que el backfill puede recalcular después sin red; se deja en NULL y se
+    registra.
+    """
+    # `update_stint_possessions` calcula TODO antes de escribir nada, así que
+    # un fallo del cálculo deja las columnas en el NULL con que se acaban de
+    # reinsertar los tramos, sin escrituras a medias.
+    try:
+        update_stint_possessions(conn, game_id)
+    except Exception:  # noqa: BLE001 - dato derivado, recalculable con el backfill
+        logger.exception("posesiones por tramo de %s no calculadas (quedan en NULL)", game_id)
+
+
+def _flag(value) -> object:
+    """`True`/`False`/`None` -> `1`/`0`/`NULL` (las banderas de `shots` son nullable)."""
+    return None if value is None else int(bool(value))
+
+
 def _replace_shots(conn: Connection, game_id: str, shots: List) -> None:
     conn.execute(text("DELETE FROM shots WHERE game_id = :g"), {"g": game_id})
     for shot in shots:
         conn.execute(
             text(
-                "INSERT INTO shots (game_id, player_id, zone_id, pos_x, pos_y, made, located)"
-                " VALUES (:g, :p, :z, :x, :y, :made, :located)"
+                "INSERT INTO shots (game_id, player_id, zone_id, pos_x, pos_y, made, located,"
+                "  quarter, game_clock, seconds, home_score, away_score,"
+                "  is_fastbreak, is_second_chance, is_off_turnover)"
+                " VALUES (:g, :p, :z, :x, :y, :made, :located,"
+                "  :quarter, :clock, :seconds, :home, :away, :fastbreak, :second_chance, :off_turnover)"
             ),
             {
                 "g": game_id,
@@ -438,6 +470,17 @@ def _replace_shots(conn: Connection, game_id: str, shots: List) -> None:
                 "y": shot.pos_y,
                 "made": int(shot.made),
                 "located": int(shot.located),
+                # Reloj/marcador/contexto (2026-09-28): `getattr` con `None`
+                # por defecto para no romper a quien construya un
+                # `ShotRecord` a mano con la forma antigua.
+                "quarter": getattr(shot, "quarter", None),
+                "clock": getattr(shot, "game_clock", None),
+                "seconds": getattr(shot, "seconds", None),
+                "home": getattr(shot, "home_score", None),
+                "away": getattr(shot, "away_score", None),
+                "fastbreak": _flag(getattr(shot, "is_fastbreak", None)),
+                "second_chance": _flag(getattr(shot, "is_second_chance", None)),
+                "off_turnover": _flag(getattr(shot, "is_off_turnover", None)),
             },
         )
 

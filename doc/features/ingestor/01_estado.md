@@ -316,7 +316,9 @@ competition_id)` igual que ACB — necesario desde que hay dos fuentes escribien
   nombres (`ingest/common/identity.py`, `_KNOWN_TEAM_ALIASES`) cubre los casos conocidos
   detectados hasta ahora (p.ej. "Kosner Baskonia"/"Bitci Baskonia"), pero es una lista
   mantenida a mano, no una solución genérica — un patrocinador nuevo no listado crearía un
-  equipo duplicado hasta que se añada su alias.
+  equipo duplicado hasta que se añada su alias. **Resuelto para ACB el 2026-09-28** con el
+  `clubId` estable de la API (ver la sección "Identidad de club sin alias a mano" al final);
+  entre fuentes (ACB ↔ Euroliga) el alias sigue haciendo falta.
 - **Euroliga a escala de temporada completa** (ver 2.3) es el hueco más urgente si se quiere un
   backfill fiable de ambas competiciones de una sentada.
 - **Clutch stats / on-off / segmentos de 2 min** (ver 2.2): con los datos ya disponibles de ACB
@@ -348,3 +350,341 @@ competition_id)` igual que ACB — necesario desde que hay dos fuentes escribien
     cancha (se tira siempre desde el mismo punto fijo) y forzarlo dentro de `shots`/
     `court_zones` habría exigido ingerirlo con otro centinela sin coordenadas reales; la vía
     correcta era esta, no una zona más.
+
+## 4. Ficha biográfica de jugador: acb.com + posición de Euroliga (2026-09-28)
+
+Hueco de partida (ver [propuestas/00_indice.md](../propuestas/00_indice.md)): `height_cm` NULL en
+todos los jugadores fuera de Euroliga, `birth_date` casi vacía y ~450 jugadores con la posición en
+blanco — sobre todo los que solo han jugado Euroliga, cuyo boxscore no trae posición (ACB sí la
+trae, `gameRole`, y el adaptador ya la guardaba).
+
+- **Nuevo `ingest/acb/profiles.py`** — ficha desde la PÁGINA de jugador de acb.com
+  (`https://www.acb.com/jugador/ver/{licencia}` → 301 a `/es/liga/jugadores/{slug}-{licencia}`,
+  HTML servido en el servidor con un bloque `PlayerInfoGrid`). La licencia es el `external_id` de
+  `source='acb'` (mismo espacio que `player.id` del boxscore). Guarda posición (en el vocabulario
+  de la app: 'Base'/'Escolta'/'Alero'/'Ala-pívot'/'Pívot'; una etiqueta desconocida NO se
+  escribe), altura ("2,03 m" → 203), fecha de nacimiento ("07/03/1995 (31 años)" → ISO) y
+  nacionalidad tal cual (ya en castellano, "EE.UU."). El parser toma, por etiqueta, el primer
+  valor no vacío — la página trae antes una copia esqueleto con los valores vacíos — y casa las
+  clases CSS por su final estable (`playerInfoGrid__label`/`__value`), no por el hash.
+  - Mismas reglas que `euroleague/roster.py`: **solo actualiza, nunca crea**; **rellena huecos,
+    no pisa** (`COALESCE`; la posición solo si está en blanco); un jugador que falla se salta.
+    Las filas con **dos o más licencias de ACB** se excluyen: son la huella de jugadores
+    fusionados (`find_merged_players`).
+  - Barato por diseño: solo candidatos con algún hueco, primero los sin posición; tope por pasada
+    (`--limit`, 100 por defecto, `ACB_PROFILES_LIMIT`) y pausa entre peticiones (`--delay`, 1 s,
+    `ACB_PROFILES_DELAY`). Caché JSON `data/acb_profiles_seen.json` (`ACB_PROFILES_CACHE`): una
+    ficha ya leída que sigue incompleta (acb.com no publica ese dato) no se vuelve a pedir en 30
+    días; un fallo de red no se apunta. Una licencia desconocida no da 404 sino una redirección a
+    `/es/liga/equipos`: se cuenta como "sin ficha".
+  - robots.txt de acb.com: `User-agent: *` → `Allow: /` (comprobado 2026-09-28); aun así se
+    consulta con el helper y el User-Agent identificable de `baskonia_web/scraper.py`.
+  - CLI: `python -m ingest.acb.profiles --limit 20 [--delay 2] [--no-cache]`.
+  - **Smoke en vivo (2026-09-28, 5 licencias reales en una BD de prueba):** 4 fichas leídas y
+    rellenadas (Badio: Escolta, 191, 1999-02-17, Senegal; Montero: Base, 188, 2003-07-03,
+    República Dominicana; Pradilla: 202, 2001-01-03, España — su 'Ala-pívot' previo intacto;
+    Sima: Pívot, 211, 1996-07-28, España), 1 licencia inventada contada como "sin ficha". Segunda
+    pasada: 0 peticiones (caché).
+- **`ingest/euroleague/roster.py` rellena la posición en blanco** desde `positionName` de la API
+  de plantillas. Solo hay tres categorías (Guard/Forward/Center; comprobado en vivo en las 18
+  plantillas de E2025, y ni `/v2/people/{code}` ni el XML de `/v1/players` dan nada más fino), así
+  que el mapeo es con pérdida y está decidido así: **Center → 'Pívot'**, **Forward → 'Alero'**
+  (se pierde el 'Ala-pívot'), **Guard → 'Base'** (se pierde el 'Escolta'). Guard → 'Base' y no
+  'Escolta' a propósito: con 'Escolta' un rival solo-Euroliga no tendría ningún base y el filtro
+  de quintetos "al menos un Base" no devolvería nada; así pasa a significar "al menos un exterior"
+  para esos jugadores. Para el suelo de 'Base' del planificador de minutos (solo plantilla propia)
+  el riesgo es que un escolta cuente como base, pero la plantilla propia tiene la posición de
+  baskonia.com y del `gameRole` de ACB, que ganan siempre; y el boxscore de ACB PISA la posición
+  en cada ingesta (`resolve_or_create_player`), así que un jugador que acabe jugando ACB recibe la
+  buena sola. Smoke en vivo contra `BAS`: Sedekerskis con posición en blanco → 'Alero' (en ACB es
+  'Ala-pívot': la pérdida documentada), Howard con 'Base' intacto.
+- **Nacionalidad.** Las fuentes escriben en idiomas distintos ("EE.UU." en acb.com y baskonia.com,
+  "United States of America" en Euroliga). Nada se pisa, pero `roster.py` traduce ya al
+  castellano (`_COUNTRY_ES`, todos los países de E2025 y algunos más; uno desconocido entra en
+  inglés) lo que escribe en un hueco. Los valores en inglés que escribieron pasadas anteriores
+  **siguen en la BD**: normalizarlos exigiría pisar, y se deja para un script puntual si hace
+  falta (`UPDATE ... SET nationality = <es> WHERE nationality = <en>` con el mismo mapa).
+- **`ingest/run_all.py`**: nuevo paso `acb_profiles` después de los partidos de ACB y **antes**
+  de Euroliga — las dos fichas rellenan huecos, gana la primera, y la de acb.com es la más fina
+  (cinco posiciones, castellano). `--skip acb_profiles` / `--skip euroleague_roster` omiten solo
+  la ficha; `--skip acb` también omite `acb_profiles` ("no tocar acb.com");
+  `--profiles-limit N` fija el tope. Los contadores (`candidates`/`fetched`/`updated`/
+  `not_found`/`failed`/`skipped_recent`/`filled` por campo, y `positions` en `euroleague_roster`)
+  salen en el resumen de la ingesta.
+- **No cubre:** peso (acb.com no lo publica en la ficha), jugadores sin licencia de ACB ni código
+  de Euroliga (no hay de dónde sacarlo), y los ya guardados en inglés (ver arriba).
+
+## 5. Posesiones por tramo (2026-09-28) — (`lineup_stints.possessions_for`/`possessions_against`)
+
+Cierra en la ingesta el hueco "Posesiones por tramo" de
+[`../propuestas/00_indice.md`](../propuestas/00_indice.md): hasta aquí `lineup_stints` guardaba
+puntos y no posesiones, y todo el On/Off/duplas/RAPM iba por 40 minutos.
+
+- **Esquema**: dos columnas REAL nullable en `lineup_stints`, en `schema.sql` y en
+  `engine.py::_ADDITIVE_COLUMN_MIGRATIONS` (una BD ya cargada las gana sola con
+  `init_scouting_db`, en NULL).
+- **Cálculo** (`ingest/common/possessions.py`): posesiones ≈ FGA + 0,44·FTA − OREB + TOV —la
+  misma fórmula Dean Oliver que ya usan los adaptadores para `game_advanced_stats`— aplicada a la
+  ventana de cada tramo, para el equipo del tramo (`possessions_for`) y para su rival en la misma
+  ventana (`possessions_against`). Cuenta los tipos de `play_events` del contrato con la ingesta de
+  tiros: `fg2_made`, `fg2_missed`, `fg3_made`, `fg3_missed`, `ft_made`, `ft_missed`, más `oreb` y
+  `turnover`. Opción `ft_mode="trips"`: viajes a la línea contados (libres del mismo equipo y
+  segundo; un 2+1 o un técnico de un libre no abren posesión) en vez del 0,44.
+- **Fronteras**: tramos semiabiertos `[start, end)` (el evento del segundo de un cambio va al
+  quinteto que entra), salvo reloj `00:00`, que va al quinteto que acabó el periodo (la bocina y
+  el cambio del descanso comparten segundo). Si la regla no encuentra tramo, se prueba la otra;
+  si tampoco (hueco sin quinteto de cinco), el evento cuenta solo en el total del partido.
+- **Total por partido y reescalado**: se estima el total de cada equipo con todos sus eventos y
+  se compara con la referencia `100 · puntos / ortg` de `game_advanced_stats` (oficial en ACB con
+  `AdvancedStats`, Dean Oliver en el resto); la discrepancia va al log (aviso por encima del 10%).
+  Por defecto (`rescale=True`) las posesiones de los tramos se multiplican por
+  `referencia / estimado`, así que si los tramos cubren el partido suman la referencia y el net
+  rating agregado cuadra con `ortg − drtg`. Absorbe también las posesiones de fin de periodo sin
+  evento que la fórmula no ve. Sin referencia o con factor fuera de [0,75, 1,33] (dato roto), se
+  queda la estimación cruda.
+- **NULL, no 0**: un partido sin NINGÚN tiro tipado en `play_events` (todo lo ingerido hasta hoy)
+  deja las dos columnas en NULL, para que la capacidad distinga "sin dato" de "cero".
+- **Loader**: `load_game` llama a `_update_stint_possessions` justo después de `_replace_stints`
+  (con `play_events` ya escritos), igual que las faltas por cuarto se derivan de `play_events`.
+  Lee de la BD, así que es idempotente y da lo mismo que el backfill. Un fallo del cálculo se
+  registra y no tumba la carga del partido.
+- **Backfill sin red**: `tools/backfill_stint_possessions.py` (dry-run por defecto, `--apply`
+  para escribir, `--no-rescale`, `--ft-mode trips`, `--game <id>` repetible) recalcula todos los
+  partidos con tramos desde lo ya guardado y resume cuántos tienen tiros tipados, cuántos se
+  reescalaron y la discrepancia media contra la referencia. **Solo sirve de algo tras reingerir
+  con la ingesta de tiros en `play_events`**; antes, todo sale "sin tiros tipados".
+- **Interfaz**: capacidad `stint_possessions` (columna presente Y algún valor no NULL) en
+  `app/assistant/capabilities.py`. `queries_assistant.player_on_off` añade `on_possessions`,
+  `on_net_100`, `off_possessions`, `off_net_100`, `on_off_100`, y `player_combos` añade
+  `possessions`/`net_rating_100` (NaN sin dato; net rating = ORtg − DRtg sobre las sumas de los
+  MISMOS tramos con posesiones). `app/screens/quintetos.py` los enseña junto al +/- por 40 solo
+  con la capacidad encendida. El RAPM (`app/analytics/impact.py`) no cambia (ver la nota en §5
+  de la propuesta 12).
+- **Limitación conocida**: los PUNTOS de un segundo con canasta y cambio a la vez se reparten
+  por el orden de la fuente (`ingest/common/lineups.py`) y las posesiones por el reloj; en esos
+  segundos puntos y posesiones pueden caer en tramos contiguos distintos (error de una posesión
+  que se compensa al agregar). Un tramo muy corto puede quedar con 0 posesiones y puntos, o al
+  revés: los per-100 solo tienen sentido agregados (jugador, pareja, trío), no por tramo suelto.
+
+## Identidad de club sin alias a mano (2026-09-28)
+
+**Problema.** El mismo club acababa en varias filas de `teams` (~23 pares en `data/baskonia.db`)
+porque `resolve_or_create_team` emparejaba por `(source, external_id)` y luego por nombre
+normalizado, y el nombre cambia con el patrocinador. `_KNOWN_TEAM_ALIASES` tapaba los casos ya
+vistos; un patrocinador nuevo creaba un duplicado en silencio hasta que alguien editaba la lista.
+
+### Qué es estable en cada fuente (verificado en vivo)
+
+- **ACB: `clubId`.** Todo objeto de equipo de la API lo trae: `teams[]` de
+  `seasondata/Competition/matches`, `teamBoxscores[].team` de `matchdata/Result/boxscores` y
+  `teams.home/away` de `matchdata/MatchHeader/match-header`. Recorriendo las ediciones 86-91:
+  - el `id` de equipo cambia en **cada** edición, no solo con el patrocinador (Real Madrid:
+    3674, 4239, 4345, 4407, 4476);
+  - `clubId` no cambia nunca: Manresa = 10 como "BAXI Manresa" (4340 en 2024-25, 4414 en
+    2025-26) y como "Kids&Us Manresa" (4471 en 2026-27); Lleida = 658 como Hiopos/Amara/iLERNA;
+    Burgos = 549 como "Burgos Grupo de Santiago"/"Recoletas Salud San Pablo Burgos"; Granada =
+    592 como Coviran/"Stellantis&You"; Bilbao = 4; Barça = 2; Baskonia = 3;
+  - `abbreviatedName` NO sirve (cambia con el patrocinador: `BAX` → `K&U`, `HIO` → `LLE` →
+    `ILE`), ni la ruta del escudo (se renueva por temporada), ni `shortName`.
+  - **Trampa:** los equipos de cantera comparten el `clubId` de su club. En las semanas de la
+    edición 90 contaminadas con Liga U (`competitionId` 134, en el propio objeto de equipo y en
+    el `match-header`) salen "Barça Atlètic" (clubId 2), "Fundacion CB Canarias" (28, el de La
+    Laguna Tenerife), "Unicaja Alhaurín de la Torre" (14)... Por eso el `clubId` solo se usa si
+    el `competitionId` **del equipo** es una competición cargada (1 Liga Endesa, 2 Copa, 3
+    Supercopa): `ingest/acb/adapter.py::senior_acb_club_id`.
+- **Euroliga: `code`** del club (`BAS`, `MAD`...), el mismo en calendario, boxscore y catálogo
+  de clubes. Ya era el `external_id` de `source='euroleague'`, así que no hacía falta nada nuevo.
+- **Entre fuentes no hay clave común**: "Barça" (ACB) ↔ "FC Barcelona" (Euroliga) sigue
+  necesitando `_KNOWN_TEAM_ALIASES`.
+
+### Diseño
+
+1. **`teams.acb_club_id`** (columna nueva, nullable, migración aditiva en `engine.py`). Columna y no
+   un `source` nuevo en `team_external_ids` porque: el `CHECK (source IN (...))` no se puede
+   alterar en SQLite sin recrear la tabla; y la PK `(source, external_id)` impediría que dos
+   filas duplicadas llevasen el mismo `clubId`, que es justo lo que las delata. Sin `UNIQUE` por
+   lo mismo.
+2. **`resolve_or_create_team(..., acb_club_id=...)`**: orden external_id → `acb_club_id` →
+   nombre normalizado → crear. La fila resuelta gana el `acb_club_id` si no lo tenía (las filas
+   antiguas se rellenan solas cuando una ingesta vuelve a ver al equipo). Nunca se pisa un
+   `acb_club_id` distinto (se avisa), y un emparejamiento por nombre con una fila de OTRO
+   `clubId` se rechaza (fila aparte, que el detector marca por nombre). Lo pasan
+   `build_raw_game` (partidos jugados, vía `raw_game.parse_and_resolve`) y el calendario futuro
+   (`fetch_season_scheduled_matches` → `build_scheduled_matchup` → `run_upcoming`, que es donde
+   aparece primero el patrocinador nuevo de cada temporada). `run_upcoming` localiza además al
+   equipo propio por su `clubId` antes que por nombre.
+3. **Colisiones exactas** (`find_team_identity_collisions`): mismo nombre normalizado **o** mismo
+   `acb_club_id`. `tools/fix_team_identity.py` agrupa por las dos claves (unión: un grupo de
+   tres enlazado por alias y por `clubId` sale como uno) y **bloquea** (⛔) un grupo cuyas filas
+   llevan `acb_club_id` distintos: ACB dice que son dos clubes, así que el grupo viene de un alias
+   demasiado laxo y se corrige en `names.py`, no fusionando. El superviviente hereda el
+   `acb_club_id` del grupo.
+4. **Sugerencias difusas** (`find_team_identity_suggestions`), **nunca** vinculan ni fusionan.
+   Candidatos: dos filas que comparten una palabra "de núcleo" (≥4 letras, fuera de un puñado de
+   palabras genéricas como `real`, `gran`, `fundacion`; no es una lista de patrocinadores). Se
+   descartan si hay prueba de que son dos clubes: jugaron (o tienen calendario) la misma
+   competición la misma temporada, se enfrentaron, `acb_club_id` distintos o `code` de Euroliga
+   distintos. `ambiguous=True` si alguno de los dos tiene otro candidato incompatible con el
+   primero. Contra los pares de `_KNOWN_TEAM_ALIASES`, el difuso encuentra 27 de 28 por su cuenta
+   (solo "Barça" ~ "FC Barcelona" no comparte palabra).
+   - **Por qué no hay emparejamiento difuso automático al ingerir**: la señal que separa un
+     cambio de patrocinador de dos clubes de la misma ciudad (Efes/Fenerbahçe en `istanbul`,
+     Maccabi/Hapoel en `aviv`, Zvezda/Partizan en `belgrade`) es que los segundos juegan la misma
+     liga la misma temporada, y una fila que aparece por primera vez aún no ha jugado nada: el
+     primer partido de un recién ascendido es indistinguible del de un patrocinador nuevo. Fundir
+     dos clubes es irreversible; un duplicado se detecta y se arregla. Con el `clubId` de ACB el
+     difuso ya solo hace falta como red para Euroliga y cruces entre fuentes.
+5. **`ingest/run_all.py`**: la comprobación final imprime las colisiones exactas y las
+   sugerencias (estas no ponen `identity_check` en AVISO). `--merge-team-duplicates` (opt-in, no
+   está en `baskonia-ingest.service`) hace copia con `tools/backup_db.py` (etiqueta
+   `pre-fusion-clubes`, sin rotar las antiguas) y fusiona con
+   `tools/fix_team_identity.py::merge_exact_duplicates`, solo colisiones exactas; si la copia
+   falla no fusiona nada y la ejecución sale con error. Un grupo bloqueado (⛔) se deja fuera y se
+   informa, sin impedir la fusión de los demás (en la CLI de la herramienta, en cambio, aborta).
+
+### Cómo fusionar los ~23 pares ya cargados en `data/baskonia.db`
+
+En la Pi, desde `/home/pi/free_pi` (en Windows, `.venv/Scripts/python.exe`):
+
+```bash
+# 0. Parar la ingesta programada mientras tanto (opcional pero recomendable)
+sudo systemctl stop baskonia-ingest.timer
+
+# 1. Copia consistente (API de backup de SQLite, válida con la BD en uso)
+.venv/bin/python tools/backup_db.py --label pre-fusion-clubes
+
+# 2. Diagnóstico: grupos, superviviente elegido, filas que se mueven y bloqueos (⛔)
+.venv/bin/python tools/fix_team_identity.py
+
+# 3a. Fusionar (aborta entero si hay algún ⛔; excluye ese grupo con --skip-id TEAM_ID)
+.venv/bin/python tools/fix_team_identity.py --apply
+
+# 3b. ...o, equivalente, en la próxima ingesta (copia automática + fusión de lo exacto;
+#     los grupos ⛔ se saltan y se informan):
+.venv/bin/python -m ingest.run_all --season 2026 --merge-team-duplicates
+
+# 4. Comprobar: debe decir "Sin colisiones de identidad de club"
+.venv/bin/python tools/fix_team_identity.py
+
+sudo systemctl start baskonia-ingest.timer
+```
+
+Deshacer: parar el timer y la app, y copiar la copia de `data/` encima de `data/baskonia.db`
+(borrando antes cualquier `baskonia.db-wal`/`-shm` suelto). Si el diagnóstico avisa de
+"jugadores con el mismo nombre en el grupo", se miran después con `tools/fix_player_identity.py`
+(esta herramienta mueve jugadores, no los fusiona).
+
+### Limitaciones
+
+- `acb_club_id` solo se rellena en filas que una ingesta vuelve a ver: una fila de una temporada
+  antigua que ya no se reingiere se queda sin él (sus duplicados siguen detectándose por
+  nombre/alias como antes). Reingerir la temporada (`run_single_game` o un backfill) lo rellena.
+- Las sugerencias dependen de tener partidos o calendario cargados de los dos equipos para
+  descartar a los de la misma ciudad; una fila sin partidos todavía puede salir sugerida (por
+  eso no se aplica nada solo).
+- Supuesto no verificable: que ACB no reasigne un `clubId` a otro club (p.ej. tras una
+  desaparición/refundación). No hay caso visto en las ediciones 86-91.
+
+## Tiros con reloj y contexto + tiros y tiempos muertos en `play_events` (2026-09-28)
+
+Hasta hoy `shots` era solo "dónde": ni cuarto, ni reloj, ni marcador, así que un tiro no se podía
+cruzar con quintetos, parciales ni minutos finales; y `play_events` tipaba robos/pérdidas/
+rebotes/faltas pero **no los tiros ni los tiempos muertos**, aunque las dos fuentes los dan en el
+mismo play-by-play que ya se descargaba.
+
+### Qué se carga ahora
+
+- **`shots`** gana 8 columnas nullable (`schema.sql` + `engine.py::_ADDITIVE_COLUMN_MIGRATIONS`,
+  así que una BD existente las recibe sola al siguiente `init_scouting_db`): `quarter`
+  (`'Q1'..'Q4'`/`'OTn'`), `game_clock` (`'MM:SS'` restantes), `seconds` (desde el inicio, vía
+  `ingest/common/game_clock.py` — misma escala que `play_events`/`lineup_stints`), `home_score`/
+  `away_score` (marcador **después** del tiro, tal como lo dan las dos fuentes) e
+  `is_fastbreak`/`is_second_chance`/`is_off_turnover` (0/1).
+- **`play_events`** gana los tipos `fg2_made`, `fg2_missed`, `fg3_made`, `fg3_missed`, `ft_made`,
+  `ft_missed` (con su jugador) y `timeout` (tiempo muerto de **equipo**, `player_id` NULL). Los
+  nombres son contrato compartido con el cálculo de posesiones. Los tiempos muertos de
+  televisión de Euroliga (`TOUT_TV`, sin `CODETEAM`) **no** se cargan a propósito. En ACB el
+  mate (código 100) es un `fg2_made` con `event_detail='dunk'`.
+- `game_team_quarter_stats.fouls_for/against` sigue contando solo `foul_personal`
+  (`loader._quarter_foul_stats` ya filtraba por tipo; hay test que lo fija con tiros y
+  tiempos muertos presentes).
+
+### Verificado en vivo (2026-09-28)
+
+- **ACB, partido 104465**: `MatchShots/match-shots` trae en cada `shotPoints[i]`
+  `quarter/minute/second/scoreHome/scoreAway` (se descartaban). Sus 150 tiros de campo casan 1 a 1
+  con las jugadas de `PlayByPlay` por cuarto+reloj+tipo+jugador. Códigos: 92/96 libre
+  anotado/fallado, 93/97 de 2, 94/98 de 3, 100 mate; 113 = tiempo muerto (7 en ese partido,
+  Q2-Q4, siempre `playerLicenseId=None`). Carga de punta a punta en una BD en memoria: 150 tiros
+  con reloj y marcador, 39 `ft_made` = 39 `ftm` del boxscore, 7 `timeout`.
+- **Euroliga, 16 partidos de 2025** (gamecodes 7/12/20/33/45/60/77/88/101/120/133/150/175/190/
+  210/250; 2.006 tiros de campo, 111 tiempos muertos de equipo): `ShotData` **no** trae
+  `PERIOD`; trae `MINUTE` (minuto de partido redondeado hacia arriba), `CONSOLE`, `POINTS_A/B`,
+  `NUM_ANOT` (= `NUMBEROFPLAY` del PBP en el 100% de las filas) y las banderas
+  `FASTBREAK/SECOND_CHANCE/POINTS_OFF_TURNOVER` como texto `"0"/"1"`. Dos trampas:
+  1. `CONSOLE` falla en los minutos exactos (en 59 de los 64 tiros con segundos `00` va un minuto
+     por delante del PBP). Con PBP el reloj se toma del PBP; sin PBP se corrige con `MINUTE`
+     (2.001/2.006 tiros quedan igual que con PBP).
+  2. Las banderas son de **puntos**: nunca valen 1 en un tiro fallado. Se respetan solo en los
+     anotados; en los fallados se derivan (ver "Contexto derivado" abajo).
+
+### Contexto derivado, agnóstico de fuente (`ingest/common/shot_context.py`)
+
+ACB no publica ninguna bandera, y Euroliga solo para anotados. Una máquina de posesiones simple
+sobre los `play_events` (ya con tiros) da el contexto de la **posesión** en la que se tira:
+segunda oportunidad = ya hubo rebote ofensivo propio en ella; tras pérdida = empezó con
+pérdida/robo rival; contraataque = tiro a ≤ `FASTBREAK_WINDOW_SECONDS` (6 s) de un inicio por
+rebote defensivo, robo o pérdida rival. Se invoca en `raw_game.parse_and_resolve` y solo rellena
+las banderas que llegan en `None` (la de la fuente siempre gana).
+
+Validación contra las banderas propias de Euroliga (958 canastas de campo de esos 16 partidos,
+derivando sin mirarlas):
+
+| Bandera | Coincidencia | Precisión | Recall |
+|---|---|---|---|
+| Segunda oportunidad | 99,5% | 98% | 97% |
+| Tras pérdida | 99,0% | 97% | 98% |
+| Contraataque (6 s) | 92,5% | 55% | 81% |
+
+Contraataque es un juicio del anotador en Euroliga, no una regla de reloj: 3 s da la mayor
+coincidencia bruta (94,3%) pero se deja la mitad; 8 s recoge el 87% pero duplica los positivos
+(precisión 44%). 6 s es el mejor equilibrio (F1 0,65). La interfaz lo presenta como aproximación.
+
+### App
+
+- `app/assistant/capabilities.py`: `shot_clock` (`shots.seconds` con algún dato) y `timeouts`
+  (alguna fila `event_type='timeout'`), con su frase en `missing_summary`.
+- Mapa de tiros de "Estado del equipo" y "Próximo rival": radio **Contexto** (Todos / Últimos 5
+  min apretados (±5) / Contraataque / Segunda oportunidad / Tras pérdida), solo si
+  `shot_clock`. El acierto por zona de al lado sale de esos mismos tiros
+  (`queries.shot_zone_profile_in_context`) para que los dos mapas no se contradigan.
+- "Partidos anteriores" → Rotaciones: raya azul por tiempo muerto de cada equipo
+  (`queries.game_timeouts`); la lista de eventos de un parcial muestra los tiros y el aviso
+  "los tiros no salen en esta lista" solo aparece en partidos sin reingerir.
+- Consumidores revisados: la escalera del marcador (`queries._score_steps`, base también de la
+  probabilidad de victoria) agrupa por segundo con `MAX` del marcador, así que los eventos nuevos
+  solo la hacen más precisa (cada canasta en su segundo) sin duplicar nada; las consultas de
+  faltas filtran por `event_type`; el asistente (`game_play_events`, `game_runs`, trampas del
+  prompt) conoce los tipos nuevos.
+
+### Backfill: hay que reingerir
+
+Los partidos ya cargados tienen las columnas nuevas en NULL y ningún evento de tiro/tiempo muerto
+hasta que se reingieren; la interfaz y el asistente lo detectan (`shot_clock`/`timeouts`
+apagados, aviso por partido) en vez de fallar. La carga es idempotente (borrar-y-reinsertar por
+`game_id` en `shots`/`play_events`, upsert en el resto), así que **no** hace falta `--force` ni
+recrear la BD — basta relanzar la temporada:
+
+```bash
+python -m ingest.acb.cli --season 2025          # ~5 peticiones/partido a 0,5 s: la vía barata
+python -m ingest.euroleague.cli --season 2025   # ojo al rate limit conocido, ver §2.3
+# o las dos de una vez, sin tocar la plantilla:
+python -m ingest.run_all --season 2025 --skip baskonia_web
+```
+
+Vía más barata para Euroliga (o para probar antes con pocos partidos): recargar solo los
+partidos que interesan con `run_single_game`, que ya existe y es igual de idempotente:
+
+```bash
+python -c "from ingest.common.db import get_engine; from ingest.euroleague.pipeline import run_single_game; e = get_engine(); [print(run_single_game(e, 2025, code)) for code in (7, 20, 45)]"
+```

@@ -24,6 +24,19 @@ decodificaron, no están documentados por ACB):
   se descartan para `shots`, que exige `pos_x`/`pos_y`), 599=quinteto
   inicial (10 eventos al principio del partido, 5 por equipo), 112=entra a
   pista, 115=sale de pista.
+
+Tiros y tiempos muertos en `play_events` (2026-09-28): los códigos de tiro
+de arriba (92/93/94/96/97/98/100) se emiten ADEMÁS como eventos tipados
+(`ft_made`/`fg2_made`/`fg3_made`/`ft_missed`/`fg2_missed`/`fg3_missed`; el
+mate 100 como `fg2_made` con `event_detail='dunk'`), y 113 = tiempo muerto
+de EQUIPO (`timeout`, sin jugador, `local` dice de quién) — verificado en
+vivo en el partido 104465 (7 tiempos muertos repartidos entre Q2 y Q4, todos
+con `playerLicenseId=None`). `MatchShots/match-shots` trae en cada
+`shotPoints[i]` el mismo `quarter`/`minute`/`second`/`scoreHome`/
+`scoreAway` que el play-by-play (los 150 tiros de campo de ese partido casan
+1 a 1 con su jugada por cuarto+reloj+tipo+jugador); hasta esta fecha se
+descartaban. El marcador que trae es el de DESPUÉS del tiro (un 93 del local
+a 0-0 llega con `scoreHome=2`).
 """
 from typing import Any, Dict, List, Optional
 
@@ -67,6 +80,35 @@ _COMPETITION_BY_ID = {
 def is_out_of_scope_competition(competition_id: Optional[int]) -> bool:
     """`True` si `competition_id` es un valor real pero fuera de las competiciones que se cargan."""
     return competition_id is not None and competition_id not in _COMPETITION_BY_ID
+
+
+def senior_acb_club_id(team: Dict[str, Any]) -> Optional[int]:
+    """`clubId` estable de un equipo de ACB, o `None` si no es del primer equipo.
+
+    VERIFICADO EN VIVO (2026-09-28, ediciones 89-91): todo objeto de equipo de
+    la API -`teams[]` de `Competition/matches`, `teamBoxscores[].team` de
+    `Result/boxscores` y `teams.home/away` de `MatchHeader/match-header`- trae
+    `id` (cambia en CADA edición: Real Madrid 4239/4345/4407/4476), el nombre
+    (cambia con el patrocinador) y `clubId`, que no cambia: Manresa es 10 como
+    "BAXI Manresa" (4340 en 2024-25, 4414 en 2025-26) y como "Kids&Us Manresa"
+    (4471 en 2026-27). Ver `ingest/common/identity.py::resolve_or_create_team`.
+
+    Solo se devuelve para equipos de las competiciones que se cargan
+    (`_COMPETITION_BY_ID`, según el `competitionId` DEL EQUIPO): los de cantera
+    comparten el `clubId` del club (Liga U, `competitionId` 134: "Barça
+    Atlètic" lleva el 2 del Barça, "Fundacion CB Canarias" el 28 de La Laguna
+    Tenerife, "Unicaja Alhaurín de la Torre" el 14 de Unicaja), y fundirlos
+    con el primer equipo sería justo el error que esto viene a evitar. Sin
+    `competitionId` en el equipo (payload antiguo o de test) tampoco: sin él
+    no se puede saber de qué equipo del club se trata.
+    """
+    club_id = team.get("clubId")
+    if club_id is None or team.get("competitionId") not in _COMPETITION_BY_ID:
+        return None
+    try:
+        return int(club_id)
+    except (TypeError, ValueError):
+        return None
 
 
 def _competition_name(competition_id: Optional[int]) -> str:
@@ -128,6 +170,17 @@ _EVENT_TYPE_BY_PLAYTYPE = {
 # viniendo de `personalFouls` del boxscore (`_team_totals`/`players` arriba),
 # no de contar estas filas.
 _FOUL_PERSONAL_PLAYTYPES = {161, 159, 160, 109, 537, 166}
+
+# Tiros como eventos tipados (2026-09-28). Nombres EXACTOS del contrato de
+# `play_events` que comparte con el cálculo de posesiones — ver el comentario
+# de `play_events` en `schema.sql`.
+_SHOT_EVENT_BY_PLAYTYPE = {
+    92: ("ft_made", None), 96: ("ft_missed", None),
+    93: ("fg2_made", None), 100: ("fg2_made", "dunk"), 97: ("fg2_missed", None),
+    94: ("fg3_made", None), 98: ("fg3_missed", None),
+}
+# Tiempo muerto de EQUIPO (sin jugador; `local` dice qué equipo lo pide).
+_TIMEOUT_PLAYTYPE = 113
 
 
 def _parse_minutes(value: Any) -> float:
@@ -314,9 +367,26 @@ def _convert_shots(shot_points: List[dict], home_id: str, away_id: str) -> List[
                 "y": y,
                 "located": (point["posX"], point["posY"]) != (0, 0),
                 "made": play_type in _MADE_SHOT_PLAYTYPES,
+                # Reloj y marcador del propio `shotPoints` (2026-09-28, ver el
+                # docstring del módulo). `.get()`: un payload sin ellos deja
+                # las columnas en NULL en vez de tumbar la carga. Las tres
+                # banderas de contexto NO las da ACB: las deriva
+                # `ingest/common/shot_context.py` del play-by-play tipado.
+                "quarter": _quarter_label(point["quarter"]) if point.get("quarter") else None,
+                "clock": _clock(point),
+                "home_score": point.get("scoreHome"),
+                "away_score": point.get("scoreAway"),
             }
         )
     return shots
+
+
+def _clock(play: dict) -> Optional[str]:
+    """`minute`/`second` de la fuente -> `'MM:SS'`; `None` si falta alguno."""
+    minute, second = play.get("minute"), play.get("second")
+    if minute is None or second is None:
+        return None
+    return f"{int(minute):02d}:{int(second):02d}"
 
 
 def _extract_starters(plays: List[dict], home_id: str, away_id: str) -> Dict[str, list]:
@@ -438,7 +508,8 @@ def _convert_player_advanced_stats(raw_by_player: Dict[str, Any]) -> List[dict]:
 
 def _convert_play_events(plays: List[dict], home_id: str, away_id: str) -> List[dict]:
     """Eventos tipados (Fase 2): robos/pérdidas/tapones/rebotes ofensivo-defensivo/
-    asistencias/faltas recibidas/faltas personales, con reloj y marcador."""
+    asistencias/faltas recibidas/faltas personales, con reloj y marcador; desde
+    2026-09-28 también tiros (de campo y libres) y tiempos muertos de equipo."""
     events = []
     for play in sorted(plays, key=lambda p: p["order"]):
         play_type = play["playType"]
@@ -446,6 +517,10 @@ def _convert_play_events(plays: List[dict], home_id: str, away_id: str) -> List[
             event_type, event_detail = "foul_personal", str(play_type)
         elif play_type in _EVENT_TYPE_BY_PLAYTYPE:
             event_type, event_detail = _EVENT_TYPE_BY_PLAYTYPE[play_type], None
+        elif play_type in _SHOT_EVENT_BY_PLAYTYPE:
+            event_type, event_detail = _SHOT_EVENT_BY_PLAYTYPE[play_type]
+        elif play_type == _TIMEOUT_PLAYTYPE:
+            event_type, event_detail = "timeout", None
         else:
             continue
         events.append(
@@ -511,6 +586,12 @@ def build_raw_game(
 
     home_team = {"id": str(home_box["team"]["id"]), "name": home_box["team"]["fullName"]}
     away_team = {"id": str(away_box["team"]["id"]), "name": away_box["team"]["fullName"]}
+    # `acb_club_id` solo si lo hay (ver `senior_acb_club_id`): el contrato común
+    # (`ingest/common/raw_game.py`) no lo exige y las demás fuentes no lo traen.
+    for team, box in ((home_team, home_box), (away_team, away_box)):
+        club_id = senior_acb_club_id(box["team"])
+        if club_id is not None:
+            team["acb_club_id"] = club_id
 
     home_stats = _full_game_stats(home_box)
     away_stats = _full_game_stats(away_box)
@@ -667,6 +748,7 @@ def build_scheduled_matchup(
         "opponent_acb_id": opponent_id,
         "opponent_name": opponent["name"],
         "opponent_logo_url": opponent.get("logo_url"),
+        "opponent_acb_club_id": opponent.get("acb_club_id"),
         "match_date": str(start)[:10] if start else None,
         "is_home": is_home,
     }

@@ -43,6 +43,13 @@ class Capabilities:
     game_metadata: bool = False     # Fase 3: árbitros/asistencia/pabellón/entrenadores
     quarter_player_stats: bool = False  # Fase 3: boxscore de jugador por cuarto (ACB-only)
     player_advanced_stats: bool = False  # Fase 4: avanzadas oficiales por jugador (ACB-only)
+    stint_possessions: bool = False  # posesiones por tramo (lineup_stints.possessions_*)
+    # 2026-09-28: tiros con reloj/marcador/contexto (`shots.seconds`) y
+    # tiempos muertos de equipo en `play_events`. Solo con datos reingeridos
+    # desde esa fecha: las columnas existen antes (migración aditiva) llenas
+    # de NULL, y los partidos viejos no tienen filas 'timeout'.
+    shot_clock: bool = False
+    timeouts: bool = False
     seasons: List[Dict[str, object]] = field(default_factory=list)
     #: Competiciones con su id, igual que `seasons` y por el mismo motivo.
     #: Eran solo nombres hasta el 2026-09-14, y el banco de pruebas
@@ -69,6 +76,9 @@ class Capabilities:
             "game_metadata": self.game_metadata,
             "quarter_player_stats": self.quarter_player_stats,
             "player_advanced_stats": self.player_advanced_stats,
+            "stint_possessions": self.stint_possessions,
+            "shot_clock": self.shot_clock,
+            "timeouts": self.timeouts,
             "seasons": self.seasons,
             "competitions": self.competitions,
             "date_range": self.date_range,
@@ -127,6 +137,19 @@ class Capabilities:
                 "No hay estadísticas avanzadas oficiales por jugador y partido (solo existen para ACB): "
                 "sin contexto de victoria/derrota ni fuente de puntos normalizada por jugador."
             )
+        # Solo si hay tramos: sin ellos, el aviso de `lineup_stints` ya lo cubre.
+        if self.lineup_stints and not self.stint_possessions:
+            gaps.append(
+                "No hay posesiones por tramo: on/off y duplas van en diferencia por 40 minutos, "
+                "no en net rating por 100 posesiones."
+            )
+        if not self.shot_clock:
+            gaps.append(
+                "Los tiros no tienen reloj ni contexto: no se puede separar el tiro en los minutos "
+                "finales, en contraataque, de segunda oportunidad o tras pérdida."
+            )
+        if not self.timeouts:
+            gaps.append("No hay tiempos muertos registrados: no se puede decir cuándo paró el partido cada equipo.")
         return gaps
 
 
@@ -185,6 +208,16 @@ def probe(engine: Engine) -> Capabilities:
     player_advanced_stats = inspector.has_table("player_advanced_stats") and bool(
         _scalar(engine, "SELECT 1 FROM player_advanced_stats LIMIT 1")
     )
+    # Columna presente Y con dato: NULL = partido sin tiros tipados todavía.
+    stint_possessions = _has_column(inspector, "lineup_stints", "possessions_for") and bool(
+        _scalar(engine, "SELECT 1 FROM lineup_stints WHERE possessions_for IS NOT NULL LIMIT 1")
+    )
+    shot_clock = _has_column(inspector, "shots", "seconds") and bool(
+        _scalar(engine, "SELECT 1 FROM shots WHERE seconds IS NOT NULL LIMIT 1")
+    )
+    timeouts = inspector.has_table("play_events") and bool(
+        _scalar(engine, "SELECT 1 FROM play_events WHERE event_type = 'timeout' LIMIT 1")
+    )
 
     with engine.connect() as conn:
         seasons = [
@@ -213,6 +246,9 @@ def probe(engine: Engine) -> Capabilities:
         game_metadata=game_metadata,
         quarter_player_stats=quarter_player_stats,
         player_advanced_stats=player_advanced_stats,
+        stint_possessions=stint_possessions,
+        shot_clock=shot_clock,
+        timeouts=timeouts,
         seasons=seasons,
         competitions=competitions,
         date_range=date_range,

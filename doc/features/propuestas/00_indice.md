@@ -73,9 +73,24 @@ implemente:
   han fusionado con retroactividad como el Barça: solo importa para un agregado por club de esos
   equipos concretos (ninguno juega ACB+Euroliga a la vez, así que no bloquean la 04), pero conviene
   planificar el mismo arreglo si se prepara scouting de alguno de ellos en profundidad.
-- **La ficha biográfica está casi vacía**: `height_cm` es NULL en los 968 jugadores, `birth_date`
+  **Actualización 2026-09-28:** la causa de fondo está cerrada para ACB — la API trae un `clubId`
+  estable entre temporadas y patrocinadores, que ahora se guarda en `teams.acb_club_id` y se usa
+  antes que el nombre, así que un patrocinador nuevo ya no crea duplicado aunque no esté en
+  `_KNOWN_TEAM_ALIASES` (que queda para cruzar ACB ↔ Euroliga). Los parecidos sin prueba salen
+  como sugerencia al final de cada ingesta y nunca se fusionan solos. Los ~23 pares ya cargados
+  se fusionan con copia previa con `tools/fix_team_identity.py --apply` o con
+  `python -m ingest.run_all --season 2026 --merge-team-duplicates`; pasos exactos en
+  [`ingestor/01_estado.md`](../ingestor/01_estado.md#identidad-de-club-sin-alias-a-mano-2026-09-28).
+- ~~**La ficha biográfica está casi vacía**: `height_cm` es NULL en los 968 jugadores, `birth_date`
   solo existe en 12 y 452 jugadores tienen la posición en blanco. Limita sobre todo a
-  [11](11_similitud_de_jugadores.md).
+  [11](11_similitud_de_jugadores.md).~~ **En vías de resolverse (2026-09-28).** Dos fuentes la
+  rellenan ya en cada ingesta, sin pisar nada: la página de jugador de acb.com
+  (`ingest/acb/profiles.py`: posición, altura, nacimiento y nacionalidad de todo jugador con
+  licencia ACB, hasta 100 por pasada) y la API de plantillas de Euroliga (`roster.py`, que ahora
+  también rellena la posición en blanco, con pérdida: Guard→'Base', Forward→'Alero',
+  Center→'Pívot'). Se llena en unas pocas pasadas de `run_all`, no de golpe. Quedan: el peso
+  fuera de Euroliga, las nacionalidades en inglés ya guardadas y los jugadores sin licencia ni
+  código de Euroliga. Detalle: [ingestor/01_estado.md §4](../ingestor/01_estado.md).
 
 ## Lo que falta en la ingesta para el siguiente escalón
 
@@ -89,8 +104,14 @@ datos:
 - **Reloj de posesión** y **marca de tiempo en los tiros**: `shots` guarda `game_id`,
   `player_id`, `zone_id`, `pos_x`, `pos_y`, `made`, `located` — y nada de tiempo. Por eso ningún
   análisis puede cruzar *dónde* se tira con *cuándo* se tira (ver §5 del documento 02).
-- **Posesiones por tramo**: `lineup_stints` guarda puntos, no posesiones, así que los ratings
-  por 100 posesiones a nivel de quinteto hay que estimarlos (ver §5 del documento 07).
+- ~~**Posesiones por tramo**~~ **RESUELTO en ingesta (2026-09-28), pendiente de datos.**
+  `lineup_stints.possessions_for`/`possessions_against` se estiman tramo a tramo desde
+  `play_events` (FGA + 0,44·FTA − OREB + TOV, reescalado por partido a la referencia de
+  `game_advanced_stats`; ver `ingest/common/possessions.py`). Dependen de los tiros tipados en
+  `play_events` (`fg2_made`...`ft_missed`): hasta reingerir con ellos y pasar
+  `tools/backfill_stint_possessions.py --apply`, las columnas siguen en NULL y la interfaz se
+  queda en diferencia por 40 (capacidad `stint_possessions`). Con dato, On/Off y tríos enseñan
+  además net rating por 100 posesiones — **estimado**, como pide el §5 del documento 07.
 
 Todo lo propuesto en esta carpeta es factible **sin** ninguna de esas cuatro cosas. Si algún día
 entran (o entra tracking), se abre otro nivel, sobre todo para 01, 02 y 08.

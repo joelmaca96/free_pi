@@ -12,9 +12,20 @@ rutas plausibles y todas 404). La API de plantillas de Euroliga sí:
 
 QUÉ CUBRE Y QUÉ NO. Solo jugadores de clubes de Euroliga — que en esta base
 de datos son 350 de 947, incluido el Baskonia entero y todos sus rivales
-europeos. Los equipos que solo juegan ACB se quedan sin ficha, y eso es un
-hueco de cobertura conocido, no un fallo: la alternativa sería scrapear la
-ficha de acb.com, otra fuente más que mantener.
+europeos. Los equipos que solo juegan ACB los cubre desde 2026-09-28
+`ingest/acb/profiles.py`, que lee la ficha de la web de acb.com con estas
+mismas reglas (solo actualiza, rellena huecos).
+
+POSICIÓN (2026-09-28). El boxscore de Euroliga no trae posición, así que un
+jugador que solo ha jugado Euroliga quedaba con `position = ''` (unos 450).
+Esta API sí la da, pero solo en tres categorías (Guard/Forward/Center): se
+rellena el hueco con la etiqueta de la app más cercana, sin pisar nunca una
+posición ya guardada. La tabla y sus consecuencias, en `_POSITION_BY_NAME`.
+
+NACIONALIDAD EN CASTELLANO (2026-09-28). `country.name` viene en inglés; se
+traduce con `_COUNTRY_ES` antes de rellenar el hueco, para que lo que
+escribe esta fuente case con lo de acb.com y baskonia.com ("EE.UU."). Lo ya
+guardado en inglés por pasadas anteriores no se toca (regla de abajo).
 
 SOLO ACTUALIZA, NUNCA CREA. Este módulo no resuelve identidad: cruza por
 `player_external_ids` (`source='euroleague'`) y actualiza la fila que ya
@@ -33,7 +44,7 @@ el criterio del club ("Eslovenia", "EE.UU."), y esta API en inglés
 que pasara volvía la columna una mezcla de dos idiomas — pasó de verdad la
 primera vez que se corrió esto. Para una app en castellano, el dato del club
 es el bueno; esta fuente completa a los 900 y pico jugadores que no lo
-tenían.
+tenían (y desde 2026-09-28 lo escribe ya traducido, ver arriba).
 
 FOTOS. `images.headshot` del MIEMBRO (no de `person`, que viene vacío) es un
 PNG real de 750×1000 en el CDN de Euroliga. Hasta ahora la única fuente de
@@ -204,6 +215,88 @@ def download_headshot(
     return target
 
 
+#: Posición de Euroliga -> etiqueta de la app. La API solo distingue TRES
+#: puestos (`positionName` Guard/Forward/Center, `position` 1/2/3; comprobado
+#: en vivo el 2026-09-28 en las 18 plantillas de E2025: 164/130/89 jugadores,
+#: y ni `/v2/people/{code}` ni el XML de `/v1/players` dan nada más fino), y
+#: la app usa CINCO ('Base','Escolta','Alero','Ala-pívot','Pívot', comparadas
+#: por igualdad exacta en `app/analytics/impact.py::_position_ok` y en los
+#: suelos de `app/analytics/minutes_plan.py`). Lo que se decide y por qué:
+#:
+#: - Center -> 'Pívot'. Sin pérdida.
+#: - Forward -> 'Alero'. Pierde el 'Ala-pívot': un 4 de Euroliga cuenta como
+#:   alero en los filtros. No afecta a ningún suelo (el planificador solo
+#:   exige 'Base' y 'Pívot').
+#: - Guard -> 'Base', no 'Escolta'. Pierde el 'Escolta', y a propósito hacia
+#:   el lado permisivo: con 'Escolta', un rival solo-Euroliga no tendría
+#:   NINGÚN base y el filtro de quintetos "al menos un Base" no devolvería
+#:   nada (y `applicable_position_floors` diría "sin bases disponibles", que
+#:   es falso). Con 'Base', ese filtro pasa a significar "al menos un
+#:   exterior" para esos jugadores — más laxo, pero no vacío ni engañoso.
+#:   Consecuencia para el planificador de minutos (solo plantilla propia): el
+#:   suelo de 'Base' lo cubriría cualquier escolta que hubiera recibido la
+#:   posición por esta vía. En la práctica no pasa, porque la plantilla
+#:   propia tiene la posición de baskonia.com y del `gameRole` de ACB, que
+#:   ganan siempre (esto solo rellena huecos).
+#:
+#: Y el boxscore de ACB PISA la posición en cada ingesta
+#: (`identity.resolve_or_create_player`), así que un jugador que acabe
+#: jugando ACB cambia esta etiqueta gruesa por la buena sin hacer nada.
+_POSITION_BY_NAME = {"guard": "Base", "forward": "Alero", "center": "Pívot"}
+_POSITION_BY_CODE = {1: "Base", 2: "Alero", 3: "Pívot"}
+
+
+def _member_position(member: Dict) -> Optional[str]:
+    """`positionName` (o, si falta, el código `position`) en el vocabulario de la app."""
+    name = (member.get("positionName") or "").strip().lower()
+    if name in _POSITION_BY_NAME:
+        return _POSITION_BY_NAME[name]
+    code = member.get("position")
+    return _POSITION_BY_CODE.get(code) if isinstance(code, int) else None
+
+
+#: País de la API (inglés) -> castellano, con el criterio de acb.com y
+#: baskonia.com ("EE.UU."). Cubre todos los países que aparecen en las
+#: plantillas de E2025 (comprobado en vivo el 2026-09-28) y unos pocos
+#: habituales más. Solo afecta a lo que ESTE módulo escribe en un hueco: no
+#: pisa nada ya guardado (ver "RELLENA HUECOS, NO PISA"), así que los valores
+#: en inglés escritos antes de existir este mapa siguen ahí. Un país que no
+#: esté en la lista entra tal cual, en inglés: mejor el dato que el hueco.
+_COUNTRY_ES = {
+    "United States of America": "EE.UU.", "United States": "EE.UU.", "USA": "EE.UU.",
+    "France": "Francia", "Serbia": "Serbia", "Spain": "España", "Italy": "Italia",
+    "Germany": "Alemania", "Greece": "Grecia", "Lithuania": "Lituania", "Israel": "Israel",
+    "Turkiye": "Turquía", "Turkey": "Turquía", "Canada": "Canadá", "Latvia": "Letonia",
+    "Brazil": "Brasil", "Slovenia": "Eslovenia", "Senegal": "Senegal", "Nigeria": "Nigeria",
+    "North Macedonia": "Macedonia del Norte", "Bosnia and Herzegovina": "Bosnia y Herzegovina",
+    "Denmark": "Dinamarca", "Georgia": "Georgia", "Czech Republic": "República Checa",
+    "Czechia": "República Checa", "Mali": "Mali", "Finland": "Finlandia", "Croatia": "Croacia",
+    "Angola": "Angola", "Bahamas": "Bahamas", "Bulgaria": "Bulgaria", "Australia": "Australia",
+    "United Kingdom": "Reino Unido", "Great Britain": "Reino Unido", "Burkina Faso": "Burkina Faso",
+    "Gabon": "Gabón", "Ireland": "Irlanda", "Guinea": "Guinea", "Colombia": "Colombia",
+    "Cameroon": "Camerún", "Belgium": "Bélgica", "Ukraine": "Ucrania",
+    "Russian Federation": "Rusia", "Russia": "Rusia", "Cabo Verde": "Cabo Verde",
+    "Cape Verde": "Cabo Verde", "Ivory Coast": "Costa de Marfil",
+    "Dominican Republic": "República Dominicana", "Hungary": "Hungría",
+    "Montenegro": "Montenegro", "Argentina": "Argentina", "Puerto Rico": "Puerto Rico",
+    "Poland": "Polonia", "Netherlands": "Países Bajos", "Sweden": "Suecia", "Estonia": "Estonia",
+    "Uruguay": "Uruguay", "Austria": "Austria", "Portugal": "Portugal", "Mexico": "México",
+    "Belarus": "Bielorrusia", "Venezuela": "Venezuela", "Congo": "Congo",
+    "DR Congo": "República Democrática del Congo", "South Sudan": "Sudán del Sur",
+    "Sudan": "Sudán", "Egypt": "Egipto", "Japan": "Japón", "China": "China",
+    "New Zealand": "Nueva Zelanda", "Switzerland": "Suiza", "Slovakia": "Eslovaquia",
+    "Romania": "Rumanía", "Iceland": "Islandia", "Norway": "Noruega", "Jamaica": "Jamaica",
+    "Cyprus": "Chipre", "Kosovo": "Kosovo", "Albania": "Albania", "Lebanon": "Líbano",
+}
+
+
+def _country_es(name: Optional[str]) -> Optional[str]:
+    if not name:
+        return None
+    name = name.strip()
+    return _COUNTRY_ES.get(name, name)
+
+
 def _person_fields(person: Dict) -> Dict[str, Optional[object]]:
     """Los cuatro campos de ficha, ya en las unidades de la base de datos."""
     country = person.get("country") or {}
@@ -216,7 +309,8 @@ def _person_fields(person: Dict) -> Dict[str, Optional[object]]:
         # `birthDate` viene ISO con hora ("1997-02-14T00:00:00") y la columna
         # es DATE: se recorta, igual que hace baskonia_web con su `birthday`.
         "birth_date": birth.split("T")[0] if birth else None,
-        "nationality": country.get("name"),
+        # En castellano cuando se conoce el país (ver `_COUNTRY_ES`).
+        "nationality": _country_es(country.get("name")),
     }
 
 
@@ -236,10 +330,12 @@ def update_player_profiles(
             así los tests de la parte de ficha no tocan disco ni red.
 
     Returns:
-        `{"players": fichas actualizadas, "photos": fotos nuevas en disco}`.
+        `{"players": fichas actualizadas, "photos": fotos nuevas en disco,
+        "positions": posiciones en blanco rellenadas}`.
     """
     updated = 0
     photos = 0
+    positions = 0
     for member in people:
         if member.get("type") != "J":  # J = jugador; el resto es cuerpo técnico
             continue
@@ -271,6 +367,19 @@ def update_player_profiles(
                 local_path = str(downloaded)
                 photos += 1
 
+        position = _member_position(member)
+        if position is not None:
+            # Solo si está en blanco (`NOT NULL`, '' = sin dato): la posición
+            # de baskonia.com y la del `gameRole` de ACB son más finas que
+            # estas tres categorías y ganan siempre (ver `_POSITION_BY_NAME`).
+            positions += conn.execute(
+                text(
+                    "UPDATE players SET position = :position"
+                    " WHERE id = :id AND (position IS NULL OR TRIM(position) = '')"
+                ),
+                {"position": position, "id": row[0]},
+            ).rowcount
+
         if not any(value is not None for value in fields.values()) and not headshot_url:
             continue  # ficha vacía en la API: no se toca nada
 
@@ -291,7 +400,7 @@ def update_player_profiles(
             {**fields, "photo_url": headshot_url, "photo_local_path": local_path, "id": row[0]},
         )
         updated += 1
-    return {"players": updated, "photos": photos}
+    return {"players": updated, "photos": photos, "positions": positions}
 
 
 def run(
@@ -315,7 +424,8 @@ def run(
             varios cientos de peticiones al CDN).
 
     Returns:
-        `{"clubs": …, "players": fichas actualizadas, "photos": fotos nuevas}`.
+        `{"clubs": …, "players": fichas actualizadas, "photos": fotos nuevas,
+        "positions": posiciones en blanco rellenadas}`.
     """
     client = client or EuroleagueClient()
     clubs = client.fetch_clubs(season)
@@ -324,7 +434,7 @@ def run(
     # host y abrir una conexión por foto es tirar el keep-alive.
     session = requests.Session() if download_photos else None
 
-    totals = {"clubs": 0, "players": 0, "photos": 0}
+    totals = {"clubs": 0, "players": 0, "photos": 0, "positions": 0}
     for club in clubs:
         code = club.get("code")
         if not code:
@@ -339,9 +449,11 @@ def run(
             result = update_player_profiles(conn, people, photos_dir=target_dir, session=session)
         totals["players"] += result["players"]
         totals["photos"] += result["photos"]
+        totals["positions"] += result["positions"]
 
     logger.info(
-        "euroleague: ficha actualizada en %d jugadores de %d clubes (%d fotos nuevas)",
-        totals["players"], totals["clubs"], totals["photos"]
+        "euroleague: ficha actualizada en %d jugadores de %d clubes (%d fotos nuevas, "
+        "%d posiciones en blanco rellenadas)",
+        totals["players"], totals["clubs"], totals["photos"], totals["positions"]
     )
     return totals

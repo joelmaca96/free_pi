@@ -345,8 +345,10 @@ def game_play_events(_engine: Engine, game_id: str, event_type: Optional[str] = 
 
     Args:
         event_type: acota a un tipo ('steal', 'turnover', 'block', 'oreb',
-            'dreb', 'assist', 'foul_drawn', 'foul_personal'), o `None` para
-            todos.
+            'dreb', 'assist', 'foul_drawn', 'foul_personal' y, en partidos
+            reingeridos desde 2026-09-28, 'fg2_made', 'fg2_missed',
+            'fg3_made', 'fg3_missed', 'ft_made', 'ft_missed', 'timeout'), o
+            `None` para todos.
 
     Returns:
         `quarter, game_clock, event_type, event_detail, team_name,
@@ -1000,9 +1002,13 @@ def clutch_lineups(
 # por ventana) y no arrastra el `is_inferred` de `lineup_team`: `lineup_stints
 # .team_id` es directo, no deducido del equipo actual de los jugadores.
 
+# `{possession_columns}`: `lineup_stints.possessions_for/_against` si ESTA base
+# de datos las tiene (columnas aditivas del 2026-09-28, ver
+# `ingest/common/possessions.py`), o dos NULL si no — mismo motivo que
+# `_table_columns`: nombrarlas sin más falla en una BD sin migrar.
 _STINT_PLAYER_ROWS_SQL = """
     SELECT s.id AS stint_id, s.end_seconds - s.start_seconds AS seconds,
-           s.points_for, s.points_against, g.game_date,
+           s.points_for, s.points_against, {possession_columns}, g.game_date,
            p.id AS player_id, p.name AS player_name
     FROM lineup_stints s
     JOIN games g ON g.id = s.game_id
@@ -1016,9 +1022,17 @@ _STINT_PLAYER_ROWS_SQL = """
 def _stint_player_rows(
     _engine: Engine, team_id: str, season_id: int, competition_id: Optional[int]
 ) -> pd.DataFrame:
-    """Filas crudas tramo-jugador del equipo: una fila por jugador en cada tramo."""
+    """Filas crudas tramo-jugador del equipo: una fila por jugador en cada tramo.
+
+    Incluye `possessions_for`/`possessions_against` del tramo (NULL si la BD no
+    las tiene o el partido no tiene tiros tipados todavía).
+    """
+    if "possessions_for" in _table_columns(_engine, "lineup_stints"):
+        possession_columns = "s.possessions_for, s.possessions_against"
+    else:
+        possession_columns = "NULL AS possessions_for, NULL AS possessions_against"
     return pd.read_sql(
-        text(_STINT_PLAYER_ROWS_SQL),
+        text(_STINT_PLAYER_ROWS_SQL.format(possession_columns=possession_columns)),
         _engine,
         params={"team_id": team_id, "season_id": season_id, "competition_id": competition_id},
     )
@@ -1038,18 +1052,53 @@ def _stints_by_id(raw: pd.DataFrame) -> pd.DataFrame:
     tocar la base de datos. `game_date` viaja para poder partir los tramos en
     "últimos K partidos" contra "el resto" sin una segunda consulta.
     """
-    columns = ["stint_id", "seconds", "plus_minus", "game_date", "players"]
+    columns = [
+        "stint_id", "seconds", "plus_minus", "game_date", "players",
+        "points_for", "points_against", "possessions_for", "possessions_against",
+    ]
     if raw.empty:
         return pd.DataFrame(columns=columns)
     per_stint = raw.groupby("stint_id").agg(
         seconds=("seconds", "first"),
         points_for=("points_for", "first"),
         points_against=("points_against", "first"),
+        possessions_for=("possessions_for", "first"),
+        possessions_against=("possessions_against", "first"),
         game_date=("game_date", "first"),
         players=("player_id", frozenset),
     ).reset_index()
     per_stint["plus_minus"] = per_stint["points_for"] - per_stint["points_against"]
     return per_stint[columns]
+
+
+def _net_rating_per_100(points_for, points_against, possessions_for, possessions_against) -> "tuple[float, float]":
+    """`(posesiones, net rating por 100)` de un conjunto de tramos, o `(nan, nan)` sin posesiones.
+
+    Net rating = ORtg − DRtg = 100·puntos/posesiones_propias − 100·encajados/
+    posesiones_rival, igual que `game_advanced_stats.net_rating`. Las
+    posesiones son ESTIMADAS por tramo (`ingest/common/possessions.py`); los
+    cuatro argumentos son sumas sobre los MISMOS tramos (solo los que tienen
+    posesiones), para no dividir puntos de unos tramos entre posesiones de otros.
+    """
+    if not possessions_for or not possessions_against or possessions_for <= 0 or possessions_against <= 0:
+        return float("nan"), float("nan")
+    net = 100.0 * points_for / possessions_for - 100.0 * points_against / possessions_against
+    return (possessions_for + possessions_against) / 2.0, net
+
+
+def _stints_net_rating(stints: pd.DataFrame) -> "tuple[float, float]":
+    """`_net_rating_per_100` sobre los tramos de `stints` que tienen posesiones."""
+    if stints.empty:
+        return float("nan"), float("nan")
+    poss_for = pd.to_numeric(stints["possessions_for"], errors="coerce")
+    poss_against = pd.to_numeric(stints["possessions_against"], errors="coerce")
+    known = poss_for.notna() & poss_against.notna()
+    if not known.any():
+        return float("nan"), float("nan")
+    return _net_rating_per_100(
+        float(stints.loc[known, "points_for"].sum()), float(stints.loc[known, "points_against"].sum()),
+        float(poss_for[known].sum()), float(poss_against[known].sum()),
+    )
 
 
 @st.cache_data(ttl=_TTL, show_spinner=False)
@@ -1076,10 +1125,16 @@ def player_on_off(
         reliable`. Ordenado por fiabilidad y luego por `on_off_shrunk`
         (encogido con `n / (n + min_minutes)`, igual criterio que la
         propuesta 02). Vacío si el equipo no tiene tramos en la temporada.
+
+        Además, `on_possessions, on_net_100, off_possessions, off_net_100,
+        on_off_100`: lo mismo en net rating por 100 posesiones ESTIMADAS
+        (capacidad `stint_possessions`), calculado solo sobre los tramos que
+        tienen posesiones. NaN si ninguno las tiene (BD sin tiros tipados).
     """
     columns = [
         "player_id", "player_name", "on_minutes", "on_plus_minus", "on_per_40",
         "off_minutes", "off_plus_minus", "off_per_40", "on_off", "on_off_shrunk", "reliable",
+        "on_possessions", "on_net_100", "off_possessions", "off_net_100", "on_off_100",
     ]
     raw = _stint_player_rows(_engine, team_id, season_id, competition_id)
     if raw.empty:
@@ -1098,6 +1153,8 @@ def player_on_off(
         on_per_40 = 40.0 * on_pm / on_minutes if on_minutes > 0 else float("nan")
         off_per_40 = 40.0 * off_pm / off_minutes if off_minutes > 0 else float("nan")
         on_off = on_per_40 - off_per_40
+        on_poss, on_net_100 = _stints_net_rating(on)
+        off_poss, off_net_100 = _stints_net_rating(off)
         rows.append({
             "player_id": player_id,
             "player_name": player_name,
@@ -1110,6 +1167,11 @@ def player_on_off(
             "on_off": on_off,
             "on_off_shrunk": shrink(on_off, on_minutes, k=int(min_minutes)) if on_minutes > 0 else 0.0,
             "reliable": bool(on_minutes >= min_minutes),
+            "on_possessions": on_poss,
+            "on_net_100": on_net_100,
+            "off_possessions": off_poss,
+            "off_net_100": off_net_100,
+            "on_off_100": on_net_100 - off_net_100,
         })
     df = pd.DataFrame(rows, columns=columns)
     return df.sort_values(["reliable", "on_off_shrunk"], ascending=[False, False]).reset_index(drop=True)
@@ -1138,12 +1200,16 @@ def player_combos(
 
     Returns:
         `player_ids, jugadores, minutes, plus_minus, plus_minus_per_40,
-        plus_minus_per_40_shrunk, stints, reliable`. Ordenado por fiabilidad
-        y luego por `plus_minus_per_40_shrunk`, mejor primero.
+        plus_minus_per_40_shrunk, stints, reliable, possessions,
+        net_rating_100`. Ordenado por fiabilidad y luego por
+        `plus_minus_per_40_shrunk`, mejor primero. Las dos últimas, igual que
+        en `player_on_off`: posesiones estimadas y net rating por 100 sobre
+        los tramos con posesiones, NaN si no hay ninguno.
     """
     columns = [
         "player_ids", "jugadores", "minutes", "plus_minus",
         "plus_minus_per_40", "plus_minus_per_40_shrunk", "stints", "reliable",
+        "possessions", "net_rating_100",
     ]
     raw = _stint_player_rows(_engine, team_id, season_id, competition_id)
     if raw.empty:
@@ -1153,15 +1219,25 @@ def player_combos(
     stints = _stints_by_id(raw)
 
     accum: "dict[tuple, list]" = {}
+    # (puntos a favor, en contra, posesiones a favor, en contra) SOLO de los
+    # tramos con posesiones — ver `_net_rating_per_100`.
+    per_100: "dict[tuple, list]" = {}
     for row in stints.itertuples(index=False):
         players = sorted(row.players)
         if len(players) < size:
             continue
+        has_possessions = pd.notna(row.possessions_for) and pd.notna(row.possessions_against)
         for combo in combinations(players, size):
             entry = accum.setdefault(combo, [0.0, 0, 0])
             entry[0] += row.seconds
             entry[1] += row.plus_minus
             entry[2] += 1
+            if has_possessions:
+                totals = per_100.setdefault(combo, [0.0, 0.0, 0.0, 0.0])
+                totals[0] += row.points_for
+                totals[1] += row.points_against
+                totals[2] += float(row.possessions_for)
+                totals[3] += float(row.possessions_against)
 
     if not accum:
         return pd.DataFrame(columns=columns)
@@ -1169,6 +1245,7 @@ def player_combos(
     rows = []
     for combo, (seconds, plus_minus, n_stints) in accum.items():
         minutes = seconds / 60.0
+        possessions, net_100 = _net_rating_per_100(*per_100.get(combo, (0.0, 0.0, 0.0, 0.0)))
         per_40 = 40.0 * plus_minus / minutes if minutes > 0 else float("nan")
         rows.append({
             "player_ids": ",".join(combo),
@@ -1179,6 +1256,8 @@ def player_combos(
             "plus_minus_per_40_shrunk": shrink(per_40, minutes, k=int(min_minutes)) if minutes > 0 else 0.0,
             "stints": n_stints,
             "reliable": bool(minutes >= min_minutes),
+            "possessions": possessions,
+            "net_rating_100": net_100,
         })
     df = pd.DataFrame(rows, columns=columns)
     return df.sort_values(["reliable", "plus_minus_per_40_shrunk"], ascending=[False, False]).reset_index(drop=True)

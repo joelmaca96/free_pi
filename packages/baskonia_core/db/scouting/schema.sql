@@ -29,7 +29,17 @@ CREATE TABLE teams (
   -- de ingest/ lo puebla todavía (ver local/features/003-vista-plantilla/
   -- 01_design.md §9) — la UI debe degradar a un badge con iniciales, no a un
   -- hueco vacío, mientras esta columna esté en NULL para todos los equipos.
-  logo_url    TEXT
+  logo_url    TEXT,
+  -- Identificador ESTABLE del club en ACB (`clubId` de la API, verificado en
+  -- vivo 2026-09-28: Manresa es 10 como "BAXI Manresa" en 2024-25 y 2025-26 y
+  -- como "Kids&Us Manresa" en 2026-27, mientras el `id` de equipo cambia en
+  -- CADA edición). `resolve_or_create_team` empareja por él antes que por
+  -- nombre; dos filas con el mismo valor son el mismo club (colisión exacta,
+  -- ver `find_team_identity_collisions`). NULL = equipo sin paso por ACB o
+  -- aún no visto por una ingesta que lo rellene. Sin UNIQUE a propósito: las
+  -- filas duplicadas que ya existen tienen que poder llevar el mismo valor
+  -- para que se detecten y se fusionen (`tools/fix_team_identity.py`).
+  acb_club_id INTEGER
 );
 
 -- Puente de identidad: un mismo equipo real (p.ej. Valencia Basket) aparece
@@ -151,12 +161,13 @@ CREATE TABLE players (
   -- hay foto real (silueta genérica) o la descarga falló ese jugador
   -- concreto; `photo_url` sigue siendo la fuente de verdad del origen.
   photo_local_path TEXT,
-  -- Ficha física. La puebla `ingest/euroleague/roster.py` desde la API de
-  -- plantillas de Euroliga (`person.height`/`person.weight`), única fuente de
-  -- las tres que los publica: el JSON de baskonia.com no trae altura (ver el
-  -- docstring de su scraper) y el boxscore de ACB tampoco. Por eso solo
-  -- están rellenos para jugadores de clubes de Euroliga; NULL en el resto,
-  -- que es la mitad larga de la tabla.
+  -- Ficha física. La rellenan (solo huecos, nunca pisan) dos fuentes: la
+  -- página de jugador de acb.com (`ingest/acb/profiles.py`: altura, fecha de
+  -- nacimiento, nacionalidad y posición de todo jugador con licencia ACB) y
+  -- la API de plantillas de Euroliga (`ingest/euroleague/roster.py`: altura,
+  -- PESO, nacimiento y nacionalidad). El peso solo lo da Euroliga: NULL para
+  -- quien solo juega ACB. Sin punto y coma en estos comentarios, que
+  -- `_create_missing_tables` corta cada CREATE TABLE en el primero que ve.
   height_cm   INTEGER,
   weight_kg   INTEGER,
   birth_date  DATE,
@@ -430,7 +441,15 @@ CREATE TABLE lineup_stints (
   end_seconds    REAL NOT NULL,
   points_for     INTEGER NOT NULL,
   points_against INTEGER NOT NULL,
-  margin_start   INTEGER NOT NULL   -- marcador (a favor - en contra) al abrir el tramo
+  margin_start   INTEGER NOT NULL,  -- marcador (a favor - en contra) al abrir el tramo
+  -- Posesiones ESTIMADAS del equipo del tramo y de su rival dentro de la
+  -- ventana [start_seconds, end_seconds), derivadas de `play_events` (FGA +
+  -- 0.44·FTA − OREB + TOV) y reescaladas por partido a la referencia de
+  -- `game_advanced_stats` — ver `ingest/common/possessions.py`. Nullable:
+  -- columnas añadidas (2026-09-28) sobre BDs ya cargadas. NULL = partido sin
+  -- tiros tipados en `play_events` (ingesta anterior), no "cero posesiones".
+  possessions_for     REAL,
+  possessions_against REAL
 );
 
 CREATE TABLE lineup_stint_players (
@@ -469,7 +488,30 @@ CREATE TABLE shots (
   --     no había forma de distinguirlos aguas abajo.
   -- NULL = fila anterior a esta columna (ver `engine.py::
   --     _ADDITIVE_COLUMN_MIGRATIONS`); la interfaz la trata como 1.
-  located   INTEGER CHECK (located IN (0,1))
+  located   INTEGER CHECK (located IN (0,1)),
+  -- Reloj y contexto del tiro (2026-09-28). Todas nullable: NULL = partido
+  -- ingerido antes de esta fecha (hay que reingerirlo, ver
+  -- doc/features/ingestor/01_estado.md) o fuente sin el dato para ESE tiro.
+  -- `quarter`/`game_clock`/`seconds` en el mismo formato y escala que
+  -- `play_events` ('Q1'..'Q4'/'OTn', 'MM:SS' restantes, segundos desde el
+  -- inicio vía `ingest/common/game_clock.py`), así que un tiro se cruza con
+  -- `lineup_stints`/`play_events` con un `BETWEEN`.
+  quarter          TEXT,
+  game_clock       TEXT,
+  seconds          REAL,
+  -- Marcador tal como lo da la fuente EN ese tiro: en las dos fuentes es el
+  -- de DESPUÉS del tiro (un tiro anotado ya incluye sus propios puntos).
+  home_score       INTEGER,
+  away_score       INTEGER,
+  -- Contexto de la POSESIÓN en la que se tira (anotado o fallado), 0/1:
+  -- contraataque, segunda oportunidad (hubo rebote ofensivo propio antes) y
+  -- tras pérdida del rival. Euroliga los publica solo para tiros anotados y
+  -- se respetan; el resto (ACB entero, fallos de Euroliga) los deriva
+  -- `ingest/common/shot_context.py` del play-by-play tipado — ver ese
+  -- módulo para las definiciones exactas y el umbral de contraataque.
+  is_fastbreak     INTEGER CHECK (is_fastbreak IN (0,1)),
+  is_second_chance INTEGER CHECK (is_second_chance IN (0,1)),
+  is_off_turnover  INTEGER CHECK (is_off_turnover IN (0,1))
 );
 
 CREATE TABLE key_events (
@@ -490,9 +532,15 @@ CREATE TABLE key_events (
 -- `event_type` es uno de: 'steal', 'turnover', 'block', 'oreb', 'dreb',
 -- 'assist', 'foul_drawn', 'foul_personal' — ver
 -- doc/features/ingestor/02_plan_stats_completas.md §Fase 2 para el mapeo
--- `playType`/`PLAYTYPE` verificado en vivo en cada fuente. `event_detail`
--- guarda el código crudo de fuente SOLO para 'foul_personal' en ACB (6
--- subtipos sin semántica distinguible, ver ese mismo documento) — el conteo
+-- `playType`/`PLAYTYPE` verificado en vivo en cada fuente — y, desde
+-- 2026-09-28, 'fg2_made', 'fg2_missed', 'fg3_made', 'fg3_missed',
+-- 'ft_made', 'ft_missed' (tiros, con su jugador) y 'timeout' (tiempo muerto
+-- de EQUIPO, `player_id` NULL; los de televisión de Euroliga, sin equipo,
+-- no se cargan). Esos nombres son contrato: los lee también el cálculo de
+-- posesiones. Quien cuente eventos debe filtrar SIEMPRE por `event_type`.
+-- `event_detail` guarda el código crudo de fuente para 'foul_personal' en
+-- ACB (6 subtipos sin semántica distinguible, ver ese mismo documento) y
+-- 'dunk' para los mates de ACB (código 100, un 'fg2_made') — el conteo
 -- agregado de faltas sigue viniendo del boxscore (`player_game_stats.pf`),
 -- no de contar estas filas, así que un subtipo sin diferenciar no bloquea
 -- ningún análisis ya existente.

@@ -215,3 +215,26 @@ def test_event_label_translates_the_schema_into_the_bench_vocabulary():
     # Un tipo de evento que la ingesta añada mañana se enseña tal cual en vez
     # de desaparecer de la lista.
     assert event_label("jump_ball") == "jump_ball"
+
+
+def test_timeouts_are_full_height_rules_with_their_clock():
+    """Tiempos muertos (2026-09-28): una raya vertical por tiempo muerto, sin eje Y
+    (para a los diez de pista, no a un jugador), con el reloj en el tooltip."""
+    timeouts = pd.DataFrame([{"team_id": "bas", "quarter": "Q2", "game_clock": "05:45", "seconds": 855.0}])
+    layers = rotation_chart(_stints((1, 0.0, 600.0, "Howard")), pd.DataFrame(), timeouts=timeouts).to_dict()["layer"]
+    rules = [layer for layer in layers if layer["mark"]["type"] == "rule" and "tooltip" in layer.get("encoding", {})]
+    assert len(rules) == 1
+    assert "y" not in rules[0]["encoding"]
+    assert rules[0]["encoding"]["tooltip"][0]["title"] == "Tiempo muerto"
+
+
+def test_no_timeout_layer_for_games_loaded_before_timeouts_existed():
+    base = rotation_chart(_stints((1, 0.0, 600.0, "Howard")), pd.DataFrame())
+    empty = rotation_chart(_stints((1, 0.0, 600.0, "Howard")), pd.DataFrame(), timeouts=pd.DataFrame())
+    assert len(empty.to_dict()["layer"]) == len(base.to_dict()["layer"])
+
+
+def test_event_label_covers_shots_and_timeouts():
+    assert event_label("fg3_made") == "Triple anotado"
+    assert event_label("ft_missed") == "Tiro libre fallado"
+    assert event_label("timeout") == "Tiempo muerto"

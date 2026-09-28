@@ -980,11 +980,51 @@ def team_foul_quarter_profile(_engine: Engine, team_id: str, season_id: int) -> 
     return pd.read_sql(sql, _engine, params={"team_id": team_id, "season_id": season_id})
 
 
+#: Filtros de contexto del mapa de tiros (2026-09-28), como condición SQL
+#: sobre `shots s`. Necesitan las columnas de reloj/contexto de `shots`, que
+#: solo tienen datos en partidos reingeridos desde esa fecha — la pantalla
+#: solo ofrece el filtro si `app/assistant/capabilities.py::probe(...)
+#: .shot_clock`. "clutch" = últimos 5 minutos del último cuarto o cualquier
+#: prórroga (`seconds >= 2100`) con el marcador a 5 puntos o menos; el
+#: marcador de `shots` es el de DESPUÉS del tiro, así que una canasta que
+#: pone el +7 ya no cuenta — aproximación aceptada y declarada en pantalla.
+SHOT_CONTEXTS = {
+    "clutch": "s.seconds >= 2100 AND ABS(s.home_score - s.away_score) <= 5",
+    "fastbreak": "s.is_fastbreak = 1",
+    "second_chance": "s.is_second_chance = 1",
+    "off_turnover": "s.is_off_turnover = 1",
+}
+
+#: Tipos de `play_events` que son tiros (desde la reingesta del 2026-09-28).
+SHOT_EVENT_TYPES = ("fg2_made", "fg2_missed", "fg3_made", "fg3_missed", "ft_made", "ft_missed")
+
+
+def _shot_context_clause(context: Optional[str]) -> str:
+    """`AND <condición>` de `SHOT_CONTEXTS`, o cadena vacía sin contexto.
+
+    Lista cerrada a propósito: el SQL se interpola, así que una clave que no
+    esté en `SHOT_CONTEXTS` es un error del llamante, no un filtro más.
+    """
+    if context is None:
+        return ""
+    if context not in SHOT_CONTEXTS:
+        raise ValueError(f"contexto de tiro desconocido: {context!r}")
+    return f"AND ({SHOT_CONTEXTS[context]})"
+
+
 @st.cache_data(ttl=_TTL, show_spinner=False)
-def team_shots_season(_engine: Engine, team_id: str, season_id: int) -> pd.DataFrame:
+def team_shots_season(
+    _engine: Engine, team_id: str, season_id: int, context: Optional[str] = None
+) -> pd.DataFrame:
     """Tiros con coordenadas de TODOS los jugadores de un equipo en la temporada.
 
     Variante de `player_shots_season` sin filtro de jugador.
+
+    Args:
+        context: `None` (por defecto: todos los tiros, SQL idéntico al de
+            siempre — vale para una BD sin las columnas de contexto) o una
+            clave de `SHOT_CONTEXTS` para quedarse solo con los tiros de ese
+            contexto.
 
     Returns:
         `pos_x, pos_y, made, located, player_name, player_id` — mismas
@@ -1011,15 +1051,53 @@ def team_shots_season(_engine: Engine, team_id: str, season_id: int) -> pd.DataF
     `ingest/baskonia_web` (plantilla propia), así que en cualquier otro
     equipo vale `1` por defecto para todos y el filtro no descarta a nadie.
     """
-    sql = text("""
+    sql = text(f"""
         SELECT s.pos_x, s.pos_y, s.made, COALESCE(s.located, 1) AS located,
                p.name AS player_name, p.id AS player_id
         FROM shots s
         JOIN players p ON p.id = s.player_id
         JOIN games g ON g.id = s.game_id
         WHERE p.team_id = :team_id AND p.active = 1 AND g.season_id = :season_id
+          {_shot_context_clause(context)}
     """)
     return pd.read_sql(sql, _engine, params={"team_id": team_id, "season_id": season_id})
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def shot_zone_profile_in_context(
+    _engine: Engine, team_id: str, season_id: int, context: str, player_id: Optional[str] = None
+) -> pd.DataFrame:
+    """Acierto y volumen por zona de los tiros de un contexto (`SHOT_CONTEXTS`).
+
+    Acompaña al mapa de tiros cuando se filtra por contexto: `team_zone_profile`
+    sale de `game_zone_stats`, un agregado por partido que no sabe nada del
+    reloj ni de la posesión, así que no se puede recortar — sin esto, el mapa
+    de al lado se filtraría y el de acierto por zona seguiría en el total,
+    contradiciéndose. Mismo cálculo que `player_zone_profile` (sobre
+    `shots.zone_id`) y mismos filtros de equipo que `team_shots_season`
+    (`players.team_id`, `active = 1`), para que las dos cuadren tiro a tiro.
+
+    Returns:
+        `zone_label, fg_pct, volume, made`, de más a menos volumen.
+    """
+    player_clause = "AND p.id = :player_id" if player_id is not None else ""
+    sql = text(f"""
+        SELECT cz.label                        AS zone_label,
+               100.0 * SUM(s.made) / COUNT(*)   AS fg_pct,
+               COUNT(*)                         AS volume,
+               SUM(s.made)                      AS made
+        FROM shots s
+        JOIN court_zones cz ON cz.id = s.zone_id
+        JOIN players p ON p.id = s.player_id
+        JOIN games g ON g.id = s.game_id
+        WHERE p.team_id = :team_id AND p.active = 1 AND g.season_id = :season_id
+          {player_clause}
+          {_shot_context_clause(context)}
+        GROUP BY cz.label
+        ORDER BY volume DESC
+    """)
+    params = {"team_id": team_id, "season_id": season_id, "player_id": player_id}
+    return pd.read_sql(sql, _engine, params=params)
 
 
 #: Condición SQL de `game_zone_stats` para cada lado de `team_zone_profile`/
@@ -1474,10 +1552,12 @@ def _score_steps(engine: Engine, game_id: str, team_id: Optional[str]) -> pd.Dat
     end = game_end_seconds(max(float(steps["seconds"].max()), float(last_stint or 0.0)))
 
     # Cierre de la escalera en el final del partido con el marcador OFICIAL.
-    # No es cosmético: los eventos tipados no incluyen los tiros, así que la
-    # última canasta puede caer después del último evento tipado y la
-    # escalera se quedaría corta (caso real: `acb-105371`, 102-75 final
-    # contra 102-72 en el último evento del play-by-play).
+    # No es cosmético: en los partidos cargados antes del 2026-09-28 los
+    # eventos tipados no incluyen los tiros, así que la última canasta puede
+    # caer después del último evento tipado y la escalera se quedaría corta
+    # (caso real: `acb-105371`, 102-75 final contra 102-72 en el último
+    # evento del play-by-play). Con los tiros ya en `play_events` el cierre
+    # coincide con el último escalón y `drop_duplicates` lo absorbe.
     closing = pd.DataFrame([{
         "seconds": end,
         "quarter": "OT" if end > _REGULATION_SECONDS else f"Q{int(end // 600)}",
@@ -1509,11 +1589,15 @@ def game_score_steps(_engine: Engine, game_id: str, team_id: Optional[str] = Non
         final. Vacío si el partido no tiene play-by-play tipado (fase 2 sin
         reingerir) o no existe.
 
-    Ojo con la granularidad: `play_events` no tipa los tiros (ver §5 de la
-    propuesta), así que el marcador se OBSERVA en los eventos que sí están
-    (rebotes, faltas, pérdidas...). Los puntos aparecen igual —el marcador
-    que viaja con cada evento ya los lleva— pero el escalón se sitúa en el
-    siguiente evento tipado, no en el segundo exacto de la canasta.
+    Granularidad: desde la reingesta del 2026-09-28 `play_events` tipa los
+    tiros (`fg2_made`, `ft_made`...), así que cada canasta es su propio
+    escalón en su segundo exacto. En un partido cargado antes, el marcador
+    solo se OBSERVA en los eventos que sí están (rebotes, faltas,
+    pérdidas...): los puntos aparecen igual —el marcador que viaja con cada
+    evento ya los lleva— pero el escalón se sitúa en el siguiente evento
+    tipado, no en el segundo exacto de la canasta. Los eventos nuevos no
+    duplican nada: la escalera agrupa por segundo y toma el marcador máximo,
+    no cuenta filas.
     """
     return _score_steps(_engine, game_id, team_id)
 
@@ -1699,11 +1783,12 @@ def game_window_events(
     """Play-by-play tipado de UNA ventana del partido, con el marcador en cada evento.
 
     Es la segunda capa de la vista de parciales: sin ella el timeline dice
-    cuándo se fue el partido, pero no qué pasó. Los tiros NO aparecen —
-    `shots` no guarda ni cuarto ni reloj (§5 de la propuesta)—, así que los
-    puntos se leen por el salto del marcador y no como un evento más; es la
-    mayor carencia de esta vista y la interfaz la dice en voz alta en vez de
-    dejar que el entrenador la deduzca.
+    cuándo se fue el partido, pero no qué pasó. Desde la reingesta del
+    2026-09-28 los tiros y los tiempos muertos salen como un evento más; en
+    un partido cargado antes NO aparecen y los puntos se leen por el salto
+    del marcador — la interfaz lo dice en voz alta en ese caso (ver
+    `SHOT_EVENT_TYPES` para detectarlo) en vez de dejar que el entrenador lo
+    deduzca.
 
     Args:
         team_id: equipo desde el que se orienta el marcador y se marca
@@ -1744,6 +1829,26 @@ def game_window_events(
     df["score_against"] = df["away_score"] if is_home else df["home_score"]
     df["is_own"] = df["team_id"] == own
     return df[columns]
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def game_timeouts(_engine: Engine, game_id: str) -> pd.DataFrame:
+    """Tiempos muertos de EQUIPO de un partido (2026-09-28), en orden cronológico.
+
+    Solo existen en partidos reingeridos desde esa fecha (`play_events.
+    event_type = 'timeout'`; los de televisión de Euroliga no se cargan).
+
+    Returns:
+        `team_id, quarter, game_clock, seconds, home_score, away_score`.
+        Vacío si el partido no tiene ninguno registrado.
+    """
+    sql = text("""
+        SELECT pe.team_id, pe.quarter, pe.game_clock, pe.seconds, pe.home_score, pe.away_score
+        FROM play_events pe
+        WHERE pe.game_id = :game_id AND pe.event_type = 'timeout'
+        ORDER BY pe.seconds, pe.id
+    """)
+    return pd.read_sql(sql, _engine, params={"game_id": game_id})
 
 
 # ---------------------------------------------------------------------------

@@ -135,6 +135,29 @@ _ADDITIVE_COLUMN_MIGRATIONS = [
     # (`ingest/euroleague/roster.py`). `height_cm` ya existía en `schema.sql`
     # pero sin nadie que la escribiera; `weight_kg` es nueva.
     ("players", "weight_kg", "INTEGER"),
+    # Posesiones por tramo (2026-09-28), derivadas de `play_events` por
+    # `ingest/common/possessions.py` — NULL hasta que el partido tenga tiros
+    # tipados y se recalculen (loader o `tools/backfill_stint_possessions.py`).
+    ("lineup_stints", "possessions_for", "REAL"),
+    ("lineup_stints", "possessions_against", "REAL"),
+
+    # `clubId` estable de ACB (ver el comentario de `teams.acb_club_id` en
+    # `schema.sql` y `ingest/common/identity.py::resolve_or_create_team`).
+    # Columna y no un `source` nuevo en `team_external_ids` porque el CHECK
+    # de `source` no se puede alterar en SQLite sin recrear la tabla, y
+    # porque su PK `(source, external_id)` impediría que DOS filas duplicadas
+    # llevasen el mismo `clubId` — que es justo lo que las delata.
+    ("teams", "acb_club_id", "INTEGER"),
+    # Tiros con reloj, marcador y contexto (2026-09-28, ver `shots` en
+    # `schema.sql` e `ingest/common/shot_context.py`).
+    ("shots", "quarter", "TEXT"),
+    ("shots", "game_clock", "TEXT"),
+    ("shots", "seconds", "REAL"),
+    ("shots", "home_score", "INTEGER"),
+    ("shots", "away_score", "INTEGER"),
+    ("shots", "is_fastbreak", "INTEGER"),
+    ("shots", "is_second_chance", "INTEGER"),
+    ("shots", "is_off_turnover", "INTEGER"),
 ]
 
 # Las VISTAS (`VIEW_NAMES`) no se migran con `ALTER TABLE`: se recrean enteras

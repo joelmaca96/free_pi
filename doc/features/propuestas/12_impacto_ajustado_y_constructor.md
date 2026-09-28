@@ -72,7 +72,14 @@ de la 07).
   mantiene igual, porque sigue midiendo cuántos minutos de ESTA temporada hay detrás.
 - La posición solo existe para la plantilla propia (baskonia_web): con un rival, la restricción
   "un base y un pívot" se desactiva sola.
-- Todo en diferencia de puntos, no en posesiones.
+- Todo en diferencia de puntos, no en posesiones. **Nota (2026-09-28):** `lineup_stints` gana
+  `possessions_for`/`possessions_against` (estimadas desde `play_events`, ver
+  `ingest/common/possessions.py` y la capacidad `stint_possessions`), así que un RAPM por 100
+  posesiones pasa a ser POSIBLE: bastaría con que `build_segments` repartiera también las
+  posesiones de cada tramo entre sus segmentos (proporcional a la duración, o recalculándolas
+  desde `play_events` en las fronteras del segmento) y ponderar por posesiones en vez de por
+  minutos. No se ha tocado `app/analytics/impact.py`: el RAPM sigue en +/- por 40, y el
+  On/Off y los tríos de la pantalla ya enseñan el net rating por 100 al lado cuando hay dato.
 - **Campo neutral**: `games` no marca los partidos en pista neutral (Copa, Final Four), así que
   el ajuste les aplica igualmente la ventaja de campo al equipo que figura como local
   (`home_team_id`). Son pocos partidos por temporada y el término de campo es de control (no se
