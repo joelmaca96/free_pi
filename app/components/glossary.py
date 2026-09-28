@@ -385,8 +385,8 @@ TERMS: Dict[str, Term] = {
         "RAPM", "Impacto ajustado (+/- regularizado)",
         "Cuántos puntos por 40 minutos gana el equipo con este jugador en pista en lugar de uno medio, "
         "DESCONTANDO con qué compañeros y contra qué rivales jugó (regresión sobre los diez de pista en "
-        "cada tramo, encogida hacia 0 con poca muestra). A diferencia del On/Off, no premia al que juega "
-        "siempre con los titulares.",
+        "cada tramo, encogida con poca muestra hacia 0 o, si se activa, hacia su valor de la temporada "
+        "anterior). A diferencia del On/Off, no premia al que juega siempre con los titulares.",
     ),
     "projected_per_40": Term(
         "Proyección", "Diferencia proyectada por 40 minutos",

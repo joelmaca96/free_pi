@@ -328,14 +328,28 @@ def is_ambiguous(candidates: List[Candidate]) -> bool:
 # ---------------------------------------------------------------------------
 
 
+def _season_order_key(season_id: int, label: str, all_labels_have_year: bool):
+    """Clave de orden cronológico de una temporada: año de inicio de la etiqueta, o su `id`."""
+    return (int(str(label).strip()[:4]), season_id) if all_labels_have_year else (season_id, season_id)
+
+
 def previous_season_id(engine: Engine, season_id: int) -> Optional[int]:
-    """Temporada inmediatamente anterior a `season_id` ("la temporada pasada")."""
+    """Temporada inmediatamente anterior a `season_id` ("la temporada pasada").
+
+    Por AÑO DE INICIO de la etiqueta ('2024-2025' → 2024), no por `id`: el
+    `id` es autoincremental y sigue el orden de INGESTA, así que una temporada
+    histórica cargada después de la actual tendría un `id` mayor. Mismo
+    criterio que `queries_assistant.previous_season`; si alguna etiqueta no
+    empieza por un año, se vuelve al orden por `id`.
+    """
     with engine.connect() as conn:
-        row = conn.execute(
-            text("SELECT id FROM seasons WHERE id < :season_id ORDER BY id DESC LIMIT 1"),
-            {"season_id": season_id},
-        ).fetchone()
-    return row[0] if row else None
+        rows = conn.execute(text("SELECT id, label FROM seasons")).fetchall()
+    with_year = all(str(label).strip()[:4].isdigit() for _, label in rows)
+    keys = {sid: _season_order_key(sid, label, with_year) for sid, label in rows}
+    if season_id not in keys:
+        return None
+    earlier = [sid for sid in keys if keys[sid] < keys[season_id]]
+    return max(earlier, key=keys.get) if earlier else None
 
 
 def resolve_player_game(

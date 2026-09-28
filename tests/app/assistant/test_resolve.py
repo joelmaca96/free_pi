@@ -224,3 +224,15 @@ def test_team_game_by_opponent_and_date(engine):
 def test_team_game_ignores_games_after_today(engine):
     """`today` se inyecta: nada de `date.today()` escondido dentro de la consulta."""
     assert resolve_team_game(engine, "bas", when="last", today=dt.date(2026, 1, 6)) == "g2"
+
+
+def test_previous_season_follows_the_label_not_the_insertion_order(engine):
+    """Una temporada histórica ingerida DESPUÉS tiene un `id` mayor: no por eso es "la siguiente"."""
+    from tests.app.assistant.conftest import LEAGUE_SEASON_ID
+
+    with engine.begin() as conn:
+        conn.execute(text("INSERT INTO seasons (id, label) VALUES (99, '2019-2020')"))
+
+    assert previous_season_id(engine, 99) is None       # la más antigua, pese a su id alto
+    assert previous_season_id(engine, 1) == 99          # 2025-2026 -> 2019-2020
+    assert previous_season_id(engine, LEAGUE_SEASON_ID) == 1
