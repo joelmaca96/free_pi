@@ -416,6 +416,20 @@ TERMS: Dict[str, Term] = {
         "escalado a 40 minutos. Los puntos de cada tramo de quinteto se reparten por tiempo entre los "
         "bloques que toca: aproximación, no canasta a canasta.",
     ),
+    # --- RAPM con prior (propuesta 12b) --
+    "rapm_prior": Term(
+        "Punto de partida", "RAPM de la temporada anterior, rebajado",
+        "Lo que se sabía del jugador antes de esta temporada: su RAPM de la temporada anterior por 0,7 (un "
+        "año cambia rol, forma y edad). El RAPM de esta temporada se encoge hacia este valor en lugar de "
+        "hacia 0: con pocos minutos manda él; con muchos, mandan los datos de este año. En blanco = no jugó "
+        "la temporada anterior (se encoge hacia 0, jugador medio).",
+    ),
+    "rapm_no_prior": Term(
+        "Solo esta temporada", "RAPM sin la temporada anterior",
+        "El RAPM calculado solo con los tramos de esta temporada, encogido hacia 0. La diferencia con el RAPM "
+        "final es lo que aporta la temporada anterior: grande en jugadores con pocos minutos, casi nula en "
+        "los que ya tienen muchos.",
+    ),
 }
 
 

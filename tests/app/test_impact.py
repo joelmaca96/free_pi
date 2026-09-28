@@ -261,3 +261,246 @@ def test_team_stint_rows_filters_by_team_and_last_games(engine):
     assert set(rows["player_name"]) >= {"Marcus Howard"}
     st.cache_data.clear()
     assert queries.team_stint_rows(engine, "val", 1, competition_id=2).empty
+
+
+def _add_season(engine, season_id, label, stints, competition_id=1):
+    """Temporada nueva con un partido `bas`-`val` y sus tramos `[(team, start, end, pf, pa, margin, players)]`."""
+    game_id = f"s{season_id}g1"
+    with engine.begin() as conn:
+        conn.execute(text("INSERT INTO seasons (id, label) VALUES (:i, :l)"), {"i": season_id, "l": label})
+        conn.execute(text(
+            "INSERT INTO games (id, season_id, competition_id, home_team_id, away_team_id, game_date,"
+            " home_score, away_score, pace) VALUES (:g, :s, :c, 'bas', 'val', '2026-11-01', 80, 70, 70.0)"
+        ), {"g": game_id, "s": season_id, "c": competition_id})
+        for team, start, end, pf, pa, margin, players in stints:
+            result = conn.execute(text(
+                "INSERT INTO lineup_stints (game_id, team_id, start_seconds, end_seconds, points_for,"
+                " points_against, margin_start) VALUES (:g, :t, :s, :e, :pf, :pa, :m)"
+            ), {"g": game_id, "t": team, "s": start, "e": end, "pf": pf, "pa": pa, "m": margin})
+            for p in players:
+                conn.execute(text("INSERT INTO lineup_stint_players (stint_id, player_id) VALUES (:s, :p)"),
+                             {"s": result.lastrowid, "p": p})
+
+
+_BAS_SEASON2 = ["howard", "moneke", "codi", "nikos", "sedekerskis"]  # sedekerskis: sin tramos en la 1
+
+
+def test_season_impact_uses_the_previous_season_as_prior(engine):
+    from app.data import queries_assistant
+
+    _add_season(engine, 2, "2026-2027", [
+        ("bas", 0, 600, 10, 12, 0, _BAS_SEASON2),
+        ("val", 0, 600, 12, 10, 0, ["v1", "v2", "v3", "v4", "v5"]),
+    ])
+
+    assert queries_assistant.previous_season(engine, 2) == {"id": 1, "label": "2025-2026"}
+    assert queries_assistant.previous_season(engine, 1) is None
+
+    data = queries_assistant.season_impact(engine, 2)
+    previous = queries_assistant.season_impact(engine, 1, use_prior=False)["fit"]["players"].set_index("player_id")
+    fit = data["fit"]
+    players = fit["players"].set_index("player_id")
+
+    assert data["prior_season"] == {"id": 1, "label": "2025-2026"}
+    assert fit["prior_used"] and fit["prior_players"] == 9  # 4 de bas + 5 de val jugaron la 1
+    assert players.loc["howard", "prior"] == pytest.approx(impact.PRIOR_WEIGHT * previous.loc["howard", "rapm"])
+    assert not players.loc["sedekerskis", "has_prior"]
+    # En la 1 bas ganó su tramo (+8) y en la 2 pierde (-2): el prior sube a Howard respecto a "solo esta".
+    assert players.loc["howard", "rapm"] > players.loc["howard", "rapm_no_prior"]
+    assert set(data) >= {"fit", "segments", "names"}
+
+
+def test_season_impact_without_previous_season_or_prior_is_the_old_behaviour(engine):
+    from app.data import queries_assistant
+
+    _add_season(engine, 2, "2026-2027", [
+        ("bas", 0, 600, 10, 12, 0, _BAS_SEASON2),
+        ("val", 0, 600, 12, 10, 0, ["v1", "v2", "v3", "v4", "v5"]),
+    ])
+
+    first = queries_assistant.season_impact(engine, 1)
+    assert first["prior_season"] is None and not first["fit"]["prior_used"]
+
+    off = queries_assistant.season_impact(engine, 2, use_prior=False)
+    assert off["prior_season"] is None and not off["fit"]["prior_used"]
+    plain = impact.fit_rapm(off["segments"])["players"]
+    assert off["fit"]["players"]["rapm"].tolist() == plain["rapm"].tolist()
+
+    # Con filtro de competición y la temporada anterior sin tramos en ella: sin prior.
+    st.cache_data.clear()
+    euro = queries_assistant.season_impact(engine, 2, competition_id=2)
+    assert euro["fit"]["players"].empty and euro["prior_season"] is None
+
+
+def test_previous_season_skips_seasons_without_games(engine):
+    from app.data import queries_assistant
+
+    with engine.begin() as conn:
+        conn.execute(text("INSERT INTO seasons (id, label) VALUES (2, '2026-2027')"))
+    _add_season(engine, 3, "2027-2028", [])
+
+    assert queries_assistant.previous_season(engine, 3) == {"id": 1, "label": "2025-2026"}
+
+
+# ------------------------------------------------ RAPM con prior (A6) --
+
+def _old_fit_rapm_beta(segments, ridge=impact.RIDGE_LAMBDA):
+    """El cálculo de `fit_rapm` ANTES del prior, copiado tal cual: la referencia de "sin prior = lo de siempre"."""
+    players = sorted(set().union(*segments["home_players"], *segments["away_players"]))
+    player_index = {p: i for i, p in enumerate(players)}
+    idx, signs, weights, target = impact._design(segments, player_index)
+    xtx, xty = impact._normal_equations(idx, signs, weights, target, len(players))
+    penalty = np.full(len(xty), ridge)
+    penalty[-1] = 1e-6
+    beta = np.linalg.solve(xtx + np.diag(penalty), xty)
+    return dict(zip(players, beta[:-1])), float(beta[-1])
+
+
+def test_rapm_without_prior_is_exactly_the_old_calculation():
+    segments, _ = _simulated_segments(n_segments=800)
+    old_rapm, old_home = _old_fit_rapm_beta(segments)
+
+    fit = impact.fit_rapm(segments)
+    players = fit["players"].set_index("player_id")
+
+    assert fit["home_advantage"] == old_home
+    for pid, value in old_rapm.items():
+        assert players.loc[pid, "rapm"] == value  # igualdad EXACTA, no aproximada
+    assert (players["rapm_no_prior"] == players["rapm"]).all()
+    assert players["prior"].isna().all()
+    assert not players["has_prior"].any()
+    assert fit["prior_used"] is False and fit["prior_players"] == 0 and fit["prior_weight"] is None
+    # Claves y columnas de siempre, intactas.
+    assert {"players", "home_advantage", "segments", "ridge"} <= set(fit)
+    assert list(fit["players"].columns[:4]) == ["player_id", "rapm", "minutes", "reliable"]
+
+
+def test_empty_prior_with_neutral_newcomers_changes_nothing():
+    segments, _ = _simulated_segments(n_segments=800)
+
+    plain = impact.fit_rapm(segments)["players"].set_index("player_id")["rapm"]
+    with_empty = impact.fit_rapm(segments, prior={})["players"].set_index("player_id")["rapm"]
+
+    assert (with_empty == plain.loc[with_empty.index]).all()
+
+
+def test_prior_pulls_the_estimate_towards_it_with_little_data():
+    """20 segmentos (~50 min): sin prior todo sale cerca de 0; con prior, cerca del punto de partida."""
+    segments, _ = _simulated_segments(n_segments=20)
+
+    fit = impact.fit_rapm(segments, prior={"a0": 10.0, "b0": -6.0}, prior_weight=1.0)
+    players = fit["players"].set_index("player_id")
+
+    assert fit["prior_used"] and fit["prior_players"] == 2
+    assert abs(players.loc["a0", "rapm_no_prior"]) < 1.5
+    assert players.loc["a0", "rapm"] == pytest.approx(10.0, abs=1.5)
+    assert players.loc["b0", "rapm"] == pytest.approx(-6.0, abs=1.5)
+    assert players.loc["a0", "prior"] == 10.0 and players.loc["a0", "has_prior"]
+    # Quien no trae prior sigue encogiéndose hacia 0.
+    assert pd.isna(players.loc["a1", "prior"]) and not players.loc["a1", "has_prior"]
+    assert abs(players.loc["a1", "rapm"]) < 2.0
+
+
+def test_prior_weight_scales_the_starting_point_and_is_validated():
+    segments, _ = _simulated_segments(n_segments=20)
+
+    fit = impact.fit_rapm(segments, prior={"a0": 10.0}, prior_weight=0.5)
+
+    assert fit["players"].set_index("player_id").loc["a0", "prior"] == 5.0
+    assert fit["prior_weight"] == 0.5
+    with pytest.raises(ValueError):
+        impact.fit_rapm(segments, prior={"a0": 10.0}, prior_weight=1.5)
+
+
+def test_newcomer_prior_is_configurable():
+    segments, _ = _simulated_segments(n_segments=20)
+
+    fit = impact.fit_rapm(segments, prior={"a0": 0.0}, newcomer_prior=-2.0)
+    rest = fit["players"].set_index("player_id").drop(index="a0")
+
+    assert rest["rapm"].mean() < rest["rapm_no_prior"].mean() - 1.0
+
+
+def test_with_lots_of_data_the_prior_barely_matters():
+    """Un prior absurdo (el mejor como el peor) apenas mueve a quien tiene miles de minutos."""
+    segments, _ = _simulated_segments()  # ~9.000 minutos por jugador
+    few, _ = _simulated_segments(n_segments=20)
+    wrong = {"a0": -10.0, "a7": 10.0}
+
+    def pulled(fit):
+        """Fracción del camino entre "solo esta temporada" y el prior que recorre el valor final."""
+        p = fit["players"].set_index("player_id")
+        return {k: (p.loc[k, "rapm"] - p.loc[k, "rapm_no_prior"]) / (v - p.loc[k, "rapm_no_prior"])
+                for k, v in wrong.items()}, p
+
+    big, players = pulled(impact.fit_rapm(segments, prior=wrong, prior_weight=1.0))
+    small, _ = pulled(impact.fit_rapm(few, prior=wrong, prior_weight=1.0))
+
+    assert all(v > 0.9 for v in small.values())   # ~40 minutos: manda el prior
+    assert all(v < 0.25 for v in big.values())    # ~9.400 minutos: mandan los datos
+    assert players.loc["a0", "rapm"] > 0 > players.loc["a7", "rapm"]  # ni siquiera le da la vuelta al signo
+    others = players.drop(index=list(wrong))
+    assert (others["rapm"] - others["rapm_no_prior"]).abs().max() < 0.25
+
+
+def test_prior_from_fit_takes_the_final_rapm_of_each_player():
+    segments, _ = _simulated_segments(n_segments=500)
+    fit = impact.fit_rapm(segments)
+
+    prior = impact.prior_from_fit(fit)
+
+    assert prior == dict(zip(fit["players"]["player_id"], fit["players"]["rapm"]))
+    assert impact.prior_from_fit(impact.fit_rapm(pd.DataFrame())) == {}
+    assert impact.prior_from_fit(None) == {}
+
+
+def _league_season(true, n_segments, rng, weight, n_teams=6, per_team=9):
+    """Liga de `n_teams` × `per_team` con impactos conocidos; `weight[p]` = probabilidad relativa de jugar."""
+    teams = [[f"t{t}p{j}" for j in range(per_team)] for t in range(n_teams)]
+    rows = []
+    for i in range(n_segments):
+        ta, tb = rng.choice(n_teams, 2, replace=False)
+        lineups = []
+        for t in (ta, tb):
+            w = np.array([weight[p] for p in teams[t]])
+            lineups.append(tuple(sorted(rng.choice(teams[t], 5, replace=False, p=w / w.sum()))))
+        home, away = lineups
+        minutes = rng.uniform(1, 4)
+        expected = (sum(true[p] for p in home) - sum(true[p] for p in away) + 2.0) * minutes / 40
+        rows.append({
+            "game_id": f"g{i // 25}", "start_seconds": 0.0, "end_seconds": minutes * 60, "minutes": minutes,
+            "margin_delta": int(round(rng.normal(expected, np.sqrt(5 * minutes)))),
+            "home_team_id": f"T{ta}", "away_team_id": f"T{tb}", "home_players": home, "away_players": away,
+        })
+    return pd.DataFrame(rows)
+
+
+def test_prior_from_last_season_reduces_the_error_of_low_minute_players():
+    """Dos temporadas simuladas con impacto real conocido, que cambia algo de un año a otro.
+
+    Temporada 1 con minutos repartidos; en la 2, tres de cada plantilla casi no
+    juegan (~150 min). Con el prior de la 1, el error de esos jugadores frente
+    a su impacto REAL de la 2 baja, el de la liga entera también, y la
+    validación cruzada por partido (fuera de muestra) lo confirma. (Se ha
+    comprobado con 8 semillas: mejora en todas.)
+    """
+    rng = np.random.default_rng(0)
+    players = [f"t{t}p{j}" for t in range(6) for j in range(9)]
+    true1 = {p: rng.normal(0, 3) for p in players}
+    true2 = {p: true1[p] + rng.normal(0, 1) for p in players}
+    season1 = _league_season(true1, 3000, rng, {p: 1.0 for p in players})
+    season2 = _league_season(true2, 1500, rng, {p: 0.08 if int(p.split("p")[1]) >= 6 else 1.0 for p in players})
+
+    prior = impact.prior_from_fit(impact.fit_rapm(season1))
+    df = impact.fit_rapm(season2, prior=prior)["players"].set_index("player_id")
+    df["true"] = pd.Series(true2)
+    low = df[df["minutes"] < impact.MIN_RELIABLE_MINUTES]
+
+    assert len(low) >= 12
+    error_with = (low["rapm"] - low["true"]).abs().mean()
+    error_without = (low["rapm_no_prior"] - low["true"]).abs().mean()
+    assert error_with < error_without
+    assert ((df["rapm"] - df["true"]) ** 2).mean() < ((df["rapm_no_prior"] - df["true"]) ** 2).mean()
+    cv_with = impact.cross_validate_ridge(season2, grid=(1200.0,), folds=4, prior=prior)["mse"].iloc[0]
+    cv_without = impact.cross_validate_ridge(season2, grid=(1200.0,), folds=4)["mse"].iloc[0]
+    assert cv_with < cv_without

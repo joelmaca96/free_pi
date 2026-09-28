@@ -2082,18 +2082,63 @@ def foul_drawing_leaders(
     return leaders.sort_values("pf_drawn_per40", ascending=False).reset_index(drop=True)
 
 
+def previous_season(_engine: Engine, season_id: int) -> Optional[dict]:
+    """La temporada anterior a `season_id` con partidos cargados: `{"id", "label"}` o `None`.
+
+    "Anterior" = el `id` más alto por debajo de `season_id` (el mismo orden
+    que `queries.list_seasons`, que va por `id` y no por la etiqueta). Se
+    salta una temporada sin partidos cargados: existir en `seasons` sin un
+    solo partido (el calendario ingerido y nada más) no aporta prior.
+    Sin caché propia: `list_seasons` ya está cacheada.
+    """
+    seasons = queries.list_seasons(_engine)
+    if seasons.empty:
+        return None
+    earlier = seasons[(seasons["id"] < season_id) & (seasons["games"] > 0)].sort_values("id")
+    if earlier.empty:
+        return None
+    row = earlier.iloc[-1]
+    return {"id": int(row["id"]), "label": str(row["label"])}
+
+
 @st.cache_data(ttl=_TTL, show_spinner=False)
-def season_impact(_engine: Engine, season_id: int, competition_id: Optional[int] = None) -> dict:
-    """RAPM de la temporada (propuesta 12), cacheado por temporada y competición.
+def season_impact(
+    _engine: Engine, season_id: int, competition_id: Optional[int] = None, use_prior: bool = True
+) -> dict:
+    """RAPM de la temporada (propuesta 12), cacheado por temporada, competición y prior.
 
     El ajuste es de TODA la liga, no de un equipo: lo comparten la pantalla de
     quintetos, cualquier equipo de su selector y el asistente, así que se
     calcula una vez y se reutiliza.
 
+    Con `use_prior` (por defecto) el RAPM se encoge hacia el de la temporada
+    anterior (`previous_season`, misma competición) en vez de hacia 0 — ver
+    `impact.fit_rapm`. La temporada anterior se ajusta SIN prior, con esta
+    misma función (y por tanto su propia entrada de caché: el ajuste
+    anterior se calcula una sola vez aunque se pida con y sin prior la
+    actual), para que el prior sea solo un año hacia atrás y no una cadena.
+    Sin temporada anterior, o sin tramos en ella, el resultado es idéntico al
+    de `use_prior=False`.
+
     Returns:
-        `{"fit": impact.fit_rapm(...), "segments": DataFrame, "names": {player_id: nombre}}`.
+        `{"fit": impact.fit_rapm(...), "segments": DataFrame, "names": {player_id: nombre},
+        "prior_season": {"id", "label"} | None}` — `prior_season` es la
+        temporada que se ha usado de punto de partida (`None` si ninguna).
     """
     rows = queries.season_stint_rows(_engine, season_id, competition_id)
     segments = impact.build_segments(rows)
     names = dict(rows.drop_duplicates("player_id")[["player_id", "player_name"]].to_numpy()) if not rows.empty else {}
-    return {"fit": impact.fit_rapm(segments), "segments": segments, "names": names}
+
+    prior, prior_season = None, None
+    if use_prior and not segments.empty:
+        previous = previous_season(_engine, season_id)
+        if previous is not None:
+            previous_fit = season_impact(_engine, previous["id"], competition_id, use_prior=False)["fit"]
+            prior = impact.prior_from_fit(previous_fit) or None
+            prior_season = previous if prior else None
+    return {
+        "fit": impact.fit_rapm(segments, prior=prior),
+        "segments": segments,
+        "names": names,
+        "prior_season": prior_season,
+    }

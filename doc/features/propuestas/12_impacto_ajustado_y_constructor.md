@@ -1,6 +1,7 @@
 # 12. Impacto ajustado (RAPM) y constructor de quintetos
 
-**Estado:** IMPLEMENTADA (2026-09-27) · **Índice:** [00_indice.md](00_indice.md)
+**Estado:** IMPLEMENTADA (2026-09-27) · RAPM con prior de la temporada anterior (A6 de la
+[hoja de ruta](14_hoja_de_ruta.md)): IMPLEMENTADO (2026-09-28), ver §6 · **Índice:** [00_indice.md](00_indice.md)
 
 Código: `app/analytics/impact.py` (cálculo puro), `queries.season_stint_rows` +
 `queries_assistant.season_impact` (datos y caché), `app/components/impact.py` (pantalla, en
@@ -67,8 +68,89 @@ de la 07).
 - **Modelo aditivo**: la proyección de un quinteto no capta química ni encaje (dos creadores que
   necesitan el balón, dos pívots sin tiro). Por eso va siempre junto a lo observado.
 - **Una temporada es poca muestra para RAPM**: por debajo de 300 minutos el número se marca como
-  insuficiente. Mejora natural: usar la temporada anterior como *prior* (RAPM con prior), o
-  agrupar dos temporadas con peso decreciente.
+  insuficiente. Mitigado con el prior de la temporada anterior (§6); el aviso de muestra se
+  mantiene igual, porque sigue midiendo cuántos minutos de ESTA temporada hay detrás.
 - La posición solo existe para la plantilla propia (baskonia_web): con un rival, la restricción
   "un base y un pívot" se desactiva sola.
 - Todo en diferencia de puntos, no en posesiones.
+
+## 6. RAPM con prior de la temporada anterior (A6)
+
+**Problema.** El ridge encoge a todo el mundo hacia 0 ("jugador medio"). Con una temporada, un
+jugador de rotación con 300-800 minutos se queda a medio camino de 0 aunque la temporada pasada
+ya se supiera que era bueno (o malo): se pierde información que existe.
+
+**Cálculo** (`impact.fit_rapm(segments, prior=..., prior_weight=..., newcomer_prior=...)`): el
+ridge se encoge hacia un punto de partida β₀ en lugar de hacia 0,
+
+    min ‖W^½(y − Xβ)‖² + λ‖β − β₀‖²   ⇒   (XᵀWX + λI)β = XᵀWy + λβ₀
+
+Es la media a posteriori con la temporada anterior como media a priori. Con pocos minutos este
+año manda el punto de partida; con muchos, los datos (a λ = 1200 minutos, mitad y mitad).
+
+- **β₀ = 0,7 × RAPM de la temporada anterior** (`PRIOR_WEIGHT`). El ruido de la estimación
+  anterior ya lo descuenta su propio ridge (quien jugó poco llega casi a 0); el 0,7 descuenta lo
+  que cambia de verdad de un año a otro (edad, rol, sistema, fichajes). Es el orden de la
+  correlación año a año publicada para +/- ajustado regularizado en la NBA (0,6-0,8).
+- **Quien no jugó la temporada anterior** parte de 0 (`NEWCOMER_PRIOR`), igual que sin prior.
+  Es habitual usar un "nivel de reemplazo" algo negativo (−1 a −2) para los recién llegados; se
+  deja en 0 por neutralidad (el fichaje que viene de otra liga no es un jugador de reemplazo) y es
+  configurable por llamada.
+- **Mismo λ** que sin prior. En rigor, con un buen prior la dispersión del impacto real alrededor
+  del punto de partida es menor y λ podría subir; se deja igual por prudencia.
+- `prior=None` es **exactamente** el cálculo de antes (test de igualdad exacta).
+- La temporada anterior se ajusta **sin prior** (solo un año hacia atrás, no una cadena) con
+  `impact.prior_from_fit`.
+
+**Datos y caché** (`queries_assistant.season_impact(engine, season_id, competition_id,
+use_prior=True)`): la temporada anterior es la de `id` inmediatamente inferior con partidos
+cargados (`queries_assistant.previous_season`, mismo orden que `queries.list_seasons`), con el
+mismo filtro de competición. Su ajuste es la misma función con `use_prior=False`, así que tiene su
+propia entrada de caché y se calcula una sola vez. Sin temporada anterior, o sin tramos en ella,
+el resultado es idéntico al de antes. Devuelve además `prior_season` (`{"id", "label"}` o `None`).
+
+**Qué se ve.**
+
+- En "Impacto ajustado (RAPM)", la casilla **"Usar la temporada anterior como punto de
+  partida"** (activada por defecto si hay temporada anterior; desactivada y apagada si no). Con
+  ella, dos columnas más: **Punto de partida** (el β₀ de cada jugador, en blanco si no jugó la
+  temporada anterior) y **Solo esta temporada** (el RAPM sin prior), para ver cuánto ha movido el
+  prior a cada uno. El pie de la tabla dice de qué temporada sale.
+- El **constructor** usa el mismo ajuste (lee la misma casilla).
+- `lineup_builder` del asistente acepta `use_prior` (por defecto `true`), devuelve
+  `rapm_no_prior`/`prior` por jugador y `prior_season`, y avisa en `warnings` cuando hay prior.
+- Glosario: `rapm_prior` ("Punto de partida") y `rapm_no_prior` ("Solo esta temporada").
+
+**Alternativa descartada: agrupar temporadas** (un solo ajuste con las dos temporadas y peso
+decreciente en la anterior). Usa directamente con quién jugó cada uno el año pasado, pero da UN
+coeficiente por jugador para los dos años (supone que no ha cambiado), duplica el tamaño del
+ajuste, hace que la caché dependa de dos temporadas a la vez y mezcla en un número el rendimiento
+con dos equipos distintos. El prior mantiene un ajuste por temporada, independiente y cacheado, y
+se reduce a un vector más en la ecuación.
+
+**Validación** (`tests/app/test_impact.py`):
+
+- Con poca muestra (~40 min), el valor final llega a más del 90% del camino hacia el prior; con
+  ~9.400 minutos, a menos del 25%, y un prior absurdo no le da la vuelta al signo.
+- Dos temporadas simuladas (6 equipos × 9 jugadores, impacto real σ = 3 que cambia σ = 1 de un año
+  a otro; en la segunda, tres de cada plantilla con ~150 minutos): con el prior baja el error de
+  los jugadores con pocos minutos frente a su impacto real, el de la liga entera y el error de
+  predicción fuera de muestra (`cross_validate_ridge(prior=...)`, pliegues por partido). Mejora
+  en las 8 semillas probadas.
+- Barrido de `prior_weight` en esa simulación (8 semillas, error absoluto medio frente al impacto
+  real; con cambio año a año σ = 1):
+
+  | peso | < 300 min | 300-800 min |
+  |---|---|---|
+  | 0 (sin prior) | 2,36 | 2,14 |
+  | 0,5 | 2,05 | 1,83 |
+  | **0,7** | **1,96** | **1,73** |
+  | 1 | 1,87 | 1,61 |
+
+  Con cambio año a año σ = 2,5 el orden es el mismo (2,77 → 2,45 → 2,37 en < 300 min). La
+  simulación prefiere pesos altos porque no tiene fichajes, cambios de rol ni lesiones; 0,7 se
+  queda por prudencia y porque casi toda la ganancia está entre 0 y 0,7.
+- Pantalla probada con `AppTest` sobre una base de datos sintética de dos temporadas.
+
+**Pendiente**: calibrar `PRIOR_WEIGHT` (y de paso λ con prior) con `cross_validate_ridge(prior=...)`
+sobre `data/baskonia.db`, igual que el λ sin prior (§3).

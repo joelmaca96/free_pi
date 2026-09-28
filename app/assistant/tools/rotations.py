@@ -108,6 +108,13 @@ def team_rotation_pattern(ctx: ToolContext, team_id: str, season_id: int = None,
             "unavailable": {"type": "array", "items": {"type": "string"}, "description": "player_id que no juegan."},
             "must_include": {"type": "array", "items": {"type": "string"}, "description": "player_id fijos."},
             "limit": {"type": "integer"},
+            "use_prior": {
+                "type": "boolean",
+                "description": (
+                    "Usar el RAPM de la temporada anterior como punto de partida (por defecto sí; "
+                    "false = solo esta temporada, encogida hacia 0)."
+                ),
+            },
         },
         required=["team_id"],
     ),
@@ -122,9 +129,10 @@ def lineup_builder(
     unavailable: list = None,
     must_include: list = None,
     limit: int = 5,
+    use_prior: bool = True,
 ) -> dict:
     season = _season(ctx, season_id)
-    data = queries_assistant.season_impact(ctx.engine, season, competition_id)
+    data = queries_assistant.season_impact(ctx.engine, season, competition_id, use_prior=bool(use_prior))
     fit, segments, names = data["fit"], data["segments"], data["names"]
     team_minutes = impact.team_player_minutes(segments, team_id)
     if team_minutes.empty:
@@ -147,19 +155,31 @@ def lineup_builder(
         team_minutes=lambda df: df["player_id"].map(team_minutes),
     )
     lineups = best.assign(players=best["players"].map(lambda ps: [names.get(p, p) for p in ps]))
+    prior_season = data.get("prior_season") if fit.get("prior_used") else None
+    impact_columns = ["player_id", "player_name", "rapm", "team_minutes", "reliable"]
+    if prior_season:
+        impact_columns += ["rapm_no_prior", "prior"]
     payload = {
-        "player_impact": records(team_rapm[["player_id", "player_name", "rapm", "team_minutes", "reliable"]]),
+        "player_impact": records(team_rapm[impact_columns]),
         "best_lineups": records(lineups),
         "home_advantage_per_40": round(float(fit["home_advantage"]), 2),
+        "prior_season": prior_season["label"] if prior_season else None,
     }
+    warnings = [
+        "Modelo aditivo: la proyección de un quinteto es la suma del RAPM de sus cinco, sin química. "
+        "Di siempre los minutos reales que ese quinteto ha jugado junto a la proyección.",
+        f"RAPM con menos de {impact.MIN_RELIABLE_MINUTES:.0f} minutos (reliable=false) no sirve para decidir.",
+    ]
+    if prior_season:
+        warnings.append(
+            f"RAPM con la temporada {prior_season['label']} como punto de partida (prior: su RAPM "
+            f"×{fit['prior_weight']:.1f}; quien no jugó entonces parte de 0). rapm_no_prior = solo esta "
+            "temporada; prior = el punto de partida. Con pocos minutos este año pesa más el prior: dilo."
+        )
     return ok(
         payload,
         source="lineup_stints (toda la liga, regresión ridge)",
         scope=f"temporada {season}" + (f" · competición {competition_id}" if competition_id else ""),
-        warnings=[
-            "Modelo aditivo: la proyección de un quinteto es la suma del RAPM de sus cinco, sin química. "
-            "Di siempre los minutos reales que ese quinteto ha jugado junto a la proyección.",
-            f"RAPM con menos de {impact.MIN_RELIABLE_MINUTES:.0f} minutos (reliable=false) no sirve para decidir.",
-        ],
+        warnings=warnings,
         artifact=artifact("table", records(lineups), title="Mejores quintetos disponibles"),
     )

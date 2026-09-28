@@ -5,6 +5,11 @@ El cálculo vive en `app/analytics/impact.py` y se cachea en
 temporada y competición, compartido con el asistente); aquí solo se decide
 cómo se enseña.
 
+**Prior de la temporada anterior** (propuesta 12 §6): la casilla "Usar la
+temporada anterior como punto de partida" vive en la sección de RAPM y la
+lee también el constructor (misma clave de `st.session_state`), así que las
+dos secciones enseñan SIEMPRE el mismo ajuste.
+
 Se importa con el mismo doble camino que el resto de `app/`.
 """
 from typing import Dict, Optional
@@ -30,6 +35,35 @@ _NEG = "#c0392b"
 #: RAPM es casi 0 por construcción (el ridge no tiene de dónde sacar más).
 BUILDER_DEFAULT_MIN_MINUTES = 100.0
 
+#: Clave de la casilla del prior, compartida por las dos secciones.
+_USE_PRIOR_KEY = "impact_use_prior"
+
+
+def _use_prior(engine, season_id: int, *, widget: bool) -> tuple:
+    """`(usar_prior, temporada_anterior)`. Con `widget`, pinta la casilla; si no, lee su valor.
+
+    Por defecto activada si hay temporada anterior con partidos; sin ella, la
+    casilla sale desactivada y el ajuste es el de siempre (encogido hacia 0).
+    """
+    previous = queries_assistant.previous_season(engine, season_id)
+    if widget:
+        value = st.checkbox(
+            "Usar la temporada anterior como punto de partida",
+            value=previous is not None,
+            disabled=previous is None,
+            key=_USE_PRIOR_KEY,
+            help=(
+                "Con poca muestra, el RAPM se encoge hacia lo que el jugador hizo la temporada anterior "
+                f"(×{impact.PRIOR_WEIGHT:.1f}) en lugar de hacia 0. Mejora sobre todo a los jugadores de "
+                "rotación, con pocos cientos de minutos."
+                if previous is not None
+                else "No hay temporada anterior con partidos cargados."
+            ),
+        )
+    else:
+        value = st.session_state.get(_USE_PRIOR_KEY, previous is not None)
+    return bool(value) and previous is not None, previous
+
 
 def _lineup_label(players, names: Dict[str, str]) -> str:
     return " · ".join(names.get(p, p) for p in players)
@@ -38,9 +72,12 @@ def _lineup_label(players, names: Dict[str, str]) -> str:
 def impact_section(engine, team_id: str, season_id: int, competition_id: Optional[int], team_label: str) -> None:
     """Tabla + gráfico de RAPM del equipo, con el On/Off al lado para comparar."""
     st.subheader("Impacto ajustado (RAPM)")
+    use_prior, _ = _use_prior(engine, season_id, widget=True)
     with st.spinner("Ajustando el impacto de toda la liga…"):
-        data = queries_assistant.season_impact(engine, season_id, competition_id)
+        data = queries_assistant.season_impact(engine, season_id, competition_id, use_prior=use_prior)
     fit, segments, names = data["fit"], data["segments"], data["names"]
+    prior_season = data.get("prior_season")
+    show_prior = bool(fit.get("prior_used")) and fit.get("prior_players", 0) > 0 and prior_season is not None
     team_minutes = impact.team_player_minutes(segments, team_id)
     if fit["players"].empty or team_minutes.empty:
         st.info(f"No hay tramos con los diez jugadores en pista de {team_label} en este corte.")
@@ -72,20 +109,30 @@ def impact_section(engine, team_id: str, season_id: int, competition_id: Optiona
                     alt.Tooltip("rapm:Q", title="RAPM", format="+.1f"),
                     alt.Tooltip("on_off_shrunk:Q", title="On/Off", format="+.1f"),
                     alt.Tooltip("minutes:Q", title="Min. en el ajuste", format=".0f"),
-                ],
+                ] + ([
+                    alt.Tooltip("prior:Q", title="Punto de partida", format="+.1f"),
+                    alt.Tooltip("rapm_no_prior:Q", title="Solo esta temporada", format="+.1f"),
+                ] if show_prior else []),
             )
             .properties(height=alt.Step(26))
         )
         st.altair_chart(chart, width="stretch")
 
+    prior_columns = ["prior", "rapm_no_prior"] if show_prior else []
     st.dataframe(
         table,
         hide_index=True,
         width="stretch",
-        column_order=["player_name", "rapm", "on_off_shrunk", "team_minutes", "minutes", "muestra"],
+        column_order=["player_name", "rapm", *prior_columns, "on_off_shrunk", "team_minutes", "minutes", "muestra"],
         column_config={
             "player_name": st.column_config.TextColumn("Jugador"),
             "rapm": st.column_config.NumberColumn("RAPM", format="%+.1f", help=help_text("rapm")),
+            "prior": st.column_config.NumberColumn(
+                "Punto de partida", format="%+.1f", help=help_text("rapm_prior")
+            ),
+            "rapm_no_prior": st.column_config.NumberColumn(
+                "Solo esta temporada", format="%+.1f", help=help_text("rapm_no_prior")
+            ),
             "on_off_shrunk": st.column_config.NumberColumn("On/Off", format="%+.1f", help=help_text("on_off")),
             "team_minutes": st.column_config.NumberColumn(f"Min. con {team_label}", format="%.0f"),
             "minutes": st.column_config.NumberColumn(
@@ -96,14 +143,30 @@ def impact_section(engine, team_id: str, season_id: int, competition_id: Optiona
         },
     )
     home_adv = fit["home_advantage"]
+    shrink_target = (
+        f"encogida hacia el RAPM de {prior_season['label']} ×{fit['prior_weight']:.1f} (hacia 0 quien no jugó "
+        "esa temporada)"
+        if show_prior
+        else "encogida hacia 0"
+    )
     st.caption(
         f"Regresión sobre {fit['segments']:,} tramos con los diez jugadores en pista de toda la liga, "
-        f"encogida hacia 0 (λ = {fit['ridge']:.0f} minutos). Ventaja de campo estimada: "
+        f"{shrink_target} (λ = {fit['ridge']:.0f} minutos). Ventaja de campo estimada: "
         f"{home_adv:+.1f} por 40. Donde RAPM y On/Off discrepan mucho, el On/Off está contaminado por "
         f"con quién juega: ese es el dato interesante. Por debajo de {impact.MIN_RELIABLE_MINUTES:.0f} "
         "minutos, el número existe pero no sirve para decidir."
     )
-    glossary_expander(["rapm", "on_off", "sample_flag"])
+    if show_prior:
+        st.caption(
+            f"**Punto de partida**: lo que se sabía del jugador antes de esta temporada (su RAPM de "
+            f"{prior_season['label']}, rebajado al {impact.PRIOR_WEIGHT:.0%} porque un año cambia cosas); en "
+            "blanco, sin minutos esa temporada. **Solo esta temporada**: el RAPM sin ese punto de partida. "
+            f"Con pocos minutos manda el punto de partida; a partir de unos {impact.RIDGE_LAMBDA:.0f} minutos "
+            "mandan los datos de este año."
+        )
+    elif use_prior:
+        st.caption("Ningún jugador de este corte tiene minutos en la temporada anterior: RAPM encogido hacia 0.")
+    glossary_expander(["rapm", "on_off", "sample_flag"] + (["rapm_prior", "rapm_no_prior"] if show_prior else []))
 
 
 def lineup_builder_section(
@@ -116,7 +179,9 @@ def lineup_builder_section(
         "quieres, a quién hay que rodear. Salen los quintetos con mejor proyección según el RAPM, con lo "
         "que ese quinteto exacto ha hecho de verdad al lado."
     )
-    data = queries_assistant.season_impact(engine, season_id, competition_id)
+    # Mismo ajuste que la sección de RAPM: lee su casilla, no pinta otra.
+    use_prior, _ = _use_prior(engine, season_id, widget=False)
+    data = queries_assistant.season_impact(engine, season_id, competition_id, use_prior=use_prior)
     fit, segments, names = data["fit"], data["segments"], data["names"]
     team_minutes = impact.team_player_minutes(segments, team_id)
     if team_minutes.empty:
@@ -197,5 +262,10 @@ def lineup_builder_section(
         "Modelo aditivo: suma el impacto individual de los cinco y no capta química ni encaje táctico "
         "(dos creadores que necesitan el balón, dos pívots sin tiro). Úsalo para descubrir combinaciones "
         "que no se han probado y para ordenar las que sí, no para sustituir el criterio del cuerpo técnico."
+        + (
+            f" RAPM con {data['prior_season']['label']} como punto de partida, igual que en la tabla de arriba."
+            if fit.get("prior_used") and data.get("prior_season")
+            else ""
+        )
     )
     glossary_expander(["projected_per_40", "observed_minutes", "rapm"])
