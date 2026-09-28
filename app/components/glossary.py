@@ -416,6 +416,31 @@ TERMS: Dict[str, Term] = {
         "escalado a 40 minutos. Los puntos de cada tramo de quinteto se reparten por tiempo entre los "
         "bloques que toca: aproximación, no canasta a canasta.",
     ),
+    # --- predicción (propuesta 16) --
+    "expected_margin": Term(
+        "Margen esperado", "Diferencia de puntos esperada al final del partido",
+        "Lo que el modelo espera que gane (+) o pierda (−) el Baskonia: nivel de los dos equipos ajustado "
+        "por calendario, más la ventaja de campo y la diferencia de descanso, las dos estimadas de la liga. "
+        "Es la suma exacta de las piezas de 'Qué la mueve'.",
+    ),
+    "win_probability": Term(
+        "Prob. victoria", "Probabilidad de victoria según el modelo",
+        "Probabilidad de que el margen real salga a favor, suponiendo que se reparte alrededor del margen "
+        "esperado con la dispersión que el modelo ve en los partidos de la liga (≈11 puntos). No sabe de "
+        "lesiones ni bajas, y es algo optimista lejos del 50%.",
+    ),
+    "adjusted_rating": Term(
+        "Nivel ajustado", "Rating de equipo ajustado por calendario (tipo SRS)",
+        "Puntos por partido mejor (+) o peor (−) que un equipo medio, descontando contra quién ha jugado "
+        "cada uno y dónde: ganar de 10 a los mejores vale más que ganar de 10 a los últimos. Con pocos "
+        "partidos se acerca a 0 (equipo medio) a propósito.",
+    ),
+    "prediction_backtest": Term(
+        "Prueba hacia atrás", "Acierto del modelo en partidos ya jugados, sin mirar el futuro",
+        "Para cada fecha de la temporada se ajusta el modelo solo con los partidos anteriores y se predicen "
+        "los de ese día. Da el error medio en puntos y el % de ganadores acertados: lo que cabe esperar de "
+        "verdad del número de arriba.",
+    ),
 }
 
 
