@@ -32,6 +32,7 @@ from . import fatigue as _fatigue  # noqa: F401
 from . import league as _league  # noqa: F401
 from . import lineups as _lineups  # noqa: F401
 from . import rotations as _rotations  # noqa: F401
+from . import rotation_plan as _rotation_plan  # noqa: F401
 from . import player as _player  # noqa: F401
 from . import prediction as _prediction  # noqa: F401
 from . import shot_quality as _shot_quality  # noqa: F401

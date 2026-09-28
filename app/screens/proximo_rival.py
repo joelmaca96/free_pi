@@ -36,6 +36,7 @@ from components.lineups import season_lineups_section
 from components.prediction import prediction_section
 from components.player_dialog import player_detail
 from components.rotation_pattern import rotation_pattern_section
+from components.rotation_plan import rotation_plan_section
 from components.shot_quality import (
     league_reference_expander,
     player_quality_table,
@@ -633,6 +634,13 @@ st.divider()
 # (`lineup_stints`); sin ellos la sección no se pinta.
 if probe(engine).lineup_stints:
     rotation_pattern_section(engine, rival_team_id, scouting_season_id, rival_name, key="rival_rotation")
+    st.divider()
+    # Propuesta 15: sus ventanas débiles × nuestros mejores quintetos. RAPM de
+    # la temporada de SCOUTING: los dos equipos tienen que estar en el mismo ajuste.
+    rotation_plan_section(
+        engine, rival_team_id, own_team_id, scouting_season_id, rival_name,
+        is_home=matchup["is_home"], key="rival_rotation_plan",
+    )
     st.divider()
 
 # ------------------------------------------------------------ perfil por cuartos --
