@@ -69,7 +69,15 @@ así que la WPA de todos los quintetos de un equipo suma exactamente final − i
 
 **Prórrogas.** Un estado de la prórroga lleva como tiempo restante lo que queda DE ESA prórroga
 (como mucho 5 min): un empate con 3 min de prórroga se parece a un empate con 3 min del último
-cuarto. Un empate al final del tiempo reglamentario queda en la constante.
+cuarto. Un empate al final del tiempo reglamentario queda en la constante. Si hubo prórroga,
+el final del tiempo reglamentario (o de una prórroga que no fue la última) **es un empate por
+definición**, aunque la escalera traiga otro margen en ese segundo: el marcador se observa en el
+siguiente evento tipado, y una falta en la bocina (Q4 00:00) lleva el marcador de antes de los
+tiros libres del empate. Con ese margen el modelo daba el partido por decidido (0% o 100%) y la
+prórroga lo "resucitaba" al instante — un momento clave falso de ±50 pp y la WPA de la prórroga
+entera para el quinteto que salía en ella. El muestreo guarda esos instantes con margen 0, la
+curva descarta ese escalón retrasado y la WPA por quinteto usa ahí la probabilidad del empate
+(corregido en la auditoría de A4; tests de regresión en `tests/app/test_win_probability.py`).
 
 **Modelo de reserva.** Con menos de 60 partidos con play-by-play en la temporada, la logística
 no tiene muestra; se usa la aproximación normal clásica (Stern): el margen que falta por jugar
@@ -99,6 +107,11 @@ Lo que no cae en ningún tramo va a una fila "(sin tramo de quinteto)" en vez de
 - **Los tiros no tienen reloj** (§5 de la propuesta 01): el salto del marcador se ve en el
   siguiente evento tipado, así que la canasta real cae un poco antes del inicio indicado. Por
   eso el clip arranca 10 s antes.
+- **El último escalón es el marcador oficial en la bocina.** Si hubo puntos después del último
+  evento tipado (tiros libres finales, una canasta sin falta ni rebote detrás), el momento que
+  los contiene acaba en "Q4 00:00" y su cambio de probabilidad incluye lo que el reloj ya
+  tenía decidido: con el partido acabado la probabilidad es 0 o 1 exactos. No es un momento
+  inventado —el marcador sí cambió—, pero su reloj es el de la bocina, no el de la canasta.
 - **Los estados de un mismo partido no son independientes**: el ajuste da buenas
   probabilidades, pero sus errores estándar no valdrían y no se enseñan.
 - **Coste**: el primer cálculo de la temporada recorre la escalera de cada partido (~5 s con

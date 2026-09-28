@@ -150,7 +150,9 @@ def _moments_display(moments: pd.DataFrame) -> pd.DataFrame:
 
 
 def _lineups_table(df: pd.DataFrame, key: str) -> None:
-    if df.empty:
+    # Sin tramos, `lineup_wpa` devuelve solo la fila "(sin tramo de quinteto)"
+    # con toda la WPA del partido: una tabla de un quinteto que no existe.
+    if df.empty or (df["lineup"] == wp.NO_LINEUP).all():
         st.caption("Sin tramos de quinteto en este partido.")
         return
     shown = df.assign(wpa_pp=100.0 * df["wpa"], plus_minus=df["points_for"] - df["points_against"])

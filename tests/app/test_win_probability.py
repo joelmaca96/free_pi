@@ -108,6 +108,26 @@ def test_sample_game_states_takes_one_photo_every_30_seconds_as_a_staircase():
     assert (states["seconds_remaining"] > 0).all()
 
 
+def test_sample_game_states_keeps_the_end_of_regulation_of_an_overtime_game_as_a_tie():
+    """Regresión: si hubo prórroga, el final del tiempo reglamentario era un empate.
+
+    La escalera puede traer otro margen en el segundo 2400 (el marcador se
+    observa en el siguiente evento tipado: una falta en la bocina lleva el
+    marcador de ANTES de los tiros libres del empate). Antes, esa foto se
+    descartaba como "partido decidido"; es justo el estado que informa de la
+    constante del modelo (quién gana la prórroga).
+    """
+    steps = pd.DataFrame({"seconds": [0.0, 2300.0, 2400.0, 2410.0, 2700.0], "margin": [0, -2, -2, 0, 4]})
+    states = wp.sample_game_states(steps, True, game_id="ot")
+
+    end_of_regulation = states[states["seconds"] == 2400.0]
+    assert len(end_of_regulation) == 1
+    assert end_of_regulation.iloc[0]["seconds_remaining"] == 0.0
+    assert end_of_regulation.iloc[0]["margin"] == 0
+    assert states["seconds"].max() == 2670.0  # la rejilla no llega al final oficial
+    assert len(states) == 90
+
+
 # ------------------------------------------------------------------ modelo --
 
 
@@ -242,6 +262,53 @@ def test_curve_from_the_away_side_is_the_complement():
     assert home["wp"].iloc[-1] == 1.0 and away["wp"].iloc[-1] == 0.0
 
 
+def _overtime_with_stale_regulation_end():
+    """Prórroga tras una falta en la bocina: el evento de Q4 00:00 (segundo
+    2400) lleva el marcador de antes de los tiros libres (80-82) y el empate
+    se ve en el primer evento de la prórroga; el Baskonia gana 92-88."""
+    return _ladder([
+        (0.0, 0, 0), (2300.0, 80, 82), (2400.0, 80, 82), (2410.0, 82, 82), (2600.0, 90, 88), (2700.0, 92, 88),
+    ])
+
+
+@pytest.mark.parametrize("model_name", ["fitted", "normal"])
+def test_overtime_curve_does_not_decide_the_game_at_the_end_of_regulation(model_name, fitted):
+    """Regresión: con el margen de la escalera (-2 a 0 s) la curva caía a 0% en
+    el segundo 2400 y la prórroga la "resucitaba" al instante: un momento clave
+    falso de +50 pp en OT1 05:00, y el momento real (los tiros libres del
+    empate) partido en dos por el recorte."""
+    model = fitted if model_name == "fitted" else wp.normal_model()
+    curve = wp.game_wp_curve(_overtime_with_stale_regulation_end(), model, is_home=True)
+
+    assert 2400.0 not in set(curve["seconds"])
+    assert ((curve["wp"] > 0.0) & (curve["wp"] < 1.0)).iloc[:-1].all()
+    assert curve["wp"].iloc[-1] == 1.0
+
+    moments = wp.key_moments(curve, n=5)
+    tying = moments[moments["score_after"] == "82-82"].iloc[0]
+    assert tying["start_seconds"] == 2300.0 and tying["end_seconds"] == 2410.0
+    assert tying["wp_before"] < 0.4 and tying["wpa"] > 0.15
+    # Ninguna ventana arranca desde un "0%" ficticio.
+    assert (moments["wp_before"] > 0.0).all()
+
+
+def test_lineup_wpa_does_not_zero_out_at_the_end_of_regulation_before_overtime():
+    """Regresión: un cambio de quinteto en el 2400 de un partido con prórroga
+    evaluaba la probabilidad con el margen retrasado de la escalera (-2 a 0 s:
+    0% exacto). El quinteto de la prórroga se llevaba el partido entero
+    (+100 pp) y el del cuarto, todo lo contrario."""
+    model = wp.normal_model()
+    steps = _overtime_with_stale_regulation_end()
+    curve = wp.game_wp_curve(steps, model, is_home=True)
+    stints = _stints([(1, 0.0, 2400.0, _STARTERS), (2, 2400.0, 2700.0, _BENCH)])
+    own = wp.lineup_wpa(curve, stints, model, is_home=True).set_index("lineup")["wpa"]
+
+    tie = wp.predict_home_wp(model, 0.0, 0.0)[0]
+    assert own["F · G · H · I · J"] == pytest.approx(1.0 - tie)
+    assert own["A · B · C · D · E"] == pytest.approx(tie - curve["wp"].iloc[0])
+    assert own.sum() == pytest.approx(curve["wp"].iloc[-1] - curve["wp"].iloc[0], abs=1e-9)
+
+
 # -------------------------------------------------------- WPA por quinteto --
 
 
@@ -306,6 +373,25 @@ def test_lineup_wpa_without_stints_is_all_unattributed():
 # ------------------------------------------------------------------- clips --
 
 
+def test_lineups_table_without_stints_says_so_instead_of_a_fake_lineup(monkeypatch):
+    """Regresión: sin tramos, `lineup_wpa` devuelve solo la fila "(sin tramo
+    de quinteto)" y la pestaña la pintaba como si fuera un quinteto."""
+    from app.components import key_moments as component
+
+    shown = {"caption": [], "dataframe": 0}
+    monkeypatch.setattr(component.st, "caption", lambda text, **_: shown["caption"].append(text))
+    monkeypatch.setattr(component.st, "dataframe", lambda *a, **k: shown.__setitem__("dataframe", shown["dataframe"] + 1))
+
+    model = wp.normal_model()
+    curve = wp.game_wp_curve(_early_run_then_late_swing(), model, is_home=True)
+    component._lineups_table(wp.lineup_wpa(curve, pd.DataFrame(), model, is_home=True), key="x")
+    assert shown == {"caption": ["Sin tramos de quinteto en este partido."], "dataframe": 0}
+
+    stints = _stints([(1, 0.0, 2400.0, _STARTERS)])
+    component._lineups_table(wp.lineup_wpa(curve, stints, model, is_home=True), key="y")
+    assert shown["dataframe"] == 1
+
+
 def test_clip_list_is_chronological_padded_and_csv_ready():
     curve = wp.game_wp_curve(_early_run_then_late_swing(), wp.normal_model(), is_home=True)
     moments = wp.key_moments(curve, n=3)
@@ -322,6 +408,32 @@ def test_clip_list_is_chronological_padded_and_csv_ready():
     assert clips["descripcion"].str.contains("Baskonia").all()
     assert clips.to_csv(index=False).startswith("orden,cuarto_inicio")
     assert wp.clip_list(moments.iloc[0:0]).empty
+
+
+def test_clip_pre_roll_goes_back_in_game_time_across_quarters_and_into_regulation():
+    """El reloj va hacia atrás: 10 s antes del inicio es un reloj MAYOR en el
+    mismo cuarto, o los últimos segundos del cuarto anterior."""
+    moments = pd.DataFrame([
+        {"rank": 1, "start_seconds": 1205.0, "end_seconds": 1290.0, "points_for": 5, "points_against": 0,
+         "score_before": "40-40", "score_after": "45-40", "wp_before": 0.5, "wp_after": 0.6, "wpa": 0.1},
+        {"rank": 2, "start_seconds": 2404.0, "end_seconds": 2698.0, "points_for": 6, "points_against": 2,
+         "score_before": "80-80", "score_after": "86-82", "wp_before": 0.5, "wp_after": 1.0, "wpa": 0.5},
+        {"rank": 3, "start_seconds": 1500.0, "end_seconds": 1560.0, "points_for": 4, "points_against": 0,
+         "score_before": "50-50", "score_after": "54-50", "wp_before": 0.5, "wp_after": 0.55, "wpa": 0.05},
+    ])
+    clips = wp.clip_list(moments, game_end=2700.0)
+
+    first, middle, last = clips.to_dict("records")
+    # 1205 - 10 = 1195: cinco segundos antes del final del segundo cuarto.
+    assert (first["cuarto_inicio"], first["reloj_inicio"]) == ("Q2", "00:05")
+    assert (first["cuarto_fin"], first["reloj_fin"]) == ("Q3", "08:25")
+    assert (middle["cuarto_inicio"], middle["reloj_inicio"]) == ("Q3", "05:10")  # 09:00 + 10 s
+    assert (middle["cuarto_fin"], middle["reloj_fin"]) == ("Q3", "03:55")
+    # 2404 - 10 = 2394: el clip de la prórroga arranca en el último cuarto; el
+    # final (2698 + 5) se recorta al final del partido: OT1 00:00, no "OT2".
+    assert (last["cuarto_inicio"], last["reloj_inicio"]) == ("Q4", "00:06")
+    assert (last["cuarto_fin"], last["reloj_fin"]) == ("OT1", "00:00")
+    assert last["segundo_fin"] == 2700.0
 
 
 # --------------------------------------------------- consultas (BD en memoria) --

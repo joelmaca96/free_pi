@@ -40,7 +40,11 @@ prórroga lleva como tiempo restante lo que queda DE ESA prórroga (5 min como
 mucho). Un empate con 3 minutos de prórroga por delante se parece mucho más a
 un empate con 3 minutos del último cuarto que a nada que ocurra con 30 minutos
 por jugar. Y un empate al final del tiempo reglamentario (t = 0, m = 0) queda
-en la constante: la probabilidad de que el local gane la prórroga.
+en la constante: la probabilidad de que el local gane la prórroga. Si hubo
+prórroga, ese instante ES un empate aunque la escalera diga otra cosa (el
+marcador se observa con retraso: una falta en la bocina lleva el marcador de
+antes de los tiros libres); el muestreo, la curva y la WPA por quinteto lo
+tratan así (`_home_wp_along_game`), en vez de dar el partido por decidido.
 
 **Modelo de reserva** (`normal_model`): con menos de `MIN_GAMES_FOR_FIT`
 partidos en la temporada (arranque de temporada, base de datos de pruebas) la
@@ -323,9 +327,13 @@ def sample_game_states(
         home_win: resultado final (la respuesta del modelo).
 
     Returns:
-        `game_id, seconds, seconds_remaining, margin, home_win`. Se descartan
-        los estados ya decididos (`t = 0` con el marcador no empatado): no
-        aportan nada al ajuste y harían explotar `m / sqrt(t + c)`.
+        `game_id, seconds, seconds_remaining, margin, home_win`. La rejilla
+        acaba ANTES del último escalón (el final oficial), así que una foto
+        con `t = 0` es siempre el final de un periodo tras el que se siguió
+        jugando —el final del tiempo reglamentario o de una prórroga—, y eso
+        solo pasa con empate: se guarda con margen 0 aunque la escalera diga
+        otra cosa (el marcador se observa con retraso, en el siguiente evento
+        tipado, y un tiro libre en la bocina puede no haber llegado todavía).
     """
     columns = ["game_id", "seconds", "seconds_remaining", "margin", "home_win"]
     if steps is None or len(steps) < 2:
@@ -337,19 +345,43 @@ def sample_game_states(
 
     grid = np.arange(0.0, seconds[-1], float(interval_s))
     idx = np.clip(np.searchsorted(seconds, grid, side="right") - 1, 0, None)
-    sampled_margin = margin[idx]
     t_rem = seconds_remaining(grid)
-    keep = ~((t_rem <= 0) & (sampled_margin != 0))
+    sampled_margin = np.where(t_rem <= 0, 0.0, margin[idx])
     return pd.DataFrame({
         "game_id": game_id,
-        "seconds": grid[keep],
-        "seconds_remaining": t_rem[keep],
-        "margin": sampled_margin[keep],
+        "seconds": grid,
+        "seconds_remaining": t_rem,
+        "margin": sampled_margin,
         "home_win": int(bool(home_win)),
     })[columns]
 
 
 # ========================================================= curva del partido ==
+
+
+def _home_wp_along_game(
+    model: WinProbabilityModel, seconds, home_margin, game_end: float, pregame_edge: float = 0.0
+) -> Tuple[np.ndarray, np.ndarray]:
+    """`(seconds_remaining, P(gana el local))` en instantes de UN partido ya jugado.
+
+    Lo mismo que `predict_home_wp` salvo en el final de un periodo que NO es
+    el final del partido (`t = 0` antes de `game_end`: se fue a la prórroga).
+    Ahí el marcador real era un empate por definición, pero la escalera puede
+    traer otro margen: el marcador se observa en el siguiente evento tipado,
+    y una falta en la bocina (Q4 00:00) lleva el marcador de ANTES de los
+    tiros libres del empate. Con el margen de la escalera, `predict_home_wp`
+    daría el partido por decidido (0 o 1 exactos) y la prórroga lo
+    "resucitaría" al instante: un momento clave falso de ±50 pp. Se usa el
+    empate a 0 s (la constante del modelo: quién gana la prórroga).
+    """
+    s = np.atleast_1d(np.asarray(seconds, dtype=float))
+    t_rem = seconds_remaining(s)
+    p_home = predict_home_wp(model, home_margin, t_rem, pregame_edge)
+    went_on = (t_rem <= 0) & (s < float(game_end))
+    if went_on.any():
+        tie = float(predict_home_wp(model, 0.0, 0.0, pregame_edge)[0])
+        p_home = np.where(went_on, tie, p_home)
+    return t_rem, p_home
 
 
 def game_wp_curve(
@@ -371,14 +403,24 @@ def game_wp_curve(
         Las columnas de `steps` más `seconds_remaining`, `wp` (0-1, del
         equipo) y `wpa` (cambio de `wp` respecto al escalón anterior; 0 en el
         primero). Vacío si no hay escalera.
+
+        Se descarta el escalón del final de un periodo tras el que hubo
+        prórroga si trae un margen distinto de 0 (marcador observado con
+        retraso, ver `_home_wp_along_game`): el marcador real ahí era un
+        empate, y con ese escalón dentro la curva caería a 0/1 un instante y
+        el recorte de `key_moments` partiría el momento del empate en dos.
     """
     if steps is None or steps.empty:
         return pd.DataFrame(columns=list(getattr(steps, "columns", [])) + ["seconds_remaining", "wp", "wpa"])
     curve = steps.sort_values("seconds", kind="stable").reset_index(drop=True).copy()
-    t_rem = seconds_remaining(curve["seconds"].to_numpy(dtype=float))
+    seconds = curve["seconds"].to_numpy(dtype=float)
+    stale = (seconds_remaining(seconds) <= 0) & (seconds < seconds[-1]) & (curve["margin"].to_numpy() != 0)
+    if stale.any():
+        curve = curve[~stale].reset_index(drop=True)
+        seconds = seconds[~stale]
     margin = curve["margin"].to_numpy(dtype=float)
     home_margin = margin if is_home else -margin
-    p_home = predict_home_wp(model, home_margin, t_rem, pregame_edge)
+    t_rem, p_home = _home_wp_along_game(model, seconds, home_margin, float(seconds[-1]), pregame_edge)
     curve["seconds_remaining"] = t_rem
     curve["wp"] = p_home if is_home else 1.0 - p_home
     curve["wpa"] = curve["wp"].diff().fillna(0.0)
@@ -577,8 +619,7 @@ def lineup_wpa(
     times = np.unique(np.clip(boundaries, curve_seconds[0], game_end))
     idx = np.clip(np.searchsorted(curve_seconds, times, side="right") - 1, 0, None)
     margin = curve_margin[idx]
-    t_rem = seconds_remaining(times)
-    p_home = predict_home_wp(model, margin if is_home else -margin, t_rem, pregame_edge)
+    _, p_home = _home_wp_along_game(model, times, margin if is_home else -margin, game_end, pregame_edge)
     wp = p_home if is_home else 1.0 - p_home
     # Los extremos, anclados a la curva: mismo inicio y mismo final exactos.
     wp[0] = float(curve["wp"].iloc[0])
