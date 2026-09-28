@@ -73,9 +73,16 @@ implemente:
   han fusionado con retroactividad como el Barça: solo importa para un agregado por club de esos
   equipos concretos (ninguno juega ACB+Euroliga a la vez, así que no bloquean la 04), pero conviene
   planificar el mismo arreglo si se prepara scouting de alguno de ellos en profundidad.
-- **La ficha biográfica está casi vacía**: `height_cm` es NULL en los 968 jugadores, `birth_date`
+- ~~**La ficha biográfica está casi vacía**: `height_cm` es NULL en los 968 jugadores, `birth_date`
   solo existe en 12 y 452 jugadores tienen la posición en blanco. Limita sobre todo a
-  [11](11_similitud_de_jugadores.md).
+  [11](11_similitud_de_jugadores.md).~~ **En vías de resolverse (2026-09-28).** Dos fuentes la
+  rellenan ya en cada ingesta, sin pisar nada: la página de jugador de acb.com
+  (`ingest/acb/profiles.py`: posición, altura, nacimiento y nacionalidad de todo jugador con
+  licencia ACB, hasta 100 por pasada) y la API de plantillas de Euroliga (`roster.py`, que ahora
+  también rellena la posición en blanco, con pérdida: Guard→'Base', Forward→'Alero',
+  Center→'Pívot'). Se llena en unas pocas pasadas de `run_all`, no de golpe. Quedan: el peso
+  fuera de Euroliga, las nacionalidades en inglés ya guardadas y los jugadores sin licencia ni
+  código de Euroliga. Detalle: [ingestor/01_estado.md §4](../ingestor/01_estado.md).
 
 ## Lo que falta en la ingesta para el siguiente escalón
 

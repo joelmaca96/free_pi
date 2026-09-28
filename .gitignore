@@ -15,6 +15,8 @@ data/*.db
 data/*.db.bak-*
 # Fotos de jugadores descargadas por ingest/baskonia_web (binarios regenerables)
 data/player_photos/
+# Caché de fichas de acb.com ya leídas (ingest/acb/profiles.py), regenerable
+data/acb_profiles_seen.json
 # Estado local del asistente: contador diario de preguntas y votos del chat
 # (app/assistant/budget.py y feedback.py). Es el único punto escribible de la
 # interfaz y no es dato de dominio — se regenera solo.

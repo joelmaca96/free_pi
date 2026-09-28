@@ -348,3 +348,66 @@ competition_id)` igual que ACB — necesario desde que hay dos fuentes escribien
     cancha (se tira siempre desde el mismo punto fijo) y forzarlo dentro de `shots`/
     `court_zones` habría exigido ingerirlo con otro centinela sin coordenadas reales; la vía
     correcta era esta, no una zona más.
+
+## 4. Ficha biográfica de jugador: acb.com + posición de Euroliga (2026-09-28)
+
+Hueco de partida (ver [propuestas/00_indice.md](../propuestas/00_indice.md)): `height_cm` NULL en
+todos los jugadores fuera de Euroliga, `birth_date` casi vacía y ~450 jugadores con la posición en
+blanco — sobre todo los que solo han jugado Euroliga, cuyo boxscore no trae posición (ACB sí la
+trae, `gameRole`, y el adaptador ya la guardaba).
+
+- **Nuevo `ingest/acb/profiles.py`** — ficha desde la PÁGINA de jugador de acb.com
+  (`https://www.acb.com/jugador/ver/{licencia}` → 301 a `/es/liga/jugadores/{slug}-{licencia}`,
+  HTML servido en el servidor con un bloque `PlayerInfoGrid`). La licencia es el `external_id` de
+  `source='acb'` (mismo espacio que `player.id` del boxscore). Guarda posición (en el vocabulario
+  de la app: 'Base'/'Escolta'/'Alero'/'Ala-pívot'/'Pívot'; una etiqueta desconocida NO se
+  escribe), altura ("2,03 m" → 203), fecha de nacimiento ("07/03/1995 (31 años)" → ISO) y
+  nacionalidad tal cual (ya en castellano, "EE.UU."). El parser toma, por etiqueta, el primer
+  valor no vacío — la página trae antes una copia esqueleto con los valores vacíos — y casa las
+  clases CSS por su final estable (`playerInfoGrid__label`/`__value`), no por el hash.
+  - Mismas reglas que `euroleague/roster.py`: **solo actualiza, nunca crea**; **rellena huecos,
+    no pisa** (`COALESCE`; la posición solo si está en blanco); un jugador que falla se salta.
+    Las filas con **dos o más licencias de ACB** se excluyen: son la huella de jugadores
+    fusionados (`find_merged_players`).
+  - Barato por diseño: solo candidatos con algún hueco, primero los sin posición; tope por pasada
+    (`--limit`, 100 por defecto, `ACB_PROFILES_LIMIT`) y pausa entre peticiones (`--delay`, 1 s,
+    `ACB_PROFILES_DELAY`). Caché JSON `data/acb_profiles_seen.json` (`ACB_PROFILES_CACHE`): una
+    ficha ya leída que sigue incompleta (acb.com no publica ese dato) no se vuelve a pedir en 30
+    días; un fallo de red no se apunta. Una licencia desconocida no da 404 sino una redirección a
+    `/es/liga/equipos`: se cuenta como "sin ficha".
+  - robots.txt de acb.com: `User-agent: *` → `Allow: /` (comprobado 2026-09-28); aun así se
+    consulta con el helper y el User-Agent identificable de `baskonia_web/scraper.py`.
+  - CLI: `python -m ingest.acb.profiles --limit 20 [--delay 2] [--no-cache]`.
+  - **Smoke en vivo (2026-09-28, 5 licencias reales en una BD de prueba):** 4 fichas leídas y
+    rellenadas (Badio: Escolta, 191, 1999-02-17, Senegal; Montero: Base, 188, 2003-07-03,
+    República Dominicana; Pradilla: 202, 2001-01-03, España — su 'Ala-pívot' previo intacto;
+    Sima: Pívot, 211, 1996-07-28, España), 1 licencia inventada contada como "sin ficha". Segunda
+    pasada: 0 peticiones (caché).
+- **`ingest/euroleague/roster.py` rellena la posición en blanco** desde `positionName` de la API
+  de plantillas. Solo hay tres categorías (Guard/Forward/Center; comprobado en vivo en las 18
+  plantillas de E2025, y ni `/v2/people/{code}` ni el XML de `/v1/players` dan nada más fino), así
+  que el mapeo es con pérdida y está decidido así: **Center → 'Pívot'**, **Forward → 'Alero'**
+  (se pierde el 'Ala-pívot'), **Guard → 'Base'** (se pierde el 'Escolta'). Guard → 'Base' y no
+  'Escolta' a propósito: con 'Escolta' un rival solo-Euroliga no tendría ningún base y el filtro
+  de quintetos "al menos un Base" no devolvería nada; así pasa a significar "al menos un exterior"
+  para esos jugadores. Para el suelo de 'Base' del planificador de minutos (solo plantilla propia)
+  el riesgo es que un escolta cuente como base, pero la plantilla propia tiene la posición de
+  baskonia.com y del `gameRole` de ACB, que ganan siempre; y el boxscore de ACB PISA la posición
+  en cada ingesta (`resolve_or_create_player`), así que un jugador que acabe jugando ACB recibe la
+  buena sola. Smoke en vivo contra `BAS`: Sedekerskis con posición en blanco → 'Alero' (en ACB es
+  'Ala-pívot': la pérdida documentada), Howard con 'Base' intacto.
+- **Nacionalidad.** Las fuentes escriben en idiomas distintos ("EE.UU." en acb.com y baskonia.com,
+  "United States of America" en Euroliga). Nada se pisa, pero `roster.py` traduce ya al
+  castellano (`_COUNTRY_ES`, todos los países de E2025 y algunos más; uno desconocido entra en
+  inglés) lo que escribe en un hueco. Los valores en inglés que escribieron pasadas anteriores
+  **siguen en la BD**: normalizarlos exigiría pisar, y se deja para un script puntual si hace
+  falta (`UPDATE ... SET nationality = <es> WHERE nationality = <en>` con el mismo mapa).
+- **`ingest/run_all.py`**: nuevo paso `acb_profiles` después de los partidos de ACB y **antes**
+  de Euroliga — las dos fichas rellenan huecos, gana la primera, y la de acb.com es la más fina
+  (cinco posiciones, castellano). `--skip acb_profiles` / `--skip euroleague_roster` omiten solo
+  la ficha; `--skip acb` también omite `acb_profiles` ("no tocar acb.com");
+  `--profiles-limit N` fija el tope. Los contadores (`candidates`/`fetched`/`updated`/
+  `not_found`/`failed`/`skipped_recent`/`filled` por campo, y `positions` en `euroleague_roster`)
+  salen en el resumen de la ingesta.
+- **No cubre:** peso (acb.com no lo publica en la ficha), jugadores sin licencia de ACB ni código
+  de Euroliga (no hay de dónde sacarlo), y los ya guardados en inglés (ver arriba).
