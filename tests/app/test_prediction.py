@@ -111,10 +111,28 @@ def test_a_team_with_few_games_is_shrunk_towards_average(league):
 
 
 def test_neutral_games_do_not_carry_home_court():
-    """En sede neutral (Copa) la columna de campo es 0: si solo hubiera partidos neutrales, no hay campo que estimar."""
+    """En sede neutral (Copa) la columna de campo es 0: si solo hubiera partidos neutrales, no hay campo que
+    estimar y se queda en el prior (no aprende nada de ellos, ni siquiera un campo de 0)."""
     games = prediction.prepare_games(_synthetic_league(days=120, home=0.0, competition="Copa del Rey"))
     assert games["neutral"].all()
-    assert prediction.fit_ratings(games).home_court == pytest.approx(0.0, abs=1e-3)
+    assert prediction.fit_ratings(games).home_court == pytest.approx(prediction.HOME_PRIOR, abs=1e-6)
+
+
+def test_home_court_does_not_swallow_the_margin_with_few_games():
+    """Regresión: con el campo sin penalizar, UN partido ganado de 10 por el local daba "+10 por jugar en
+    casa". Con el prior débil, pocas muestras dejan el campo cerca del prior."""
+    one = pd.DataFrame([{
+        "game_id": "a", "game_date": "2026-01-01", "home_team_id": "x", "away_team_id": "y",
+        "home_score": 90, "away_score": 70, "competition": "ACB",
+    }])
+    fitted = prediction.fit_ratings(one)
+    assert prediction.HOME_PRIOR < fitted.home_court < prediction.HOME_PRIOR + 2.0
+
+
+def test_home_court_prior_barely_moves_a_full_season(league):
+    """Con una temporada entera el prior no manda: el campo estimado sigue cerca del real."""
+    fitted = prediction.fit_ratings(_synthetic_league(home=6.0))
+    assert fitted.home_court > 4.5
 
 
 def test_prepare_games_counts_rest_across_competitions():
@@ -173,6 +191,9 @@ def test_explanation_reads_like_the_coach_would_say_it(fit):
     assert any("por jugar en casa" in line for line in lines)
     assert any("llegamos con 2 días de descanso y ellos con 4 días" in line for line in lines)
     assert "," in prediction.fmt_points(2.14) and prediction.fmt_points(-1.5) == "−1,5"
+    # Regresión: el signo sale del número que se enseña (nunca "−0,0").
+    assert prediction.fmt_points(-0.04) == "+0,0"
+    assert prediction.fmt_points(-0.06) == "−0,1"
     sentence = prediction.summary_sentence(pred, "Rival")
     assert sentence.startswith("Predicción del modelo: ")
     assert "% de victoria" in sentence
@@ -228,6 +249,19 @@ def test_matchup_prediction_on_the_seed(engine):
     assert 0.0 < pred.win_probability < 1.0
     assert result["backtest"] is None  # 5 partidos: nada que probar hacia atrás
     assert set(result["ratings"]["team_id"]) >= {"bas", "val"}
+
+
+def test_backtest_is_cached_per_season_and_date_not_per_rival(engine, monkeypatch):
+    """Regresión de rendimiento: el backtest (un reajuste por fecha, ~1-2 s por temporada) iba dentro de la
+    caché de `matchup_prediction`, cuya clave incluye rival y pista — se repetía para cada rival."""
+    calls = []
+    real = prediction.backtest
+    monkeypatch.setattr(prediction, "backtest", lambda games, **kw: calls.append(len(games)) or real(games, **kw))
+    day = dt.date(2026, 2, 1)
+    queries_prediction.matchup_prediction(engine, "bas", "val", 1, day, True, "ACB")
+    queries_prediction.matchup_prediction(engine, "bas", "val", 1, day, False, "ACB")
+    queries_prediction.matchup_prediction(engine, "bas", "rm", 1, day, True, "ACB")
+    assert len(calls) == 1
 
 
 def test_matchup_prediction_is_neutral_in_the_cup(engine):
