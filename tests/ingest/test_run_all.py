@@ -358,7 +358,7 @@ def test_merge_flag_with_nothing_to_merge_does_not_even_back_up(monkeypatch, eng
 def test_cli_passes_the_merge_flag_and_prints_suggestions(monkeypatch, capsys):
     seen = {}
 
-    def fake_run_all(season, database_url=None, skip=(), merge_team_duplicates=False):
+    def fake_run_all(season, database_url=None, skip=(), profiles_limit=None, merge_team_duplicates=False):
         seen["merge"] = merge_team_duplicates
         return {
             "identity_check": {
