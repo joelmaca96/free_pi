@@ -34,6 +34,7 @@ dibuja `_court_line_layers`, así que repetirla ahí solo duplicaba trazo.
 """
 import sys
 from pathlib import Path
+from typing import Optional
 
 import altair as alt
 import numpy as np
@@ -436,6 +437,39 @@ def shot_chart_caption(shots: pd.DataFrame) -> str:
             f"agrupados en el aro como {_PILE_GLYPH}"
         )
     return caption
+
+
+#: Opciones del filtro de contexto del mapa de tiros (2026-09-28): etiqueta
+#: de pantalla -> clave de `queries.SHOT_CONTEXTS` (`None` = todos).
+SHOT_CONTEXT_OPTIONS = {
+    "Todos": None,
+    "Últimos 5 min apretados (±5)": "clutch",
+    "Contraataque": "fastbreak",
+    "Segunda oportunidad": "second_chance",
+    "Tras pérdida": "off_turnover",
+}
+
+SHOT_CONTEXT_CAPTION = (
+    "Contexto: solo partidos cargados con reloj de tiro (desde el 2026-09-28). \"Apretados\" = "
+    "últimos 5 min del último cuarto o prórroga con ≤5 puntos de diferencia (marcador tras el "
+    "tiro). Contraataque es una aproximación por reloj (≤6 s desde rebote defensivo, robo o "
+    "pérdida rival); segunda oportunidad y tras pérdida salen del acta."
+)
+
+
+def shot_context_filter(key: str) -> Optional[str]:
+    """Radio "Todos / Últimos 5 min apretados / Contraataque / ..." del mapa de tiros.
+
+    Compartido por "Estado del equipo" y "Próximo rival" para que las dos
+    pantallas ofrezcan exactamente los mismos contextos. Solo se debe pintar
+    si `probe(engine).shot_clock` (la BD tiene tiros con reloj): sin eso,
+    cualquier opción salvo "Todos" saldría vacía.
+
+    Returns:
+        Clave de `queries.SHOT_CONTEXTS`, o `None` para "Todos".
+    """
+    choice = st.radio("Contexto", options=list(SHOT_CONTEXT_OPTIONS), horizontal=True, key=key)
+    return SHOT_CONTEXT_OPTIONS[choice]
 
 
 def zone_breakdown(zone_df: pd.DataFrame, total_shots: int, scope: str = "team") -> None:

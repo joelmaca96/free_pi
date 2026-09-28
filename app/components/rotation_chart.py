@@ -57,6 +57,9 @@ _GRID = "#c9c7bf"       # líneas de cuarto, mismo tono tenue que las zonas de `
 # acumulada: la 4.ª marca de ese color en el cuarto.
 _FOUL_MARK = "#b5651d"
 _BONUS_LINE = "#b5651d"
+# Tiempos muertos (2026-09-28): azul pizarra neutro, fuera de la familia
+# verde/rojo del margen y del ámbar de faltas — no es ni bueno ni malo.
+_TIMEOUT_LINE = "#4a6f8a"
 
 #: Un cuarto son 10 minutos y una prórroga 5. Se usan solo para pintar las
 #: líneas divisorias del eje: el dato ya viene situado en segundos absolutos.
@@ -292,6 +295,24 @@ def _bonus_layer(bonus: pd.DataFrame, x_scale: alt.Scale) -> alt.Chart:
     )
 
 
+def _timeout_layer(timeouts: pd.DataFrame, x_scale: alt.Scale) -> alt.Chart:
+    """Raya vertical continua en cada tiempo muerto del equipo (2026-09-28).
+
+    De altura completa y sin eje Y, igual que `_bonus_layer`: un tiempo muerto
+    para a los diez de pista, no a un jugador. Continua (el bonus va a
+    trazos) para que las dos rayas no se confundan cuando caen cerca.
+    """
+    data = timeouts.assign(minute=timeouts["seconds"] / 60.0, reloj=timeouts["quarter"] + " " + timeouts["game_clock"])
+    return (
+        alt.Chart(data)
+        .mark_rule(color=_TIMEOUT_LINE, strokeWidth=1.5, opacity=0.8)
+        .encode(
+            x=alt.X("minute:Q", scale=x_scale),
+            tooltip=[alt.Tooltip("reloj:N", title="Tiempo muerto")],
+        )
+    )
+
+
 def rotation_chart(
     stints: pd.DataFrame,
     steps: pd.DataFrame,
@@ -301,6 +322,7 @@ def rotation_chart(
     title: Optional[str] = None,
     fouls: Optional[pd.DataFrame] = None,
     bonus: Optional[pd.DataFrame] = None,
+    timeouts: Optional[pd.DataFrame] = None,
 ) -> alt.LayerChart:
     """Timeline de rotaciones + margen de fondo + franjas de parcial + faltas.
 
@@ -322,6 +344,8 @@ def rotation_chart(
             que se ignora en ese caso aunque venga rellena.
         bonus: `queries_assistant.foul_bonus_minutes` ya filtrado a ESTE
             equipo. Opcional — sin él el gráfico sigue siendo legible.
+        timeouts: `queries.game_timeouts` ya filtrado a ESTE equipo
+            (2026-09-28). Opcional: los partidos cargados antes no los tienen.
     """
     layers: List[alt.Chart] = []
     end_minutes = 40.0
@@ -343,6 +367,8 @@ def rotation_chart(
         layers.append(_run_layer(runs, x_scale))
     if bonus is not None and not bonus.empty:
         layers.append(_bonus_layer(bonus, x_scale))
+    if timeouts is not None and not timeouts.empty:
+        layers.append(_timeout_layer(timeouts, x_scale))
 
     marks = _quarter_marks(end_minutes)
     if marks:
@@ -390,6 +416,14 @@ EVENT_LABELS = {
     "block": "Tapón",
     "foul_personal": "Falta cometida",
     "foul_drawn": "Falta recibida",
+    # Desde la reingesta del 2026-09-28 (`play_events` con tiros y tiempos muertos).
+    "fg2_made": "Canasta de 2",
+    "fg2_missed": "Fallo de 2",
+    "fg3_made": "Triple anotado",
+    "fg3_missed": "Triple fallado",
+    "ft_made": "Tiro libre anotado",
+    "ft_missed": "Tiro libre fallado",
+    "timeout": "Tiempo muerto",
 }
 
 

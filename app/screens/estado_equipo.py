@@ -13,7 +13,16 @@ from analytics import shot_quality
 from analytics import signals as signals_engine
 from components.ask_assistant import ask_assistant_button
 from components.avatar import team_crest_html
-from components.court import shot_chart, shot_chart_caption, zone_breakdown, zone_heatmap, zone_heatmap_caption
+from assistant.capabilities import probe
+from components.court import (
+    SHOT_CONTEXT_CAPTION,
+    shot_chart,
+    shot_chart_caption,
+    shot_context_filter,
+    zone_breakdown,
+    zone_heatmap,
+    zone_heatmap_caption,
+)
 from components.glossary import glossary_expander, help_text
 from components.header import page_header
 from components.lineups import season_lineups_section
@@ -496,7 +505,13 @@ else:
         )
     players = ["Todos"] + sorted(shots_df["player_name"].unique().tolist())
     player_choice = st.selectbox("Jugador", options=players, key="own_shots_player_filter")
-    filtered_df = shots_df if player_choice == "Todos" else shots_df[shots_df["player_name"] == player_choice]
+    # Contexto del tiro (2026-09-28): solo si esta BD tiene tiros con reloj.
+    shot_context = shot_context_filter("own_shots_context") if probe(engine).shot_clock else None
+    context_df = (
+        shots_df if shot_context is None
+        else queries.team_shots_season(engine, team_id, shots_season_id, shot_context)
+    )
+    filtered_df = context_df if player_choice == "Todos" else context_df[context_df["player_name"] == player_choice]
 
     zones_df = queries.court_zones(engine)
     # Con "Todos", el agregado oficial por equipo (`game_zone_stats`, vía
@@ -506,11 +521,22 @@ else:
     # antes este mapa se quedaba siempre en el global del equipo aunque el
     # selector de arriba filtrase por jugador, contradiciendo el propio mapa
     # de tiros de al lado, que sí se filtraba.
-    if player_choice == "Todos":
+    # Con un contexto elegido, el acierto por zona sale de esos mismos tiros
+    # (`shot_zone_profile_in_context`): `game_zone_stats` no sabe de reloj
+    # ni de posesión y dejaría este mapa en el total, contradiciendo al de
+    # al lado. El id de jugador sale de `shots_df` (sin filtrar por
+    # contexto): con un contexto vacío para ese jugador, `filtered_df` no
+    # tendría filas de donde sacarlo.
+    player_id = None
+    if player_choice != "Todos":
+        player_id = shots_df.loc[shots_df["player_name"] == player_choice, "player_id"].iloc[0]
+    if shot_context is not None:
+        zone_df = queries.shot_zone_profile_in_context(engine, team_id, shots_season_id, shot_context, player_id)
+        zone_scope = "team" if player_id is None else "player"
+    elif player_id is None:
         zone_df = queries.team_zone_profile(engine, team_id, shots_season_id)
         zone_scope = "team"
     else:
-        player_id = filtered_df["player_id"].iloc[0]
         zone_df = queries.player_zone_profile(engine, player_id, shots_season_id)
         zone_scope = "player"
 
@@ -520,15 +546,20 @@ else:
     # `use_container_width`/`width="stretch"` — ver `court.py`) y ya trae de
     # serie el icono de pantalla completa de Streamlit al pasar el ratón por
     # encima, para verlo grande sin perder el layout de dos columnas.
-    col_shots, col_zones = st.columns(2)
-    with col_shots:
-        st.altair_chart(shot_chart(filtered_df, zones_df))
-        st.caption(shot_chart_caption(filtered_df))
-    with col_zones:
-        st.markdown("**Acierto por zona**")
-        st.altair_chart(zone_heatmap(zone_df, zones_df))
-        st.caption(zone_heatmap_caption(zone_df))
-    zone_breakdown(zone_df, len(filtered_df), scope=zone_scope)
+    if filtered_df.empty:
+        st.info("Sin tiros en ese contexto para esta selección.")
+    else:
+        col_shots, col_zones = st.columns(2)
+        with col_shots:
+            st.altair_chart(shot_chart(filtered_df, zones_df))
+            st.caption(shot_chart_caption(filtered_df))
+        with col_zones:
+            st.markdown("**Acierto por zona**")
+            st.altair_chart(zone_heatmap(zone_df, zones_df))
+            st.caption(zone_heatmap_caption(zone_df))
+        zone_breakdown(zone_df, len(filtered_df), scope=zone_scope)
+    if shot_context is not None:
+        st.caption(SHOT_CONTEXT_CAPTION)
 
 st.divider()
 

@@ -117,6 +117,17 @@ class ShotRecord:
     # `schema.sql`). Por defecto `True`: lo normal es que vengan medidas, y
     # así una fuente que no tenga el caso no necesita decir nada.
     located: bool = True
+    # Reloj, marcador y contexto (2026-09-28, ver `shots` en `schema.sql`).
+    # `None` = la fuente no lo dio para este tiro. `home_score`/`away_score`
+    # son los de DESPUÉS del tiro, tal como los dan las dos fuentes.
+    quarter: Optional[str] = None
+    game_clock: Optional[str] = None
+    seconds: Optional[float] = None
+    home_score: Optional[int] = None
+    away_score: Optional[int] = None
+    is_fastbreak: Optional[bool] = None
+    is_second_chance: Optional[bool] = None
+    is_off_turnover: Optional[bool] = None
 
 
 @dataclass
@@ -160,9 +171,13 @@ class PlayEvent:
     """Un evento tipado del play-by-play (Fase 2), con reloj exacto.
 
     `event_type` es uno de: 'steal', 'turnover', 'block', 'oreb', 'dreb',
-    'assist', 'foul_drawn', 'foul_personal'. `event_detail` solo se rellena
-    para 'foul_personal' en ACB (código crudo de los 6 subtipos sin
-    semántica distinguible, ver `ingest/acb/adapter.py`).
+    'assist', 'foul_drawn', 'foul_personal' y, desde 2026-09-28, 'fg2_made',
+    'fg2_missed', 'fg3_made', 'fg3_missed', 'ft_made', 'ft_missed',
+    'timeout' (tiempo muerto de EQUIPO, `player_id=None`). Esos nombres son
+    contrato compartido con el cálculo de posesiones — no renombrar.
+    `event_detail` solo se rellena para 'foul_personal' en ACB (código crudo
+    de los 6 subtipos sin semántica distinguible, ver `ingest/acb/adapter.py`)
+    y con 'dunk' en los mates de ACB ('fg2_made' del código 100).
     """
 
     team_id: str

@@ -904,6 +904,24 @@ def test_game_runs_answers_where_the_game_was_decided(engine, ctx):
     assert result["artifact"]["type"] == "table"
 
 
+def test_game_runs_lists_shots_and_drops_the_warning_once_the_pbp_has_them(engine, ctx):
+    """Desde la reingesta del 2026-09-28 los tiros son eventos de `play_events`:
+    salen en la lista del parcial y el aviso de "no hay tiros" sobra."""
+    from sqlalchemy import text
+
+    catalog = _load_run_fixture(engine, ctx)
+    with engine.begin() as conn:
+        conn.execute(text(
+            "INSERT INTO play_events (game_id, team_id, player_id, quarter, game_clock, seconds,"
+            " event_type, home_score, away_score) VALUES ('g5', 'bas', 'howard', 'Q1', '07:15', 165, 'fg3_made', 14, 6)"
+        ))
+
+    result = catalog.execute("1", "game_runs", {"game_id": "g5"}).result
+
+    assert any("fg3_made (Marcus Howard)" in event for event in result["data"]["parciales"][0]["eventos"])
+    assert not any("NO hay tiros" in warning for warning in result["meta"].get("warnings", []))
+
+
 def test_game_runs_always_says_that_the_shots_are_missing(engine, ctx):
     """La mayor carencia de la función se dice en voz alta, no se deduce (§5)."""
     catalog = _load_run_fixture(engine, ctx)

@@ -348,3 +348,107 @@ competition_id)` igual que ACB — necesario desde que hay dos fuentes escribien
     cancha (se tira siempre desde el mismo punto fijo) y forzarlo dentro de `shots`/
     `court_zones` habría exigido ingerirlo con otro centinela sin coordenadas reales; la vía
     correcta era esta, no una zona más.
+
+## Tiros con reloj y contexto + tiros y tiempos muertos en `play_events` (2026-09-28)
+
+Hasta hoy `shots` era solo "dónde": ni cuarto, ni reloj, ni marcador, así que un tiro no se podía
+cruzar con quintetos, parciales ni minutos finales; y `play_events` tipaba robos/pérdidas/
+rebotes/faltas pero **no los tiros ni los tiempos muertos**, aunque las dos fuentes los dan en el
+mismo play-by-play que ya se descargaba.
+
+### Qué se carga ahora
+
+- **`shots`** gana 8 columnas nullable (`schema.sql` + `engine.py::_ADDITIVE_COLUMN_MIGRATIONS`,
+  así que una BD existente las recibe sola al siguiente `init_scouting_db`): `quarter`
+  (`'Q1'..'Q4'`/`'OTn'`), `game_clock` (`'MM:SS'` restantes), `seconds` (desde el inicio, vía
+  `ingest/common/game_clock.py` — misma escala que `play_events`/`lineup_stints`), `home_score`/
+  `away_score` (marcador **después** del tiro, tal como lo dan las dos fuentes) e
+  `is_fastbreak`/`is_second_chance`/`is_off_turnover` (0/1).
+- **`play_events`** gana los tipos `fg2_made`, `fg2_missed`, `fg3_made`, `fg3_missed`, `ft_made`,
+  `ft_missed` (con su jugador) y `timeout` (tiempo muerto de **equipo**, `player_id` NULL). Los
+  nombres son contrato compartido con el cálculo de posesiones. Los tiempos muertos de
+  televisión de Euroliga (`TOUT_TV`, sin `CODETEAM`) **no** se cargan a propósito. En ACB el
+  mate (código 100) es un `fg2_made` con `event_detail='dunk'`.
+- `game_team_quarter_stats.fouls_for/against` sigue contando solo `foul_personal`
+  (`loader._quarter_foul_stats` ya filtraba por tipo; hay test que lo fija con tiros y
+  tiempos muertos presentes).
+
+### Verificado en vivo (2026-09-28)
+
+- **ACB, partido 104465**: `MatchShots/match-shots` trae en cada `shotPoints[i]`
+  `quarter/minute/second/scoreHome/scoreAway` (se descartaban). Sus 150 tiros de campo casan 1 a 1
+  con las jugadas de `PlayByPlay` por cuarto+reloj+tipo+jugador. Códigos: 92/96 libre
+  anotado/fallado, 93/97 de 2, 94/98 de 3, 100 mate; 113 = tiempo muerto (7 en ese partido,
+  Q2-Q4, siempre `playerLicenseId=None`). Carga de punta a punta en una BD en memoria: 150 tiros
+  con reloj y marcador, 39 `ft_made` = 39 `ftm` del boxscore, 7 `timeout`.
+- **Euroliga, 16 partidos de 2025** (gamecodes 7/12/20/33/45/60/77/88/101/120/133/150/175/190/
+  210/250; 2.006 tiros de campo, 111 tiempos muertos de equipo): `ShotData` **no** trae
+  `PERIOD`; trae `MINUTE` (minuto de partido redondeado hacia arriba), `CONSOLE`, `POINTS_A/B`,
+  `NUM_ANOT` (= `NUMBEROFPLAY` del PBP en el 100% de las filas) y las banderas
+  `FASTBREAK/SECOND_CHANCE/POINTS_OFF_TURNOVER` como texto `"0"/"1"`. Dos trampas:
+  1. `CONSOLE` falla en los minutos exactos (en 59 de los 64 tiros con segundos `00` va un minuto
+     por delante del PBP). Con PBP el reloj se toma del PBP; sin PBP se corrige con `MINUTE`
+     (2.001/2.006 tiros quedan igual que con PBP).
+  2. Las banderas son de **puntos**: nunca valen 1 en un tiro fallado. Se respetan solo en los
+     anotados; en los fallados se derivan (ver "Contexto derivado" abajo).
+
+### Contexto derivado, agnóstico de fuente (`ingest/common/shot_context.py`)
+
+ACB no publica ninguna bandera, y Euroliga solo para anotados. Una máquina de posesiones simple
+sobre los `play_events` (ya con tiros) da el contexto de la **posesión** en la que se tira:
+segunda oportunidad = ya hubo rebote ofensivo propio en ella; tras pérdida = empezó con
+pérdida/robo rival; contraataque = tiro a ≤ `FASTBREAK_WINDOW_SECONDS` (6 s) de un inicio por
+rebote defensivo, robo o pérdida rival. Se invoca en `raw_game.parse_and_resolve` y solo rellena
+las banderas que llegan en `None` (la de la fuente siempre gana).
+
+Validación contra las banderas propias de Euroliga (958 canastas de campo de esos 16 partidos,
+derivando sin mirarlas):
+
+| Bandera | Coincidencia | Precisión | Recall |
+|---|---|---|---|
+| Segunda oportunidad | 99,5% | 98% | 97% |
+| Tras pérdida | 99,0% | 97% | 98% |
+| Contraataque (6 s) | 92,5% | 55% | 81% |
+
+Contraataque es un juicio del anotador en Euroliga, no una regla de reloj: 3 s da la mayor
+coincidencia bruta (94,3%) pero se deja la mitad; 8 s recoge el 87% pero duplica los positivos
+(precisión 44%). 6 s es el mejor equilibrio (F1 0,65). La interfaz lo presenta como aproximación.
+
+### App
+
+- `app/assistant/capabilities.py`: `shot_clock` (`shots.seconds` con algún dato) y `timeouts`
+  (alguna fila `event_type='timeout'`), con su frase en `missing_summary`.
+- Mapa de tiros de "Estado del equipo" y "Próximo rival": radio **Contexto** (Todos / Últimos 5
+  min apretados (±5) / Contraataque / Segunda oportunidad / Tras pérdida), solo si
+  `shot_clock`. El acierto por zona de al lado sale de esos mismos tiros
+  (`queries.shot_zone_profile_in_context`) para que los dos mapas no se contradigan.
+- "Partidos anteriores" → Rotaciones: raya azul por tiempo muerto de cada equipo
+  (`queries.game_timeouts`); la lista de eventos de un parcial muestra los tiros y el aviso
+  "los tiros no salen en esta lista" solo aparece en partidos sin reingerir.
+- Consumidores revisados: la escalera del marcador (`queries._score_steps`, base también de la
+  probabilidad de victoria) agrupa por segundo con `MAX` del marcador, así que los eventos nuevos
+  solo la hacen más precisa (cada canasta en su segundo) sin duplicar nada; las consultas de
+  faltas filtran por `event_type`; el asistente (`game_play_events`, `game_runs`, trampas del
+  prompt) conoce los tipos nuevos.
+
+### Backfill: hay que reingerir
+
+Los partidos ya cargados tienen las columnas nuevas en NULL y ningún evento de tiro/tiempo muerto
+hasta que se reingieren; la interfaz y el asistente lo detectan (`shot_clock`/`timeouts`
+apagados, aviso por partido) en vez de fallar. La carga es idempotente (borrar-y-reinsertar por
+`game_id` en `shots`/`play_events`, upsert en el resto), así que **no** hace falta `--force` ni
+recrear la BD — basta relanzar la temporada:
+
+```bash
+python -m ingest.acb.cli --season 2025          # ~5 peticiones/partido a 0,5 s: la vía barata
+python -m ingest.euroleague.cli --season 2025   # ojo al rate limit conocido, ver §2.3
+# o las dos de una vez, sin tocar la plantilla:
+python -m ingest.run_all --season 2025 --skip baskonia_web
+```
+
+Vía más barata para Euroliga (o para probar antes con pocos partidos): recargar solo los
+partidos que interesan con `run_single_game`, que ya existe y es igual de idempotente:
+
+```bash
+python -c "from ingest.common.db import get_engine; from ingest.euroleague.pipeline import run_single_game; e = get_engine(); [print(run_single_game(e, 2025, code)) for code in (7, 20, 45)]"
+```

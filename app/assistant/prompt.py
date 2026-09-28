@@ -75,6 +75,15 @@ TRAMPAS DE ESTE ESQUEMA (aplican también a run_sql):
   quintetos ni con tiros.
 - Los tiros libres no tienen coordenadas: `shots` es solo tiro de campo, y `efg_pct` los
   excluye por definición.
+- `shots.quarter/game_clock/seconds/home_score/away_score` (marcador DESPUÉS del tiro) y
+  `is_fastbreak/is_second_chance/is_off_turnover` solo existen en partidos reingeridos desde
+  2026-09-28 (NULL antes). Contraataque es una aproximación por reloj (≤6 s desde rebote
+  defensivo/robo/pérdida rival); segunda oportunidad y tras pérdida son fiables.
+- `play_events.event_type` mezcla tipos: 'steal', 'turnover', 'block', 'oreb', 'dreb',
+  'assist', 'foul_drawn', 'foul_personal', 'fg2_made', 'fg2_missed', 'fg3_made',
+  'fg3_missed', 'ft_made', 'ft_missed' y 'timeout' (tiempo muerto de EQUIPO, sin jugador;
+  los de TV no se cargan). Filtra SIEMPRE por `event_type` al contar. Los tiros y
+  'timeout' solo existen en partidos reingeridos desde 2026-09-28.
 - `play_events.event_type='foul_personal'` no distingue el subtipo de falta (6 códigos ACB
   sin semántica clara, guardados en bruto en `event_detail`): di "cometió una falta", nunca
   de qué tipo. El TOTAL de faltas de un jugador/equipo sale siempre de `pf` del boxscore, no

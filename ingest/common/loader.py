@@ -239,6 +239,8 @@ def _quarter_foul_stats(events: List, quarter_stats: List) -> Dict[tuple, tuple]
         return {}
     counts: Dict[tuple, int] = {}
     for event in events:
+        # Solo faltas: desde 2026-09-28 `play_events` trae también tiros y
+        # tiempos muertos, que no deben contar aquí.
         if event.event_type != "foul_personal":
             continue
         quarter = _quarter_label_to_int(event.quarter)
@@ -422,13 +424,21 @@ def _replace_stints(conn: Connection, game_id: str, stints: List) -> None:
             )
 
 
+def _flag(value) -> object:
+    """`True`/`False`/`None` -> `1`/`0`/`NULL` (las banderas de `shots` son nullable)."""
+    return None if value is None else int(bool(value))
+
+
 def _replace_shots(conn: Connection, game_id: str, shots: List) -> None:
     conn.execute(text("DELETE FROM shots WHERE game_id = :g"), {"g": game_id})
     for shot in shots:
         conn.execute(
             text(
-                "INSERT INTO shots (game_id, player_id, zone_id, pos_x, pos_y, made, located)"
-                " VALUES (:g, :p, :z, :x, :y, :made, :located)"
+                "INSERT INTO shots (game_id, player_id, zone_id, pos_x, pos_y, made, located,"
+                "  quarter, game_clock, seconds, home_score, away_score,"
+                "  is_fastbreak, is_second_chance, is_off_turnover)"
+                " VALUES (:g, :p, :z, :x, :y, :made, :located,"
+                "  :quarter, :clock, :seconds, :home, :away, :fastbreak, :second_chance, :off_turnover)"
             ),
             {
                 "g": game_id,
@@ -438,6 +448,17 @@ def _replace_shots(conn: Connection, game_id: str, shots: List) -> None:
                 "y": shot.pos_y,
                 "made": int(shot.made),
                 "located": int(shot.located),
+                # Reloj/marcador/contexto (2026-09-28): `getattr` con `None`
+                # por defecto para no romper a quien construya un
+                # `ShotRecord` a mano con la forma antigua.
+                "quarter": getattr(shot, "quarter", None),
+                "clock": getattr(shot, "game_clock", None),
+                "seconds": getattr(shot, "seconds", None),
+                "home": getattr(shot, "home_score", None),
+                "away": getattr(shot, "away_score", None),
+                "fastbreak": _flag(getattr(shot, "is_fastbreak", None)),
+                "second_chance": _flag(getattr(shot, "is_second_chance", None)),
+                "off_turnover": _flag(getattr(shot, "is_off_turnover", None)),
             },
         )
 

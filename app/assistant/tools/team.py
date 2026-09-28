@@ -462,15 +462,20 @@ def game_boxscore(ctx: ToolContext, game_id: str, team_id: str = None) -> dict:
     family="team",
     description=(
         "Play-by-play tipado de un partido: robos, pérdidas, tapones, rebote ofensivo/defensivo, "
-        "asistencias, faltas recibidas y faltas personales, con reloj y marcador exactos. Para "
-        "'¿en qué momento del partido pasó X?' — no todos los partidos lo tienen todavía (Fase 2)."
+        "asistencias, faltas recibidas y faltas personales, con reloj y marcador exactos; en "
+        "partidos reingeridos desde 2026-09-28 también tiros (de 2, de 3, libres; anotados y "
+        "fallados) y tiempos muertos de equipo. Para '¿en qué momento del partido pasó X?' — no "
+        "todos los partidos lo tienen todavía (Fase 2)."
     ),
     parameters=schema(
         {
             "game_id": {"type": "string"},
             "event_type": {
                 "type": "string",
-                "enum": ["steal", "turnover", "block", "oreb", "dreb", "assist", "foul_drawn", "foul_personal"],
+                "enum": [
+                    "steal", "turnover", "block", "oreb", "dreb", "assist", "foul_drawn", "foul_personal",
+                    "fg2_made", "fg2_missed", "fg3_made", "fg3_missed", "ft_made", "ft_missed", "timeout",
+                ],
                 "description": "Acota a un tipo de evento; omite para traerlos todos.",
             },
         },
@@ -583,6 +588,7 @@ def game_runs(
 
     stints = queries.game_stints(ctx.engine, game_id, team)
     detailed = []
+    has_shot_events = False
     for run in runs.head(max(int(limit), 1)).to_dict("records"):
         # `clean_dict` antes de tocar nada: los valores salen de pandas como
         # escalares de numpy y el JSON del `tool_result` los serializaría como
@@ -592,6 +598,7 @@ def game_runs(
         events = queries.game_window_events(
             ctx.engine, game_id, run["start_seconds"], run["end_seconds"], team
         )
+        has_shot_events = has_shot_events or bool(events["event_type"].isin(queries.SHOT_EVENT_TYPES).any())
         run["quinteto"] = " · ".join(lineup["player_name"]) if not lineup.empty else None
         run["eventos"] = [
             f"{event['quarter']} {event['game_clock']} · {event['score_for']}-{event['score_against']} · "
@@ -602,10 +609,15 @@ def game_runs(
         detailed.append(run)
 
     rows = records(runs)
-    warnings = [
-        "En la lista de eventos de un parcial NO hay tiros: `shots` no guarda ni cuarto ni reloj. "
-        "Los puntos se ven por el salto del marcador — no digas que un parcial fue 'sin canastas'."
-    ]
+    warnings = []
+    # Los tiros entran en `play_events` desde la reingesta del 2026-09-28; un
+    # partido cargado antes sigue sin ellos, y entonces hay que decirlo.
+    if not has_shot_events:
+        warnings.append(
+            "En la lista de eventos de estos parciales NO hay tiros: este partido se cargó antes de "
+            "que el play-by-play los incluyera. Los puntos se ven por el salto del marcador — no "
+            "digas que un parcial fue 'sin canastas'."
+        )
     if stints.empty:
         warnings.append(
             f"Este partido no tiene tramos de quinteto de {team}: hay parciales, pero no se puede "
