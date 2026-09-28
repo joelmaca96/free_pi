@@ -348,3 +348,55 @@ competition_id)` igual que ACB — necesario desde que hay dos fuentes escribien
     cancha (se tira siempre desde el mismo punto fijo) y forzarlo dentro de `shots`/
     `court_zones` habría exigido ingerirlo con otro centinela sin coordenadas reales; la vía
     correcta era esta, no una zona más.
+
+## 2026-09-28 — Posesiones por tramo (`lineup_stints.possessions_for`/`possessions_against`)
+
+Cierra en la ingesta el hueco "Posesiones por tramo" de
+[`../propuestas/00_indice.md`](../propuestas/00_indice.md): hasta aquí `lineup_stints` guardaba
+puntos y no posesiones, y todo el On/Off/duplas/RAPM iba por 40 minutos.
+
+- **Esquema**: dos columnas REAL nullable en `lineup_stints`, en `schema.sql` y en
+  `engine.py::_ADDITIVE_COLUMN_MIGRATIONS` (una BD ya cargada las gana sola con
+  `init_scouting_db`, en NULL).
+- **Cálculo** (`ingest/common/possessions.py`): posesiones ≈ FGA + 0,44·FTA − OREB + TOV —la
+  misma fórmula Dean Oliver que ya usan los adaptadores para `game_advanced_stats`— aplicada a la
+  ventana de cada tramo, para el equipo del tramo (`possessions_for`) y para su rival en la misma
+  ventana (`possessions_against`). Cuenta los tipos de `play_events` del contrato con la ingesta de
+  tiros: `fg2_made`, `fg2_missed`, `fg3_made`, `fg3_missed`, `ft_made`, `ft_missed`, más `oreb` y
+  `turnover`. Opción `ft_mode="trips"`: viajes a la línea contados (libres del mismo equipo y
+  segundo; un 2+1 o un técnico de un libre no abren posesión) en vez del 0,44.
+- **Fronteras**: tramos semiabiertos `[start, end)` (el evento del segundo de un cambio va al
+  quinteto que entra), salvo reloj `00:00`, que va al quinteto que acabó el periodo (la bocina y
+  el cambio del descanso comparten segundo). Si la regla no encuentra tramo, se prueba la otra;
+  si tampoco (hueco sin quinteto de cinco), el evento cuenta solo en el total del partido.
+- **Total por partido y reescalado**: se estima el total de cada equipo con todos sus eventos y
+  se compara con la referencia `100 · puntos / ortg` de `game_advanced_stats` (oficial en ACB con
+  `AdvancedStats`, Dean Oliver en el resto); la discrepancia va al log (aviso por encima del 10%).
+  Por defecto (`rescale=True`) las posesiones de los tramos se multiplican por
+  `referencia / estimado`, así que si los tramos cubren el partido suman la referencia y el net
+  rating agregado cuadra con `ortg − drtg`. Absorbe también las posesiones de fin de periodo sin
+  evento que la fórmula no ve. Sin referencia o con factor fuera de [0,75, 1,33] (dato roto), se
+  queda la estimación cruda.
+- **NULL, no 0**: un partido sin NINGÚN tiro tipado en `play_events` (todo lo ingerido hasta hoy)
+  deja las dos columnas en NULL, para que la capacidad distinga "sin dato" de "cero".
+- **Loader**: `load_game` llama a `_update_stint_possessions` justo después de `_replace_stints`
+  (con `play_events` ya escritos), igual que las faltas por cuarto se derivan de `play_events`.
+  Lee de la BD, así que es idempotente y da lo mismo que el backfill. Un fallo del cálculo se
+  registra y no tumba la carga del partido.
+- **Backfill sin red**: `tools/backfill_stint_possessions.py` (dry-run por defecto, `--apply`
+  para escribir, `--no-rescale`, `--ft-mode trips`, `--game <id>` repetible) recalcula todos los
+  partidos con tramos desde lo ya guardado y resume cuántos tienen tiros tipados, cuántos se
+  reescalaron y la discrepancia media contra la referencia. **Solo sirve de algo tras reingerir
+  con la ingesta de tiros en `play_events`**; antes, todo sale "sin tiros tipados".
+- **Interfaz**: capacidad `stint_possessions` (columna presente Y algún valor no NULL) en
+  `app/assistant/capabilities.py`. `queries_assistant.player_on_off` añade `on_possessions`,
+  `on_net_100`, `off_possessions`, `off_net_100`, `on_off_100`, y `player_combos` añade
+  `possessions`/`net_rating_100` (NaN sin dato; net rating = ORtg − DRtg sobre las sumas de los
+  MISMOS tramos con posesiones). `app/screens/quintetos.py` los enseña junto al +/- por 40 solo
+  con la capacidad encendida. El RAPM (`app/analytics/impact.py`) no cambia (ver la nota en §5
+  de la propuesta 12).
+- **Limitación conocida**: los PUNTOS de un segundo con canasta y cambio a la vez se reparten
+  por el orden de la fuente (`ingest/common/lineups.py`) y las posesiones por el reloj; en esos
+  segundos puntos y posesiones pueden caer en tramos contiguos distintos (error de una posesión
+  que se compensa al agregar). Un tramo muy corto puede quedar con 0 posesiones y puntos, o al
+  revés: los per-100 solo tienen sentido agregados (jugador, pareja, trío), no por tramo suelto.

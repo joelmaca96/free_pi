@@ -22,6 +22,7 @@ from sqlalchemy.engine import Connection, Engine
 
 from packages.baskonia_core.referees import canonical_referee_name
 
+from .possessions import update_stint_possessions
 from .schema_types import NormalizedGame
 
 logger = logging.getLogger(__name__)
@@ -75,6 +76,7 @@ def load_game(conn: Connection, game: NormalizedGame) -> None:
         _upsert_player_game_stats(conn, game.id, stat)
     _replace_lineups(conn, game.id, game.lineups)
     _replace_stints(conn, game.id, game.stints)
+    _update_stint_possessions(conn, game.id)
     _replace_shots(conn, game.id, game.shots)
     _replace_zone_stats_from_shots(conn, game.id, game.shots)
     _replace_key_events(conn, game.id, game.key_events)
@@ -420,6 +422,26 @@ def _replace_stints(conn: Connection, game_id: str, stints: List) -> None:
                 text("INSERT INTO lineup_stint_players (stint_id, player_id) VALUES (:s, :p)"),
                 {"s": stint_id, "p": player_id},
             )
+
+
+def _update_stint_possessions(conn: Connection, game_id: str) -> None:
+    """Posesiones por tramo, DERIVADAS de `play_events` + `lineup_stints` ya escritos.
+
+    Mismo patrón que `_quarter_foul_stats`: no vienen del adapter, se calculan
+    aquí tras cargar eventos y tramos (ver `ingest/common/possessions.py`).
+    Lee lo ya guardado en la BD, así que da lo mismo que el backfill
+    (`tools/backfill_stint_possessions.py`). NULL si el partido no tiene tiros
+    tipados. Un fallo aquí no tumba la carga del partido: es un dato derivado
+    que el backfill puede recalcular después sin red; se deja en NULL y se
+    registra.
+    """
+    # `update_stint_possessions` calcula TODO antes de escribir nada, así que
+    # un fallo del cálculo deja las columnas en el NULL con que se acaban de
+    # reinsertar los tramos, sin escrituras a medias.
+    try:
+        update_stint_possessions(conn, game_id)
+    except Exception:  # noqa: BLE001 - dato derivado, recalculable con el backfill
+        logger.exception("posesiones por tramo de %s no calculadas (quedan en NULL)", game_id)
 
 
 def _replace_shots(conn: Connection, game_id: str, shots: List) -> None:
