@@ -16,6 +16,7 @@ from components.ask_assistant import ask_assistant_button
 from components.court import shot_chart, shot_chart_caption
 from components.glossary import abbr, glossary_expander, help_text
 from components.header import page_header
+from components.key_moments import key_moments_tab
 from components.rotation_chart import event_label, rotation_chart
 from components.shot_quality import quality_caveat, quality_metrics
 from components.win_thresholds import objectives_checklist
@@ -246,8 +247,8 @@ with detail_col:
             width="stretch",
         )
 
-    tab_resumen, tab_box, tab_tiros, tab_quintetos, tab_rotaciones = st.tabs(
-        ["Resumen", "Boxscore", "Tiros", "Quintetos", "Rotaciones"]
+    tab_resumen, tab_box, tab_tiros, tab_quintetos, tab_rotaciones, tab_momentos = st.tabs(
+        ["Resumen", "Boxscore", "Tiros", "Quintetos", "Rotaciones", "Momentos clave"]
     )
 
     with tab_resumen:
@@ -724,3 +725,12 @@ with detail_col:
                     )
 
             glossary_expander(["margin", "run_swing", "run_minutes", "run_share"])
+
+    # Momentos clave (propuesta 18, `doc/features/propuestas/18_momentos_clave.md`):
+    # los tramos ordenados por cuánto movieron la probabilidad de victoria, su
+    # reparto por quintetos (WPA) y la lista de clips para el vídeo.
+    with tab_momentos:
+        key_moments_tab(
+            engine, game_id, team_id, rival_name,
+            file_stem=f"baskonia_vs_{rival_name}_{selected_game['game_date']}",
+        )

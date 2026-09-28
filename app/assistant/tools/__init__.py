@@ -29,6 +29,7 @@ from typing import Any, Dict, List, Optional
 from ..llm.base import ToolSpec
 from . import context as _context  # noqa: F401  (importar registra sus herramientas)
 from . import fatigue as _fatigue  # noqa: F401
+from . import key_moments as _key_moments  # noqa: F401
 from . import league as _league  # noqa: F401
 from . import lineups as _lineups  # noqa: F401
 from . import player as _player  # noqa: F401

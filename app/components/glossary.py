@@ -380,6 +380,25 @@ TERMS: Dict[str, Term] = {
         "100 = idéntico en todo lo disponible. Depende del método elegido (estilo o nivel) y de los "
         "pesos ajustados — no es una cifra absoluta, cambia según qué se le pida que compare.",
     ),
+    # --- momentos clave (propuesta 18) --
+    "win_probability": Term(
+        "Prob. victoria", "Probabilidad de victoria",
+        "Probabilidad de ganar el partido en ese instante según el margen, el tiempo que queda y "
+        "quién juega en casa — nada más (no sabe quién tiene la posesión ni cómo de bueno es cada "
+        "equipo). Sale de un modelo ajustado con todos los partidos de la liga en la temporada.",
+    ),
+    "wpa": Term(
+        "WPA", "Probabilidad de victoria añadida (win probability added)",
+        "Cuántos puntos porcentuales subió (o bajó) la probabilidad de ganar durante una jugada o "
+        "tramo. Es lo que ordena los momentos clave: un 5-0 con el partido igualado a falta de dos "
+        "minutos mueve mucho más que un 10-0 en el primer cuarto.",
+    ),
+    "wpa_lineup": Term(
+        "WPA quinteto", "Probabilidad de victoria añadida con ese quinteto en pista",
+        "Suma de todo lo que se movió la probabilidad de ganar mientras esos cinco estaban juntos en "
+        "pista (en puntos porcentuales). Todos los quintetos de un equipo suman su probabilidad final "
+        "menos la de salida. Dice cuándo se ganó o perdió el partido, no quién jugó mejor.",
+    ),
 }
 
 
