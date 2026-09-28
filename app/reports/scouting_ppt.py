@@ -51,12 +51,16 @@ try:  # pragma: no cover - depende de cómo se arranque el proceso, no de la ló
     from app.assistant.llm import LLMClient, LLMError
     from app.components.branding import CREST_PATH
     from app.data import queries, queries_assistant
+    from app.analytics.prediction import summary_sentence as prediction_summary
+    from app.data import queries_prediction
     from app.reports import _deck
 except ImportError:  # pragma: no cover
     from analytics import shot_quality, win_thresholds
     from assistant.llm import LLMClient, LLMError
     from components.branding import CREST_PATH
     from data import queries, queries_assistant
+    from analytics.prediction import summary_sentence as prediction_summary
+    from data import queries_prediction
     from reports import _deck
 
 logger = logging.getLogger(__name__)
@@ -96,6 +100,10 @@ def _build_cover_slide(prs: Presentation, ctx: dict) -> None:
             "Balance de " + ctx["rival_name"] + " esta temporada: "
             + ", ".join(f"{c} {w}–{l}" for c, w, l in ctx["rival_record"]) + "."
         )
+    # Propuesta 16: la predicción del partido en una frase, si se pudo calcular
+    # (`ctx.get`: un ctx de test o de una versión anterior no la trae).
+    if ctx.get("prediction_sentence"):
+        footer_bits.append(ctx["prediction_sentence"])
     if ctx["is_fallback_season"]:
         footer_bits.append(
             f"⚠ {ctx['rival_name']} no ha jugado aún en la temporada actual: todo el scouting "
@@ -898,6 +906,7 @@ def generate_scouting_ppt(
     today: dt.date,
     llm_client: Optional[LLMClient] = None,
     max_players: int = _MAX_PLAYERS,
+    match_date: Optional[dt.date] = None,
 ) -> bytes:
     """Punto de entrada único para la página: datos + dos capas de texto + `.pptx`, en bytes.
 
@@ -916,6 +925,9 @@ def generate_scouting_ppt(
             `None` para quedarse solo con las reglas en jugadores/claves.
         max_players: cuántas diapositivas de jugador generar, por producción
             (minutos primero, después puntos) — 5 a 8 según la propuesta.
+        match_date: fecha del partido, para la predicción de la portada
+            (propuesta 16: ajuste con lo anterior y descanso hasta ese día).
+            `None` = `today`.
     """
     h2h_df = queries.head_to_head(engine, own_team_id, rival_team_id)
     h2h_summary = None
@@ -1000,6 +1012,15 @@ def generate_scouting_ppt(
             win_thresholds.rival_adjusted_card(card, rival_avg, league_avg) for card in objective_cards
         ]
 
+    # Propuesta 16: margen esperado y qué lo mueve, en una frase de portada.
+    # `None` si la temporada no tiene partidos para ajustar el modelo.
+    prediction_result = queries_prediction.matchup_prediction(
+        engine, own_team_id, rival_team_id, scouting_season_id, match_date or today, bool(is_home), competition
+    )
+    prediction_sentence = (
+        None if prediction_result is None else prediction_summary(prediction_result["prediction"], rival_name)
+    )
+
     ctx = {
         "rival_name": rival_name,
         "is_home": is_home,
@@ -1015,6 +1036,7 @@ def generate_scouting_ppt(
         "attack_diff": attack_summary["diff_shrunk"] if attack_summary["reliable"] else None,
         "defense_diff": defense_summary["diff_shrunk"] if defense_summary["reliable"] else None,
         "win_threshold_cards": win_threshold_cards,
+        "prediction_sentence": prediction_sentence,
     }
 
     lineups_df = queries.season_lineups(engine, rival_team_id, scouting_season_id)

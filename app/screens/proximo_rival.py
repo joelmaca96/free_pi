@@ -33,6 +33,7 @@ from components.court import shot_chart, shot_chart_caption, zone_breakdown, zon
 from components.glossary import glossary_expander, help_text
 from components.header import page_header
 from components.lineups import season_lineups_section
+from components.prediction import prediction_section
 from components.player_dialog import player_detail
 from components.shot_quality import (
     league_reference_expander,
@@ -213,6 +214,7 @@ if st.button("📊 Generar dossier de scouting", key=f"dossier_btn_{rival_team_i
             is_fallback_season=scouting["is_fallback"],
             today=today,
             llm_client=llm_client,
+            match_date=match_date,
         )
 
 if st.session_state.get(dossier_state_key):
@@ -225,6 +227,17 @@ if st.session_state.get(dossier_state_key):
         width="stretch",
     )
 
+st.divider()
+
+# ------------------------------------------------------------- predicción --
+# Propuesta 16 (`doc/features/propuestas/16_prediccion_del_partido.md`):
+# margen esperado, probabilidad y qué la mueve, calculado al vuelo (la app no
+# escribe `upcoming_matchups.predicted_net_rating`).
+prediction_section(
+    engine, own_team_id=own_team_id, rival_team_id=rival_team_id, rival_name=rival_name,
+    season_id=scouting_season_id, match_date=match_date, is_home=bool(matchup["is_home"]),
+    competition=matchup["competition"],
+)
 st.divider()
 
 # --------------------------------------------------------- objetivos del partido --
