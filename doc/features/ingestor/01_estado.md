@@ -412,7 +412,7 @@ trae, `gameRole`, y el adaptador ya la guardaba).
 - **No cubre:** peso (acb.com no lo publica en la ficha), jugadores sin licencia de ACB ni código
   de Euroliga (no hay de dónde sacarlo), y los ya guardados en inglés (ver arriba).
 
-## 2026-09-28 — Posesiones por tramo (`lineup_stints.possessions_for`/`possessions_against`)
+## 5. Posesiones por tramo (2026-09-28) — (`lineup_stints.possessions_for`/`possessions_against`)
 
 Cierra en la ingesta el hueco "Posesiones por tramo" de
 [`../propuestas/00_indice.md`](../propuestas/00_indice.md): hasta aquí `lineup_stints` guardaba
