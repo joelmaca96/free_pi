@@ -1,6 +1,6 @@
 # Propuestas de nuevas funciones para el cuerpo técnico
 
-Índice de las ideas propuestas el **2026-08-28**. Cada una tiene su propio documento, en el
+Índice de las ideas propuestas el **2026-08-28** (01-11) y el **2026-09-27** (12-14). Cada una tiene su propio documento, en el
 orden en que se presentaron (impacto/esfuerzo descendente). **Son propuestas, no estado**, salvo
 donde el propio documento diga otra cosa (la 01 ya está implementada). El estado real del
 proyecto vive en `doc/features/ingestor/01_estado.md` y en el código.
@@ -36,6 +36,9 @@ accionable pesa menos que una peor pero exportable.
 | 09 ✅ | [Umbrales de victoria](09_umbrales_de_victoria.md) | Qué números hay que alcanzar para ganar a ESE rival, no en general | Completos |
 | 10 ✅ | [Señales semanales](10_senales_semanales.md) | Solo lo que ha cambiado de verdad, con test estadístico, no ruido de dos partidos | Completos |
 | 11 ✅ | [Similitud de jugadores](11_similitud_de_jugadores.md) | Buscar entre los 968 jugadores quién se parece a X (fichajes y preparación del rival) | Completos |
+| 12 ✅ | [Impacto ajustado y constructor de quintetos](12_impacto_ajustado_y_constructor.md) | RAPM (+/- descontando compañeros y rivales) y los mejores quintetos con los disponibles | Completos |
+| 13 ✅ | [Patrón de rotación del rival](13_patron_de_rotacion.md) | Quién sale, cuándo descansan sus principales, quién cierra y en qué minutos sufre | Completos |
+| 14 | [Hoja de ruta](14_hoja_de_ruta.md) | Siguientes funciones (plan de rotación, predicción, minutos, momentos clave) y mejoras | — |
 
 ## Descartada de momento
 

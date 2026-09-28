@@ -47,13 +47,13 @@ from pptx.util import Inches, Pt
 # Mismo patrón de import doble que `postgame_ppt.py` (pytest vs. Streamlit,
 # ver `assistant/tools/context.py`).
 try:  # pragma: no cover - depende de cómo se arranque el proceso, no de la lógica
-    from app.analytics import shot_quality, win_thresholds
+    from app.analytics import rotation_patterns, shot_quality, win_thresholds
     from app.assistant.llm import LLMClient, LLMError
     from app.components.branding import CREST_PATH
     from app.data import queries, queries_assistant
     from app.reports import _deck
 except ImportError:  # pragma: no cover
-    from analytics import shot_quality, win_thresholds
+    from analytics import rotation_patterns, shot_quality, win_thresholds
     from assistant.llm import LLMClient, LLMError
     from components.branding import CREST_PATH
     from data import queries, queries_assistant
@@ -883,6 +883,39 @@ def _build_keys_slide(prs: Presentation, keys: List[str], rival_name: str) -> No
 # =================================================================== fachada ==
 
 
+def rotation_bullets(engine, rival_team_id: str, season_id: int, rival_name: str) -> List[str]:
+    """Resumen del patrón de rotación del rival (propuesta 13), el mismo que pinta "Próximo rival".
+
+    Lista vacía si la base de datos no tiene tramos (`lineup_stints`) para
+    ese rival: la diapositiva simplemente no se añade.
+    """
+    rows = queries.team_stint_rows(engine, rival_team_id, season_id)
+    if rows.empty:
+        return []
+    rotation = rotation_patterns.player_rotation_table(rotation_patterns.minute_shares(rows))
+    closers, close_games = rotation_patterns.closing_players(rows)
+    return rotation_patterns.rotation_insights(
+        rival_name,
+        rotation,
+        rotation_patterns.starting_lineups(rows),
+        closers,
+        close_games,
+        rotation_patterns.block_performance(rows),
+        queries_assistant.player_on_off(engine, rival_team_id, season_id),
+        n_games=int(rows["game_id"].nunique()),
+    )
+
+
+def _build_rotation_slide(prs: Presentation, bullets: List[str], rival_name: str) -> None:
+    _deck.add_bullets_slide(
+        prs,
+        title=f"Rotación de {rival_name}",
+        subtitle="Quién sale, cuándo descansan sus principales, quién cierra y dónde sufre",
+        bullets=bullets,
+        fallback_text="Sin tramos de quinteto para este rival.",
+    )
+
+
 def generate_scouting_ppt(
     engine,
     *,
@@ -1033,6 +1066,7 @@ def generate_scouting_ppt(
     return build_scouting_ppt(
         ctx, style_df, top_rows, player_highlights, lineups_df, shot_quality_bullets, game_keys,
         zones_df=zones_df, attack_zone_profile=attack_zone_profile, defense_zone_profile=defense_zone_profile,
+        rotation_summary=rotation_bullets(engine, rival_team_id, scouting_season_id, rival_name),
     )
 
 
@@ -1048,6 +1082,7 @@ def build_scouting_ppt(
     zones_df: Optional[pd.DataFrame] = None,
     attack_zone_profile: Optional[pd.DataFrame] = None,
     defense_zone_profile: Optional[pd.DataFrame] = None,
+    rotation_summary: Optional[List[str]] = None,
 ) -> bytes:
     """Bytes del `.pptx`: las seis diapositivas del dossier, con todo el texto ya resuelto.
 
@@ -1063,6 +1098,8 @@ def build_scouting_ppt(
             diapositiva de calidad de tiro (§4 de la propuesta 03). `None` (o
             vacío) degrada a la diapositiva sin mapas, solo con las viñetas —
             mismo criterio de "nunca un hueco vacío" que el resto del módulo.
+        rotation_summary: frases de `rotation_bullets` (propuesta 13). Si
+            viene vacío o `None`, la diapositiva de rotación no se añade.
     """
     rival_name = ctx["rival_name"]
     prs = _deck.new_presentation()
@@ -1074,6 +1111,8 @@ def build_scouting_ppt(
     )
     _build_player_slides(prs, player_rows, player_highlights, rival_name)
     _build_lineups_slide(prs, lineups_df, ctx["quarters_df"], rival_name)
+    if rotation_summary:
+        _build_rotation_slide(prs, rotation_summary, rival_name)
     _build_keys_slide(prs, game_keys, rival_name)
 
     buffer = io.BytesIO()

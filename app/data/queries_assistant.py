@@ -28,9 +28,13 @@ from sqlalchemy import inspect, text
 from sqlalchemy.engine import Engine
 
 try:  # pragma: no cover - ver nota en tools/context.py
+    from app.analytics import impact
     from app.analytics.shot_quality import shrink
+    from app.data import queries
 except ImportError:  # pragma: no cover
+    from analytics import impact
     from analytics.shot_quality import shrink
+    from data import queries
 
 _TTL = 3600  # mismo criterio que `queries.py`: la ingesta corre por su cuenta.
 
@@ -2076,3 +2080,20 @@ def foul_drawing_leaders(
     leaders["early_trouble_rate"] = leaders["early_trouble_games"] / leaders["gp"].replace(0, pd.NA)
 
     return leaders.sort_values("pf_drawn_per40", ascending=False).reset_index(drop=True)
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def season_impact(_engine: Engine, season_id: int, competition_id: Optional[int] = None) -> dict:
+    """RAPM de la temporada (propuesta 12), cacheado por temporada y competición.
+
+    El ajuste es de TODA la liga, no de un equipo: lo comparten la pantalla de
+    quintetos, cualquier equipo de su selector y el asistente, así que se
+    calcula una vez y se reutiliza.
+
+    Returns:
+        `{"fit": impact.fit_rapm(...), "segments": DataFrame, "names": {player_id: nombre}}`.
+    """
+    rows = queries.season_stint_rows(_engine, season_id, competition_id)
+    segments = impact.build_segments(rows)
+    names = dict(rows.drop_duplicates("player_id")[["player_id", "player_name"]].to_numpy()) if not rows.empty else {}
+    return {"fit": impact.fit_rapm(segments), "segments": segments, "names": names}

@@ -2211,3 +2211,69 @@ def team_game_advanced_log(_engine: Engine, team_id: str, season_id: int) -> pd.
         ORDER BY g.game_date
     """)
     return pd.read_sql(sql, _engine, params={"team_id": team_id, "season_id": season_id})
+
+
+# ---------------------------------------------------------------------------
+# Tramos de temporada: impacto ajustado (propuesta 12) y patrón de rotación
+# (propuesta 13). Una fila por (tramo, jugador), igual que `game_stints`, pero
+# de muchos partidos a la vez — el cálculo vive en `app/analytics/impact.py`
+# y `app/analytics/rotation_patterns.py`.
+# ---------------------------------------------------------------------------
+
+_SEASON_STINT_ROWS_SQL = """
+    SELECT s.id AS stint_id, s.game_id, g.game_date, s.team_id,
+           CASE WHEN g.home_team_id = s.team_id THEN 1 ELSE 0 END AS is_home,
+           s.start_seconds, s.end_seconds, s.points_for, s.points_against, s.margin_start,
+           sp.player_id, p.name AS player_name
+    FROM lineup_stints s
+    JOIN games g ON g.id = s.game_id
+    JOIN lineup_stint_players sp ON sp.stint_id = s.id
+    JOIN players p ON p.id = sp.player_id
+    WHERE g.season_id = :season_id
+      AND (:competition_id IS NULL OR g.competition_id = :competition_id)
+"""
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def season_stint_rows(_engine: Engine, season_id: int, competition_id: Optional[int] = None) -> pd.DataFrame:
+    """Todos los tramos de la temporada (los dos equipos de cada partido), uno por (tramo, jugador).
+
+    Es la entrada del RAPM: el ajuste necesita a los diez jugadores de cada
+    instante, así que no se puede filtrar por equipo antes de cruzar los
+    tramos del local con los del visitante (`analytics.impact.build_segments`).
+
+    Returns:
+        `stint_id, game_id, game_date, team_id, is_home, start_seconds,
+        end_seconds, points_for, points_against, margin_start, player_id,
+        player_name`. Vacío si la temporada no tiene tramos.
+    """
+    sql = text(_SEASON_STINT_ROWS_SQL + " ORDER BY s.game_id, s.start_seconds")
+    return pd.read_sql(sql, _engine, params={"season_id": season_id, "competition_id": competition_id})
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def team_stint_rows(
+    _engine: Engine,
+    team_id: str,
+    season_id: int,
+    competition_id: Optional[int] = None,
+    last_n_games: Optional[int] = None,
+) -> pd.DataFrame:
+    """Tramos de UN equipo en la temporada, uno por (tramo, jugador).
+
+    Args:
+        last_n_games: si se da, solo los últimos N partidos del equipo CON
+            tramos (la rotación de octubre no es la de marzo: lesiones,
+            fichajes, cambios de rol).
+
+    Returns:
+        Mismas columnas que `season_stint_rows`, en orden cronológico.
+    """
+    sql = text(_SEASON_STINT_ROWS_SQL + " AND s.team_id = :team_id ORDER BY g.game_date, s.start_seconds")
+    df = pd.read_sql(
+        sql, _engine, params={"season_id": season_id, "competition_id": competition_id, "team_id": team_id}
+    )
+    if last_n_games and not df.empty:
+        recent = df.drop_duplicates("game_id").sort_values("game_date")["game_id"].tail(last_n_games)
+        df = df[df["game_id"].isin(set(recent))].reset_index(drop=True)
+    return df
