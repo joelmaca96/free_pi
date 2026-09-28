@@ -31,6 +31,7 @@ from . import context as _context  # noqa: F401  (importar registra sus herramie
 from . import fatigue as _fatigue  # noqa: F401
 from . import league as _league  # noqa: F401
 from . import lineups as _lineups  # noqa: F401
+from . import minutes_plan as _minutes_plan  # noqa: F401
 from . import rotations as _rotations  # noqa: F401
 from . import rotation_plan as _rotation_plan  # noqa: F401
 from . import player as _player  # noqa: F401
