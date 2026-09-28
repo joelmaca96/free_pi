@@ -69,6 +69,35 @@ def is_out_of_scope_competition(competition_id: Optional[int]) -> bool:
     return competition_id is not None and competition_id not in _COMPETITION_BY_ID
 
 
+def senior_acb_club_id(team: Dict[str, Any]) -> Optional[int]:
+    """`clubId` estable de un equipo de ACB, o `None` si no es del primer equipo.
+
+    VERIFICADO EN VIVO (2026-09-28, ediciones 89-91): todo objeto de equipo de
+    la API -`teams[]` de `Competition/matches`, `teamBoxscores[].team` de
+    `Result/boxscores` y `teams.home/away` de `MatchHeader/match-header`- trae
+    `id` (cambia en CADA edición: Real Madrid 4239/4345/4407/4476), el nombre
+    (cambia con el patrocinador) y `clubId`, que no cambia: Manresa es 10 como
+    "BAXI Manresa" (4340 en 2024-25, 4414 en 2025-26) y como "Kids&Us Manresa"
+    (4471 en 2026-27). Ver `ingest/common/identity.py::resolve_or_create_team`.
+
+    Solo se devuelve para equipos de las competiciones que se cargan
+    (`_COMPETITION_BY_ID`, según el `competitionId` DEL EQUIPO): los de cantera
+    comparten el `clubId` del club (Liga U, `competitionId` 134: "Barça
+    Atlètic" lleva el 2 del Barça, "Fundacion CB Canarias" el 28 de La Laguna
+    Tenerife, "Unicaja Alhaurín de la Torre" el 14 de Unicaja), y fundirlos
+    con el primer equipo sería justo el error que esto viene a evitar. Sin
+    `competitionId` en el equipo (payload antiguo o de test) tampoco: sin él
+    no se puede saber de qué equipo del club se trata.
+    """
+    club_id = team.get("clubId")
+    if club_id is None or team.get("competitionId") not in _COMPETITION_BY_ID:
+        return None
+    try:
+        return int(club_id)
+    except (TypeError, ValueError):
+        return None
+
+
 def _competition_name(competition_id: Optional[int]) -> str:
     """Nombre de competición (fuente de verdad: `_COMPETITION_BY_ID`) para el esquema de scouting."""
     return _COMPETITION_BY_ID.get(competition_id, COMPETITION_NAME)
@@ -511,6 +540,12 @@ def build_raw_game(
 
     home_team = {"id": str(home_box["team"]["id"]), "name": home_box["team"]["fullName"]}
     away_team = {"id": str(away_box["team"]["id"]), "name": away_box["team"]["fullName"]}
+    # `acb_club_id` solo si lo hay (ver `senior_acb_club_id`): el contrato común
+    # (`ingest/common/raw_game.py`) no lo exige y las demás fuentes no lo traen.
+    for team, box in ((home_team, home_box), (away_team, away_box)):
+        club_id = senior_acb_club_id(box["team"])
+        if club_id is not None:
+            team["acb_club_id"] = club_id
 
     home_stats = _full_game_stats(home_box)
     away_stats = _full_game_stats(away_box)
@@ -667,6 +702,7 @@ def build_scheduled_matchup(
         "opponent_acb_id": opponent_id,
         "opponent_name": opponent["name"],
         "opponent_logo_url": opponent.get("logo_url"),
+        "opponent_acb_club_id": opponent.get("acb_club_id"),
         "match_date": str(start)[:10] if start else None,
         "is_home": is_home,
     }

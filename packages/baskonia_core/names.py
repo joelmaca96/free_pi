@@ -34,6 +34,21 @@ _CLUB_NOISE_WORDS = {
 # Alias conocidos que la normalización genérica no resuelve (nombres de
 # patrocinador, que cambian de temporada en temporada: "Kosner Baskonia",
 # "Saski Baskonia"... todos son el mismo equipo "Baskonia").
+#
+# DESDE 2026-09-28 ESTA LISTA YA NO ES LA PRIMERA LÍNEA DE DEFENSA en ACB:
+# cada equipo de la API de ACB trae un `clubId` estable entre temporadas y
+# patrocinadores (verificado en vivo, ver `ingest/common/identity.py::
+# resolve_or_create_team` y `doc/features/ingestor/01_estado.md`), y la
+# ingesta lo guarda en `teams.acb_club_id` y empareja por él ANTES que por
+# nombre. Un patrocinador nuevo de un club de ACB ya no crea un duplicado
+# aunque no esté aquí. La lista sigue sirviendo, y manda, para:
+#   - unir el mismo club ENTRE FUENTES ("Barça" de ACB con "FC Barcelona" de
+#     Euroliga: el `clubId` de ACB no existe en Euroliga, y el `code` de
+#     Euroliga no existe en ACB);
+#   - filas antiguas que todavía no tienen `acb_club_id` (se rellena solo en
+#     la siguiente ingesta que vuelva a ver ese equipo);
+#   - forzar a mano un emparejamiento que el emparejador difuso solo sugiere
+#     (`find_team_identity_suggestions`), que nunca fusiona por su cuenta.
 _KNOWN_TEAM_ALIASES = {
     "kosner baskonia": "baskonia",
     "saski baskonia": "baskonia",
@@ -80,6 +95,24 @@ _KNOWN_TEAM_ALIASES = {
 }
 
 
+def normalize_name_without_aliases(raw: str) -> str:
+    """`normalize_name` SIN resolver `_KNOWN_TEAM_ALIASES`.
+
+    Para quien necesita las palabras reales del nombre y no la forma canónica
+    del alias: el emparejador difuso de clubes
+    (`ingest.common.identity.find_team_identity_suggestions`) busca palabras
+    en común ("kids us manresa" y "baxi manresa" comparten `manresa`), y con
+    el alias ya aplicado las dos serían "baxi manresa" y no habría nada que
+    sugerir — ya serían una colisión exacta.
+    """
+    decomposed = unicodedata.normalize("NFKD", raw)
+    ascii_only = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+    ascii_only = ascii_only.lower()
+    ascii_only = re.sub(r"[^a-z0-9\s]", " ", ascii_only)
+    words = [w for w in ascii_only.split() if w not in _CLUB_NOISE_WORDS]
+    return " ".join(words).strip()
+
+
 def normalize_name(raw: str) -> str:
     """Normaliza un nombre (jugador o equipo) para comparar entre fuentes.
 
@@ -88,10 +121,5 @@ def normalize_name(raw: str) -> str:
     normalizan ambos a "valencia". También resuelve alias conocidos de
     patrocinador (`_KNOWN_TEAM_ALIASES`).
     """
-    decomposed = unicodedata.normalize("NFKD", raw)
-    ascii_only = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
-    ascii_only = ascii_only.lower()
-    ascii_only = re.sub(r"[^a-z0-9\s]", " ", ascii_only)
-    words = [w for w in ascii_only.split() if w not in _CLUB_NOISE_WORDS]
-    normalized = " ".join(words).strip()
+    normalized = normalize_name_without_aliases(raw)
     return _KNOWN_TEAM_ALIASES.get(normalized, normalized)

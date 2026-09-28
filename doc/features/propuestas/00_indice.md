@@ -73,6 +73,14 @@ implemente:
   han fusionado con retroactividad como el Barça: solo importa para un agregado por club de esos
   equipos concretos (ninguno juega ACB+Euroliga a la vez, así que no bloquean la 04), pero conviene
   planificar el mismo arreglo si se prepara scouting de alguno de ellos en profundidad.
+  **Actualización 2026-09-28:** la causa de fondo está cerrada para ACB — la API trae un `clubId`
+  estable entre temporadas y patrocinadores, que ahora se guarda en `teams.acb_club_id` y se usa
+  antes que el nombre, así que un patrocinador nuevo ya no crea duplicado aunque no esté en
+  `_KNOWN_TEAM_ALIASES` (que queda para cruzar ACB ↔ Euroliga). Los parecidos sin prueba salen
+  como sugerencia al final de cada ingesta y nunca se fusionan solos. Los ~23 pares ya cargados
+  se fusionan con copia previa con `tools/fix_team_identity.py --apply` o con
+  `python -m ingest.run_all --season 2026 --merge-team-duplicates`; pasos exactos en
+  [`ingestor/01_estado.md`](../ingestor/01_estado.md#identidad-de-club-sin-alias-a-mano-2026-09-28).
 - **La ficha biográfica está casi vacía**: `height_cm` es NULL en los 968 jugadores, `birth_date`
   solo existe en 12 y 452 jugadores tienen la posición en blanco. Limita sobre todo a
   [11](11_similitud_de_jugadores.md).

@@ -192,6 +192,19 @@ def _own_team_acb_external_id(conn, teams_by_id: Dict[str, Dict]) -> str:
     """
     from ingest.common.identity import normalize_name
 
+    # (2026-09-28) Primero por `clubId` estable (`teams.acb_club_id`, ver
+    # `ingest/common/identity.py::resolve_or_create_team`): no depende de que
+    # el patrocinador de este año esté en `_KNOWN_TEAM_ALIASES`. Solo cuando
+    # la fila propia aún no lo tiene (BD anterior a la columna) se cae al
+    # nombre, que es lo que la rellena en esta misma llamada.
+    own_club = conn.execute(
+        text("SELECT acb_club_id FROM teams WHERE is_own_team = 1 AND acb_club_id IS NOT NULL LIMIT 1")
+    ).scalar_one_or_none()
+    if own_club is not None:
+        for external_id, info in teams_by_id.items():
+            if info.get("acb_club_id") == own_club:
+                return external_id
+
     for external_id, info in teams_by_id.items():
         if normalize_name(info["name"]) == "baskonia":
             return external_id
@@ -246,7 +259,10 @@ def run_upcoming(engine: Engine, season: int, client: AcbClient = None) -> Dict[
 
         own_info = teams_by_id.get(own_acb_id)
         if own_info:
-            resolve_or_create_team(conn, "acb", own_acb_id, own_info["name"], logo_url=own_info.get("logo_url"))
+            resolve_or_create_team(
+                conn, "acb", own_acb_id, own_info["name"], logo_url=own_info.get("logo_url"),
+                acb_club_id=own_info.get("acb_club_id"),
+            )
 
         # `match_date is None` (falta `startDateTime`, visto en algún partido sin fecha
         # confirmada todavía) se descarta: `upcoming_matchups.match_date` es NOT NULL,
@@ -265,6 +281,7 @@ def run_upcoming(engine: Engine, season: int, client: AcbClient = None) -> Dict[
             opponent_team_id = resolve_or_create_team(
                 conn, "acb", matchup["opponent_acb_id"], matchup["opponent_name"],
                 logo_url=matchup["opponent_logo_url"],
+                acb_club_id=matchup.get("opponent_acb_club_id"),
             )
             conn.execute(
                 text(

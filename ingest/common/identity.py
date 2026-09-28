@@ -14,13 +14,18 @@ ingesta, y `ingest/` no viaja en la imagen de la interfaz (ver el docstring
 de ese módulo para el razonamiento completo). Se reexporta desde aquí para
 que todo lo que ya la importaba de `ingest.common.identity` siga funcionando.
 """
+import logging
 import re
-from typing import List, Optional, Tuple
+from collections import defaultdict
+from itertools import combinations
+from typing import Dict, List, Optional, Set, Tuple
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
-from packages.baskonia_core.names import normalize_name
+from packages.baskonia_core.names import normalize_name, normalize_name_without_aliases
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "normalize_name",
@@ -29,6 +34,7 @@ __all__ = [
     "resolve_or_create_team",
     "resolve_or_create_player",
     "find_team_identity_collisions",
+    "find_team_identity_suggestions",
     "find_player_identity_collisions",
     "find_merged_players",
 ]
@@ -129,13 +135,48 @@ def resolve_or_create_team(
     external_id: str,
     name: str,
     logo_url: Optional[str] = None,
+    acb_club_id: Optional[int] = None,
 ) -> str:
     """Resuelve el `teams.id` para un equipo de una fuente externa.
 
     Orden de resolución:
     1. `team_external_ids` (source, external_id) ya vinculado.
-    2. Nombre normalizado igual al de un equipo ya existente (crea el alias).
-    3. Ninguno de los anteriores: crea el equipo y el alias.
+    2. `teams.acb_club_id` igual a `acb_club_id` (solo si se pasa: hoy, ACB).
+    3. Nombre normalizado igual al de un equipo ya existente (crea el alias),
+       salvo que ese equipo ya lleve OTRO `acb_club_id` (ver abajo).
+    4. Ninguno de los anteriores: crea el equipo y el alias.
+
+    EL PASO 2 ES LO QUE HACE ROBUSTA LA IDENTIDAD DE CLUB EN ACB. ACB da un
+    `id` de equipo nuevo en CADA edición (no solo al cambiar de patrocinador:
+    el Real Madrid es 4239, 4345, 4407 y 4476 en cuatro temporadas seguidas),
+    y el nombre cambia con el patrocinador, así que ni el paso 1 ni el 3
+    reconocían a "Kids&Us Manresa" como el "BAXI Manresa" del año anterior
+    hasta que alguien añadía el alias a mano en `_KNOWN_TEAM_ALIASES`. Pero
+    el mismo payload trae `clubId`, que NO cambia (verificado en vivo
+    2026-09-28 en las ediciones 89-91: Manresa es 10 con los dos nombres,
+    Lleida 658 como Hiopos/Amara/iLERNA, Burgos 549, Granada 592...). Quien
+    llama solo debe pasarlo para equipos del PRIMER EQUIPO: los equipos de
+    cantera (Liga U, `competitionId` 134 en el propio equipo) comparten el
+    `clubId` del club — "Fundacion CB Canarias" lleva el 28 de La Laguna
+    Tenerife — y fundirlos con el primer equipo sería un error. Ver
+    `ingest/acb/adapter.py::senior_acb_club_id`.
+
+    El `acb_club_id` se apunta además en la fila resuelta si no lo tenía, así
+    que las filas antiguas lo van ganando solas en cada ingesta. Si la fila
+    ya lleva OTRO distinto, no se pisa: se avisa (dos clubes de ACB en una
+    fila es un alias demasiado laxo, o un emparejamiento por nombre
+    equivocado) y, en el paso 3, no se empareja — se crea una fila aparte,
+    que `find_team_identity_collisions` delatará por nombre para revisarla.
+
+    Deliberadamente NO hay aquí emparejamiento difuso por nombre ("Kids&Us
+    Manresa" ~ "BAXI Manresa"). Se estudió y no es seguro en el momento de
+    resolver: la señal que separa un cambio de patrocinador de dos clubes de
+    la misma ciudad es que los segundos juegan la misma competición la misma
+    temporada, y un equipo que aparece por primera vez todavía no ha jugado
+    nada — el primer partido de un Hapoel Tel Aviv recién ascendido es
+    indistinguible del primer partido de un Maccabi con patrocinador nuevo.
+    El difuso vive aparte, sobre datos ya cargados y solo como SUGERENCIA
+    (`find_team_identity_suggestions`).
 
     Args:
         logo_url: si se pasa (hoy solo `ingest/acb`, que trae `teams[].logo`
@@ -145,6 +186,9 @@ def resolve_or_create_team(
             de crear. `None` (por defecto) no toca la columna — así las
             demás fuentes (`baskonia_web`, `euroleague`), que no tienen
             escudo, no la pisan a `NULL` sin querer.
+        acb_club_id: `clubId` estable de ACB del equipo (ver arriba). `None`
+            (por defecto, y siempre desde otras fuentes) salta el paso 2 y no
+            toca la columna.
     """
     row = conn.execute(
         text(
@@ -156,15 +200,31 @@ def resolve_or_create_team(
     match = row[0] if row is not None else None
 
     if match is None:
-        normalized = normalize_name(name)
-        existing_teams = conn.execute(text("SELECT id, name FROM teams")).all()
-        match = next((t.id for t in existing_teams if normalize_name(t.name) == normalized), None)
+        if acb_club_id is not None:
+            match = _team_by_acb_club_id(conn, acb_club_id)
+
+        if match is None:
+            normalized = normalize_name(name)
+            existing_teams = conn.execute(text("SELECT id, name, acb_club_id FROM teams")).all()
+            by_name = next((t for t in existing_teams if normalize_name(t.name) == normalized), None)
+            if by_name is not None and _conflicting_club_ids(by_name.acb_club_id, acb_club_id):
+                logger.warning(
+                    "equipo %r (%s %s, clubId ACB %s) se llama igual que %r pero esa fila es del "
+                    "clubId ACB %s: NO se emparejan por nombre, se crea una fila aparte (revisa "
+                    "_KNOWN_TEAM_ALIASES)",
+                    name, source, external_id, acb_club_id, by_name.id, by_name.acb_club_id,
+                )
+                by_name = None
+            match = by_name.id if by_name is not None else None
 
         if match is None:
             team_id = _unique_id(conn, "teams", _slugify(name))
             conn.execute(
-                text("INSERT INTO teams (id, name, is_own_team) VALUES (:id, :name, 0)"),
-                {"id": team_id, "name": name},
+                text(
+                    "INSERT INTO teams (id, name, is_own_team, acb_club_id)"
+                    " VALUES (:id, :name, 0, :acb_club_id)"
+                ),
+                {"id": team_id, "name": name, "acb_club_id": acb_club_id},
             )
             match = team_id
 
@@ -176,10 +236,56 @@ def resolve_or_create_team(
             {"team_id": match, "source": source, "external_id": external_id},
         )
 
+    if acb_club_id is not None:
+        _record_acb_club_id(conn, match, acb_club_id)
+
     if logo_url:
         conn.execute(text("UPDATE teams SET logo_url = :logo_url WHERE id = :id"), {"logo_url": logo_url, "id": match})
 
     return match
+
+
+def _conflicting_club_ids(a: Optional[int], b: Optional[int]) -> bool:
+    """`True` si los dos `acb_club_id` existen y son distintos (dos clubes de ACB)."""
+    return a is not None and b is not None and int(a) != int(b)
+
+
+def _team_by_acb_club_id(conn: Connection, acb_club_id: int) -> Optional[str]:
+    """`teams.id` que lleva ese `clubId` de ACB, o `None`.
+
+    Si hay varias (filas duplicadas de antes de que existiera la columna, a la
+    espera de `tools/fix_team_identity.py`), la misma preferencia que el
+    superviviente de esa herramienta: el equipo propio, luego el que más
+    partidos tiene — para no seguir engordando la fila que va a desaparecer.
+    """
+    row = conn.execute(
+        text(
+            "SELECT t.id FROM teams t WHERE t.acb_club_id = :club"
+            " ORDER BY t.is_own_team DESC,"
+            " (SELECT COUNT(*) FROM games g WHERE g.home_team_id = t.id OR g.away_team_id = t.id) DESC,"
+            " t.id"
+        ),
+        {"club": int(acb_club_id)},
+    ).first()
+    return row[0] if row is not None else None
+
+
+def _record_acb_club_id(conn: Connection, team_id: str, acb_club_id: int) -> None:
+    """Apunta `acb_club_id` en `team_id` si no tenía; avisa si tenía otro."""
+    current = conn.execute(
+        text("SELECT acb_club_id FROM teams WHERE id = :id"), {"id": team_id}
+    ).scalar_one_or_none()
+    if current is None:
+        conn.execute(
+            text("UPDATE teams SET acb_club_id = :club WHERE id = :id"),
+            {"club": int(acb_club_id), "id": team_id},
+        )
+    elif int(current) != int(acb_club_id):
+        logger.warning(
+            "la fila de equipo %r es del clubId ACB %s pero acaba de resolverse para el clubId %s: "
+            "dos clubes en una fila (¿alias demasiado laxo en _KNOWN_TEAM_ALIASES?). No se toca.",
+            team_id, current, acb_club_id,
+        )
 
 
 def resolve_or_create_player(
@@ -309,21 +415,183 @@ def find_team_identity_collisions(conn: Connection) -> List[Tuple[str, str]]:
     migración de datos de una vez (`tools/fix_barca_identity.py` es el
     ejemplo real), no algo que la ingesta pueda deshacer sola.
 
+    Desde 2026-09-28 cuenta también como colisión EXACTA que dos filas lleven
+    el mismo `teams.acb_club_id`: es el identificador estable del club en ACB
+    (ver `resolve_or_create_team`), así que no hay duda posible — son el
+    mismo club aunque se llamen distinto ("BAXI Manresa"/"Kids&Us Manresa"
+    sin alias). Es lo que permite fusionarlas sin haber tocado
+    `_KNOWN_TEAM_ALIASES`. Las parecidas-pero-no-seguras van aparte, como
+    sugerencia (`find_team_identity_suggestions`).
+
     Returns:
         Lista de `(team_id_a, team_id_b)`, ordenado alfabéticamente dentro de
         cada par, uno por cada equipo adicional que comparte nombre
-        normalizado con uno visto antes. Vacía si no hay colisiones.
+        normalizado (o `acb_club_id`) con uno visto antes. Vacía si no hay
+        colisiones.
     """
-    rows = conn.execute(text("SELECT id, name FROM teams ORDER BY id")).all()
-    seen: dict = {}
+    rows = conn.execute(text("SELECT id, name, acb_club_id FROM teams ORDER BY id")).all()
     collisions: List[Tuple[str, str]] = []
-    for row in rows:
-        key = normalize_name(row.name)
-        if key in seen:
-            collisions.append(tuple(sorted((seen[key], row.id))))
-        else:
-            seen[key] = row.id
+    seen_pairs: Set[frozenset] = set()
+    for key_of in (lambda r: normalize_name(r.name), lambda r: r.acb_club_id):
+        seen: dict = {}
+        for row in rows:
+            key = key_of(row)
+            if key is None:
+                continue
+            if key in seen:
+                pair = tuple(sorted((seen[key], row.id)))
+                if frozenset(pair) not in seen_pairs:
+                    seen_pairs.add(frozenset(pair))
+                    collisions.append(pair)
+            else:
+                seen[key] = row.id
     return collisions
+
+
+#: Palabras de nombre de club que no identifican a un club concreto aunque
+#: sean largas: si dos equipos solo comparten una de estas, no es señal de
+#: nada ("Real Madrid"/"Real Betis", "Gran Canaria"/"Gran ...", los equipos
+#: de cantera "Fundación X" de clubes distintos). NO es una lista de
+#: patrocinadores (esa sería otra vez una lista a mano que se queda vieja):
+#: son palabras genéricas del idioma de los nombres de club, que no cambian.
+_GENERIC_TEAM_WORDS = {
+    "real", "gran", "fundacion", "union", "sporting", "atletico", "athletic",
+    "basketball", "basketbol", "basquetbol", "koszykowka", "club", "team",
+    "city", "grupo", "sociedad", "deportiva", "deportivo", "olimpia",
+}
+
+#: Longitud mínima de una palabra para contar como "núcleo" del nombre.
+#: Deja fuera artículos, siglas y restos de patrocinador cortos ("us" de
+#: "Kids&Us", "fc", "as", "tfe", "zgz").
+_MIN_CORE_WORD_LEN = 4
+
+
+def _team_core_words(name: str) -> Set[str]:
+    """Palabras del nombre que pueden identificar a un club (ciudad/nombre propio).
+
+    "Kids&Us Manresa" -> {kids, manresa}; "BAXI Manresa" -> {baxi, manresa}:
+    comparten `manresa`. No intenta saber cuál es el patrocinador: basta con
+    que dos nombres compartan ALGUNA palabra de este conjunto para que sean
+    candidatos, y lo que separa a los candidatos buenos de los malos no es el
+    nombre sino los datos (ver `find_team_identity_suggestions`).
+    """
+    return {
+        w for w in normalize_name_without_aliases(name).split()
+        if len(w) >= _MIN_CORE_WORD_LEN and w not in _GENERIC_TEAM_WORDS and not w.isdigit()
+    }
+
+
+def find_team_identity_suggestions(conn: Connection) -> List[dict]:
+    """Pares de clubes que PARECEN el mismo pero sin prueba: solo para revisar a mano.
+
+    Es la mitad difusa del problema de identidad de club, la que no cubre ni
+    `acb_club_id` (solo existe en ACB, y solo en filas que una ingesta ya ha
+    rellenado) ni `_KNOWN_TEAM_ALIASES` (solo lo que alguien ya apuntó):
+    "Kids&Us Manresa" y "BAXI Manresa" comparten `manresa`; el nombre de un
+    club en Euroliga y en ACB, cuando ninguno de los dos está en la lista.
+
+    NUNCA fusiona ni vincula nada, y no lo hará `ingest/run_all.py
+    --merge-team-duplicates` tampoco (esa solo toca colisiones exactas). La
+    razón es que "comparten una palabra" es exactamente lo que pasa con dos
+    clubes de la misma ciudad — Anadolu Efes y Fenerbahçe (`istanbul`),
+    Maccabi y Hapoel (`aviv`), Crvena Zvezda y Partizan (`belgrade`), Real
+    Madrid y un "Estudiantes Madrid" —, y fundir dos clubes en una fila es
+    corrupción que no se deshace. Para aceptar una sugerencia: añadir el
+    alias a `_KNOWN_TEAM_ALIASES` y fusionar con `tools/fix_team_identity.py`.
+
+    Un par comparte alguna palabra de `_team_core_words` y NO es ya una
+    colisión exacta, y se DESCARTA (no se sugiere) si hay prueba de que son
+    dos clubes:
+
+    - los dos jugaron (o tienen calendario, `upcoming_matchups`) en la misma
+      competición la misma temporada: un club no juega dos veces la misma
+      liga — es lo que separa a los dos de Estambul;
+    - se han enfrentado entre sí;
+    - los dos tienen `acb_club_id` y es distinto;
+    - los dos tienen `code` de Euroliga y no comparten ninguno (el `code` de
+      Euroliga es estable por club).
+
+    `ambiguous=True` marca un par en el que alguno de los dos tiene OTRO
+    candidato que es incompatible con el primero (p.ej. un equipo nuevo "X
+    Istanbul" que podría ser tanto el Efes como el Fenerbahçe): ahí ni
+    siquiera la sugerencia apunta a un club concreto.
+
+    Returns:
+        `[{"team_ids": (a, b), "names": (name_a, name_b), "shared_words":
+        [...], "ambiguous": bool}]`, ordenada por `team_ids`. Vacía si no hay
+        nada que sugerir.
+    """
+    teams = conn.execute(text("SELECT id, name, acb_club_id FROM teams ORDER BY id")).all()
+    if len(teams) < 2:
+        return []
+
+    played: Dict[str, Set[Tuple[int, int]]] = defaultdict(set)
+    opponents: Dict[str, Set[str]] = defaultdict(set)
+    for g in conn.execute(
+        text("SELECT season_id, competition_id, home_team_id, away_team_id FROM games")
+    ).all():
+        played[g.home_team_id].add((g.season_id, g.competition_id))
+        played[g.away_team_id].add((g.season_id, g.competition_id))
+        opponents[g.home_team_id].add(g.away_team_id)
+        opponents[g.away_team_id].add(g.home_team_id)
+    for u in conn.execute(
+        text("SELECT opponent_team_id, season_id, competition_id FROM upcoming_matchups")
+    ).all():
+        played[u.opponent_team_id].add((u.season_id, u.competition_id))
+
+    euroleague_codes: Dict[str, Set[str]] = defaultdict(set)
+    for row in conn.execute(
+        text("SELECT team_id, external_id FROM team_external_ids WHERE source = 'euroleague'")
+    ).all():
+        euroleague_codes[row.team_id].add(row.external_id)
+
+    info = {
+        t.id: {
+            "name": t.name,
+            "normalized": normalize_name(t.name),
+            "club": t.acb_club_id,
+            "core": _team_core_words(t.name),
+        }
+        for t in teams
+    }
+
+    def exact(a: str, b: str) -> bool:
+        return info[a]["normalized"] == info[b]["normalized"] or (
+            info[a]["club"] is not None and info[a]["club"] == info[b]["club"]
+        )
+
+    def provably_distinct(a: str, b: str) -> bool:
+        if played[a] & played[b] or b in opponents[a]:
+            return True
+        if _conflicting_club_ids(info[a]["club"], info[b]["club"]):
+            return True
+        codes_a, codes_b = euroleague_codes.get(a), euroleague_codes.get(b)
+        return bool(codes_a and codes_b and not codes_a & codes_b)
+
+    candidates: Dict[str, Set[str]] = defaultdict(set)
+    shared_by_pair: Dict[Tuple[str, str], Set[str]] = {}
+    for a, b in combinations(sorted(info), 2):
+        shared = info[a]["core"] & info[b]["core"]
+        if not shared or exact(a, b) or provably_distinct(a, b):
+            continue
+        candidates[a].add(b)
+        candidates[b].add(a)
+        shared_by_pair[(a, b)] = shared
+
+    suggestions = []
+    for (a, b), shared in sorted(shared_by_pair.items()):
+        ambiguous = any(provably_distinct(b, c) for c in candidates[a] - {b}) or any(
+            provably_distinct(a, c) for c in candidates[b] - {a}
+        )
+        suggestions.append(
+            {
+                "team_ids": (a, b),
+                "names": (info[a]["name"], info[b]["name"]),
+                "shared_words": sorted(shared),
+                "ambiguous": ambiguous,
+            }
+        )
+    return suggestions
 
 
 def find_player_identity_collisions(conn: Connection) -> List[Tuple[str, str]]:

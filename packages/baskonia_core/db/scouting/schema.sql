@@ -29,7 +29,17 @@ CREATE TABLE teams (
   -- de ingest/ lo puebla todavía (ver local/features/003-vista-plantilla/
   -- 01_design.md §9) — la UI debe degradar a un badge con iniciales, no a un
   -- hueco vacío, mientras esta columna esté en NULL para todos los equipos.
-  logo_url    TEXT
+  logo_url    TEXT,
+  -- Identificador ESTABLE del club en ACB (`clubId` de la API, verificado en
+  -- vivo 2026-09-28: Manresa es 10 como "BAXI Manresa" en 2024-25 y 2025-26 y
+  -- como "Kids&Us Manresa" en 2026-27, mientras el `id` de equipo cambia en
+  -- CADA edición). `resolve_or_create_team` empareja por él antes que por
+  -- nombre; dos filas con el mismo valor son el mismo club (colisión exacta,
+  -- ver `find_team_identity_collisions`). NULL = equipo sin paso por ACB o
+  -- aún no visto por una ingesta que lo rellene. Sin UNIQUE a propósito: las
+  -- filas duplicadas que ya existen tienen que poder llevar el mismo valor
+  -- para que se detecten y se fusionen (`tools/fix_team_identity.py`).
+  acb_club_id INTEGER
 );
 
 -- Puente de identidad: un mismo equipo real (p.ej. Valencia Basket) aparece
