@@ -63,3 +63,45 @@ def test_lineup_builder_respects_unavailable_players(engine, ctx):
     for lineup in result["data"]["best_lineups"]:
         assert "Maik Kotsar" not in lineup["players"]  # …pero no entra en ningún quinteto
     assert any("aditivo" in warning for warning in result["meta"]["warnings"])
+    # La temporada del seed no tiene anterior: sin prior y sin aviso de prior.
+    assert result["data"]["prior_season"] is None
+    assert not any("punto de partida" in warning for warning in result["meta"]["warnings"])
+
+
+def _seed_league_season(engine):
+    """Tramos en la temporada sintética (2): `bas` recibe a `val` en `syn-2-3` (ver `_add_league`)."""
+    add_stints(engine, [
+        ("syn-2-3", "bas", 0.0, 1200.0, 30, 20, 0, _STARTERS),
+        ("syn-2-3", "bas", 1200.0, 2400.0, 20, 26, 10, _BENCH),
+        ("syn-2-3", "val", 0.0, 2400.0, 46, 50, 0, _VAL),
+    ])
+
+
+def test_lineup_builder_uses_the_previous_season_as_prior_by_default(engine, league_ctx):
+    _seed(engine)                 # temporada 1: la anterior
+    _seed_league_season(engine)   # temporada 2: la que se pregunta
+    league_ctx.capabilities = probe(engine)
+
+    result = ToolCatalog(league_ctx).execute("1", "lineup_builder", {"team_id": "bas"}).result
+
+    assert "error" not in result, result
+    assert result["data"]["prior_season"] == "2025-2026"
+    assert any("2025-2026" in w and "punto de partida" in w for w in result["meta"]["warnings"])
+    howard = next(row for row in result["data"]["player_impact"] if row["player_id"] == "howard")
+    assert {"rapm_no_prior", "prior"} <= set(howard)
+    assert howard["prior"] is not None
+
+
+def test_lineup_builder_can_ignore_the_previous_season(engine, league_ctx):
+    _seed(engine)
+    _seed_league_season(engine)
+    league_ctx.capabilities = probe(engine)
+
+    result = ToolCatalog(league_ctx).execute(
+        "1", "lineup_builder", {"team_id": "bas", "use_prior": False}
+    ).result
+
+    assert "error" not in result, result
+    assert result["data"]["prior_season"] is None
+    assert not any("punto de partida" in warning for warning in result["meta"]["warnings"])
+    assert "prior" not in result["data"]["player_impact"][0]

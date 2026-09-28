@@ -24,6 +24,13 @@ interfaz (no por 100 posesiones: `lineup_stints` no guarda posesiones, ver
 jugador medio, el equipo gana 3 puntos más cada 40 minutos, descontado con
 quién y contra quién jugó".
 
+**Prior de la temporada anterior** (propuesta 12, §6): una temporada es
+poca muestra, y el ridge "a secas" encoge a todo el mundo hacia 0 (jugador
+medio). `fit_rapm(..., prior=...)` lo encoge en cambio hacia lo que el
+jugador hizo la temporada pasada (rebajado por `PRIOR_WEIGHT`): el jugador de
+rotación con 400 minutos deja de parecer "del montón" solo por falta de
+muestra. Ver la docstring de `fit_rapm`.
+
 **El constructor** usa el modelo aditivo: el valor proyectado de un quinteto
 es la suma del RAPM de sus cinco. No capta química (dos que se estorban),
 por eso cada propuesta viaja con los minutos REALES que ese quinteto exacto
@@ -34,7 +41,7 @@ Lógica pura sobre `pandas`/`numpy`, sin Streamlit ni SQLAlchemy (regla del
 paquete, ver `app/analytics/__init__.py`).
 """
 from itertools import combinations
-from typing import Dict, Iterable, List, Optional, Sequence
+from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -59,6 +66,29 @@ MIN_RELIABLE_MINUTES = 300.0
 #: segundo con un tiro libre en medio es una diferencia por 40 absurda que
 #: solo pesa por su minuto, pero ensucia las tablas de depuración.
 MIN_SEGMENT_SECONDS = 1.0
+
+#: Cuánto de la temporada anterior se toma como punto de partida:
+#: β₀ = `PRIOR_WEIGHT` · RAPM_anterior. El ruido de la estimación anterior
+#: ya lo descuenta su propio ridge (quien jugó poco llega casi a 0); este
+#: peso descuenta lo que el ridge NO ve: que el impacto real cambia de un
+#: año a otro (edad, rol, sistema, cambio de equipo, lesiones). 0,7 es el
+#: orden de la correlación año a año que se publica para las métricas de
+#: +/- ajustado regularizadas en la NBA (0,6-0,8). En simulación (impacto
+#: que cambia poco o bastante entre temporadas) pesos más altos, hasta 1,
+#: predicen algo mejor, pero la ganancia de 0,7 a 1 es pequeña frente a la
+#: de 0 a 0,7, y la simulación no tiene cambios de rol ni fichajes: se
+#: queda en 0,7 por prudencia hasta calibrarlo con `cross_validate_ridge`
+#: (prior con distintos pesos) sobre la base de datos real.
+PRIOR_WEIGHT = 0.7
+
+#: Punto de partida de quien NO tiene temporada anterior (recién llegado a la
+#: liga o sin minutos en ella): 0, jugador medio, igual que sin prior. Es
+#: frecuente usar un "nivel de reemplazo" algo negativo (−1 a −2 por 40:
+#: el que llega sin historial suele ser peor que la media de quienes sí lo
+#: tienen), pero aquí se deja en 0 por neutralidad —el fichaje estrella que
+#: viene de otra liga no es un jugador de reemplazo— y se puede cambiar por
+#: llamada con `newcomer_prior`.
+NEWCOMER_PRIOR = 0.0
 
 _STINT_COLUMNS = {
     "stint_id", "game_id", "team_id", "is_home", "start_seconds", "end_seconds",
@@ -205,39 +235,149 @@ def _normal_equations(idx, signs, weights, target, n_players: int):
     return xtx.reshape(size, size), xty
 
 
-def _solve(xtx: np.ndarray, xty: np.ndarray, ridge: float) -> np.ndarray:
+def _solve(xtx: np.ndarray, xty: np.ndarray, ridge: float, beta0: Optional[np.ndarray] = None) -> np.ndarray:
+    """Resuelve `(XᵀWX + λI)β = XᵀWy + λβ₀` (con `beta0=None`, β₀ = 0: el ridge de siempre)."""
     penalty = np.full(len(xty), ridge)
     penalty[-1] = 1e-6  # la ventaja de campo no se regulariza
-    return np.linalg.solve(xtx + np.diag(penalty), xty)
+    rhs = xty if beta0 is None else xty + penalty * beta0
+    return np.linalg.solve(xtx + np.diag(penalty), rhs)
 
 
-def fit_rapm(segments: pd.DataFrame, ridge: float = RIDGE_LAMBDA) -> dict:
+def _prior_vector(
+    players: Sequence[str], prior: Mapping[str, float], prior_weight: float, newcomer_prior: float
+) -> Tuple[np.ndarray, np.ndarray]:
+    """β₀ (P+1: jugadores + ventaja de campo, esta a 0) y máscara de quién trae prior.
+
+    Un valor no finito (NaN) en `prior` cuenta como "sin prior".
+    """
+    if not 0.0 <= prior_weight <= 1.0:
+        raise ValueError(f"prior_weight tiene que estar entre 0 y 1 (llegó {prior_weight})")
+    values = dict(prior)
+    beta0 = np.zeros(len(players) + 1)
+    has = np.zeros(len(players), dtype=bool)
+    for i, p in enumerate(players):
+        v = values.get(p)
+        if v is not None and np.isfinite(float(v)):
+            beta0[i] = prior_weight * float(v)
+            has[i] = True
+        else:
+            beta0[i] = newcomer_prior
+    return beta0, has
+
+
+_PLAYER_COLUMNS = ["player_id", "rapm", "minutes", "reliable", "rapm_no_prior", "prior", "has_prior"]
+
+
+def fit_rapm(
+    segments: pd.DataFrame,
+    ridge: float = RIDGE_LAMBDA,
+    *,
+    prior: Optional[Mapping[str, float]] = None,
+    prior_weight: float = PRIOR_WEIGHT,
+    newcomer_prior: float = NEWCOMER_PRIOR,
+) -> dict:
     """Ajusta el RAPM sobre segmentos de diez jugadores.
+
+    **Con prior** (`prior={player_id: RAPM anterior}`, p.ej. `prior_from_fit`
+    del ajuste de la temporada pasada) el ridge no encoge hacia 0 sino hacia
+    β₀ = `prior_weight` · prior:
+
+        min ‖W^½(y − Xβ)‖² + λ‖β − β₀‖²   ⇒   (XᵀWX + λI)β = XᵀWy + λβ₀
+
+    Es la media a posteriori con la temporada pasada como media a priori: con
+    pocos minutos este año manda lo que se sabía; con muchos, los datos de
+    este año se imponen (a 1200 minutos, mitad y mitad; a 5000, el prior
+    apenas mueve el número). Quien no aparece en `prior` se encoge hacia
+    `newcomer_prior` (0 por defecto: jugador medio, como sin prior). La
+    ventaja de campo nunca se regulariza ni tiene prior.
+
+    Se mantiene el mismo λ que sin prior. En rigor λ = σ²/τ² con τ la
+    dispersión del impacto real ALREDEDOR del punto de partida, que con un
+    buen prior es menor que alrededor de 0 (λ podría ser algo mayor); se deja
+    igual por prudencia y `cross_validate_ridge(prior=...)` permite medirlo.
+
+    **Alternativa descartada: agrupar temporadas.** Un solo ajuste con las
+    dos temporadas y los minutos de la anterior con peso decreciente (p.ej.
+    ×0,5) usa directamente con quién jugó cada uno el año pasado, pero da UN
+    coeficiente por jugador para los dos años (supone que su impacto no ha
+    cambiado), duplica el tamaño del ajuste, obliga a que la caché dependa de
+    dos temporadas a la vez y mezcla el rendimiento de un jugador con dos
+    equipos distintos en un único número. El prior conserva un ajuste por
+    temporada, independiente y cacheado, y se reduce a un vector más en la
+    ecuación. Tampoco se usa la varianza a posteriori de cada jugador de la
+    temporada anterior (un λ por jugador): el propio ridge ya ha llevado a
+    ~0 a quien jugó poco, que es la mayor parte de ese efecto.
+
+    Args:
+        prior: `{player_id: RAPM}` SIN ponderar (el peso se aplica aquí).
+            `None` = sin prior, exactamente el cálculo de siempre.
+        prior_weight: fracción del prior que se toma como punto de partida
+            (0..1, por defecto `PRIOR_WEIGHT`).
+        newcomer_prior: punto de partida de quien no tiene prior.
 
     Returns:
         `{"players": DataFrame, "home_advantage": float, "segments": int,
-        "ridge": float}`. `players` trae `player_id, rapm, minutes,
-        reliable`, ordenado por `rapm`. `home_advantage` es la ventaja de
-        campo estimada en puntos por 40 (control, no se enseña como dato de
-        jugador). Con `segments` vacío, `players` sale vacío.
+        "ridge": float, "prior_used": bool, "prior_weight": float | None,
+        "prior_players": int}`. `players` trae `player_id, rapm, minutes,
+        reliable, rapm_no_prior, prior, has_prior`, ordenado por `rapm`:
+        `rapm` es el valor final (con prior si lo hay), `rapm_no_prior` el
+        de esta temporada sola (igual a `rapm` sin prior), `prior` el punto
+        de partida β₀ ya ponderado (NaN si el jugador no tiene prior o no se
+        pasa prior) y `has_prior` si lo tenía. `home_advantage` es la ventaja
+        de campo estimada en puntos por 40 (control, no se enseña como dato
+        de jugador). `prior_players` = jugadores de esta temporada con prior.
+        Con `segments` vacío, `players` sale vacío.
     """
-    empty = pd.DataFrame(columns=["player_id", "rapm", "minutes", "reliable"])
+    used = prior is not None
+    base = {
+        "ridge": ridge, "prior_used": used, "prior_weight": prior_weight if used else None, "prior_players": 0,
+    }
     if segments.empty:
-        return {"players": empty, "home_advantage": float("nan"), "segments": 0, "ridge": ridge}
+        return {
+            "players": pd.DataFrame(columns=_PLAYER_COLUMNS), "home_advantage": float("nan"), "segments": 0, **base,
+        }
 
     players = sorted(set().union(*segments["home_players"], *segments["away_players"]))
     player_index = {p: i for i, p in enumerate(players)}
     idx, signs, weights, target = _design(segments, player_index)
     xtx, xty = _normal_equations(idx, signs, weights, target, len(players))
-    beta = _solve(xtx, xty, ridge)
+    beta_no_prior = _solve(xtx, xty, ridge)
+    if used:
+        beta0, has = _prior_vector(players, prior, prior_weight, newcomer_prior)
+        beta = _solve(xtx, xty, ridge, beta0)
+        prior_col = np.where(has, beta0[:-1], np.nan)
+    else:
+        beta, has = beta_no_prior, np.zeros(len(players), dtype=bool)
+        prior_col = np.full(len(players), np.nan)
 
     minutes = np.zeros(len(players))
     for k in range(10):
         np.add.at(minutes, idx[:, k], weights)
     df = pd.DataFrame({"player_id": players, "rapm": beta[:-1], "minutes": minutes})
     df["reliable"] = df["minutes"] >= MIN_RELIABLE_MINUTES
+    df["rapm_no_prior"] = beta_no_prior[:-1]
+    df["prior"] = prior_col
+    df["has_prior"] = has
     df = df.sort_values("rapm", ascending=False).reset_index(drop=True)
-    return {"players": df, "home_advantage": float(beta[-1]), "segments": len(segments), "ridge": ridge}
+    base["prior_players"] = int(has.sum())
+    return {"players": df, "home_advantage": float(beta[-1]), "segments": len(segments), **base}
+
+
+def prior_from_fit(fit: Optional[dict]) -> Dict[str, float]:
+    """Prior para la temporada siguiente a partir de un ajuste: `{player_id: rapm}`, SIN ponderar.
+
+    `fit_rapm` aplica `prior_weight` al usarlo. No hace falta filtrar a quien
+    jugó poco en esa temporada: su RAPM ya viene encogido hacia 0 por el
+    ridge, así que su prior es casi neutro por construcción. Se toma `rapm`
+    (el valor final): si ese ajuste ya llevaba prior, el nuevo arrastra
+    también, cada vez más rebajada, la temporada de antes (encadenado). En
+    `queries_assistant.season_impact` la temporada anterior se ajusta SIN
+    prior, así que solo cuenta un año hacia atrás.
+    """
+    players = fit.get("players") if fit else None
+    if players is None or players.empty:
+        return {}
+    return {str(p): float(v) for p, v in zip(players["player_id"], players["rapm"]) if np.isfinite(v)}
 
 
 def cross_validate_ridge(
@@ -245,6 +385,10 @@ def cross_validate_ridge(
     grid: Sequence[float] = (300.0, 600.0, 1200.0, 2400.0, 4800.0),
     folds: int = 5,
     seed: int = 0,
+    *,
+    prior: Optional[Mapping[str, float]] = None,
+    prior_weight: float = PRIOR_WEIGHT,
+    newcomer_prior: float = NEWCOMER_PRIOR,
 ) -> pd.DataFrame:
     """Error de predicción fuera de muestra para cada λ, con pliegues por PARTIDO.
 
@@ -253,6 +397,10 @@ def cross_validate_ridge(
     filtraría información. Sirve para comprobar `RIDGE_LAMBDA` contra la base
     de datos servida (`tools/` o una celda de cuaderno), no para la
     interfaz, que usa la constante.
+
+    Con `prior` (mismos argumentos que `fit_rapm`) valida el RAPM con prior:
+    comparar su `mse` con el de la misma llamada sin prior dice si la
+    temporada anterior ayuda a predecir esta, y con qué `prior_weight`.
 
     Returns:
         `ridge, mse` (error cuadrático ponderado por minutos), ordenado por `ridge`.
@@ -268,6 +416,7 @@ def cross_validate_ridge(
 
     idx, signs, weights, target = _design(segments, player_index)
     total_xtx, total_xty = _normal_equations(idx, signs, weights, target, len(players))
+    beta0 = None if prior is None else _prior_vector(players, prior, prior_weight, newcomer_prior)[0]
     errors = {r: [0.0, 0.0] for r in grid}
     for f in range(folds):
         test = fold == f
@@ -277,7 +426,7 @@ def cross_validate_ridge(
         design_test = np.hstack([idx[test], np.full((test.sum(), 1), len(players))])
         signs_test = np.concatenate([signs, [1.0]])
         for r in grid:
-            beta = _solve(total_xtx - t_xtx, total_xty - t_xty, r)
+            beta = _solve(total_xtx - t_xtx, total_xty - t_xty, r, beta0)
             pred = (beta[design_test] * signs_test).sum(axis=1)
             errors[r][0] += float((weights[test] * (target[test] - pred) ** 2).sum())
             errors[r][1] += float(weights[test].sum())
