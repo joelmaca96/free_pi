@@ -7,6 +7,14 @@ que falla no detiene a los demás; se reporta al final qué se cargó y qué no.
 Uso:
     .venv/Scripts/python.exe -m ingest.run_all --season 2025
     .venv/Scripts/python.exe -m ingest.run_all --season 2025 --skip euroleague
+    .venv/Scripts/python.exe -m ingest.run_all --season 2025 --skip acb_profiles
+    .venv/Scripts/python.exe -m ingest.run_all --season 2025 --profiles-limit 20
+
+Tras los partidos de ACB corre `acb_profiles` (ficha de jugador desde la web
+de acb.com, solo jugadores con huecos, con tope por pasada) y, tras los de
+Euroliga, `euroleague_roster` (ficha desde la API de plantillas). Las dos
+rellenan huecos sin pisar nada; ver `ingest/acb/profiles.py` y
+`ingest/euroleague/roster.py`.
 """
 import argparse
 import logging
@@ -22,8 +30,14 @@ from ingest.common.logging_utils import configure_logging
 logger = logging.getLogger(__name__)
 
 
-def run_all(season: int, database_url: str = None, skip: tuple = ()) -> dict:
-    """Ejecuta baskonia_web -> acb -> euroleague, en ese orden, y devuelve un resumen."""
+def run_all(season: int, database_url: str = None, skip: tuple = (), profiles_limit: int = None) -> dict:
+    """Ejecuta baskonia_web -> acb -> acb_profiles -> euroleague, en ese orden, y devuelve un resumen.
+
+    `profiles_limit`: tope de fichas de acb.com por pasada (`None` = el
+    `DEFAULT_LIMIT` de `ingest/acb/profiles.py`).
+    """
+    if profiles_limit is None:
+        from ingest.acb.profiles import DEFAULT_LIMIT as profiles_limit
     engine = get_engine(database_url)
     results = {}
 
@@ -62,6 +76,25 @@ def run_all(season: int, database_url: str = None, skip: tuple = ()) -> dict:
         results["acb"] = {"ok": None, "summary": "omitido"}
         results["acb_upcoming"] = {"ok": None, "summary": "omitido"}
 
+    # Ficha biográfica desde la web de acb.com (posición/altura/nacimiento/
+    # nacionalidad), solo de jugadores con huecos y con tope por pasada — ver
+    # `ingest/acb/profiles.py`. DESPUÉS de los partidos de ACB (solo actualiza
+    # jugadores que ya existen) y ANTES de la ficha de Euroliga a propósito:
+    # las dos rellenan huecos sin pisar, así que gana la primera que llega, y
+    # la de acb.com es la mejor de las dos — cinco posiciones en vez de tres
+    # y la nacionalidad ya en castellano. `--skip acb` también la omite: esa
+    # opción significa "no tocar acb.com".
+    if "acb" not in skip and "acb_profiles" not in skip:
+        try:
+            from ingest.acb.profiles import run as run_acb_profiles
+
+            results["acb_profiles"] = {"ok": True, "summary": run_acb_profiles(engine, limit=profiles_limit)}
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("ACB (ficha de jugadores) falló")
+            results["acb_profiles"] = {"ok": False, "error": str(exc)}
+    else:
+        results["acb_profiles"] = {"ok": None, "summary": "omitido"}
+
     if "euroleague" not in skip:
         try:
             from ingest.euroleague.pipeline import run as run_euroleague
@@ -87,14 +120,19 @@ def run_all(season: int, database_url: str = None, skip: tuple = ()) -> dict:
         # existen (ver `roster.py`), así que cuanto más tarde corra, más
         # altas del boxscore alcanza. Aparte del resto por el mismo motivo
         # que los calendarios: es la única fuente de esos campos, pero
-        # ninguna estadística depende de ella.
-        try:
-            from ingest.euroleague.roster import run as run_euroleague_roster
+        # ninguna estadística depende de ella. Desde 2026-09-28 también
+        # rellena la POSICIÓN en blanco (Guard/Forward/Center, ver
+        # `roster._POSITION_BY_NAME`), después de acb_profiles (ver arriba).
+        if "euroleague_roster" not in skip:
+            try:
+                from ingest.euroleague.roster import run as run_euroleague_roster
 
-            results["euroleague_roster"] = {"ok": True, "summary": run_euroleague_roster(engine, season)}
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("Euroliga (ficha física) falló")
-            results["euroleague_roster"] = {"ok": False, "error": str(exc)}
+                results["euroleague_roster"] = {"ok": True, "summary": run_euroleague_roster(engine, season)}
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("Euroliga (ficha física) falló")
+                results["euroleague_roster"] = {"ok": False, "error": str(exc)}
+        else:
+            results["euroleague_roster"] = {"ok": None, "summary": "omitido"}
     else:
         results["euroleague"] = {"ok": None, "summary": "omitido"}
         results["euroleague_upcoming"] = {"ok": None, "summary": "omitido"}
@@ -146,13 +184,19 @@ def main() -> None:
     parser.add_argument("--season", type=int, required=True, help="Año de inicio de temporada (p.ej. 2025).")
     parser.add_argument("--database-url", default=None)
     parser.add_argument(
-        "--skip", action="append", default=[], choices=["acb", "euroleague", "baskonia_web"],
-        help="Omite un módulo (se puede repetir).",
+        "--skip", action="append", default=[],
+        choices=["acb", "euroleague", "baskonia_web", "acb_profiles", "euroleague_roster"],
+        help="Omite un módulo (se puede repetir). `acb_profiles`/`euroleague_roster` omiten solo "
+        "la ficha de jugadores de esa fuente, no sus partidos.",
+    )
+    parser.add_argument(
+        "--profiles-limit", type=int, default=None,
+        help="Máximo de fichas de jugador a pedir a acb.com en esta pasada (ver ingest/acb/profiles.py).",
     )
     args = parser.parse_args()
 
     configure_logging()
-    results = run_all(args.season, args.database_url, tuple(args.skip))
+    results = run_all(args.season, args.database_url, tuple(args.skip), profiles_limit=args.profiles_limit)
 
     print(f"\nResumen de ingesta (temporada {args.season}):")
     failed = []

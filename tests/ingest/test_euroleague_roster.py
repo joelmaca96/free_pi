@@ -135,8 +135,96 @@ def test_a_broken_club_does_not_stop_the_others(engine, linked_player):
 
     summary = run(engine, 2025, client=FlakyClient(), download_photos=False)
 
-    assert summary == {"clubs": 1, "players": 1, "photos": 0}
+    assert summary == {"clubs": 1, "players": 1, "photos": 0, "positions": 0}
     assert _player(engine, linked_player).height_cm == 178
+
+
+# --- posición (2026-09-28) ------------------------------------------------------
+# El boxscore de Euroliga no trae posición: ~450 jugadores solo-Euroliga tenían
+# `position = ''`. La API de plantillas la da en tres categorías (`positionName`).
+
+
+def _member(code, position_name=None, position=None):
+    return {
+        "type": "J",
+        "positionName": position_name,
+        "position": position,
+        "person": {"code": code, "name": "X, Y", "height": None, "weight": 0, "country": {}},
+    }
+
+
+def _link(engine, player_id, code):
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO player_external_ids (player_id, source, external_id)"
+                " VALUES (:p, 'euroleague', :e)"
+            ),
+            {"p": player_id, "e": f"P{code}"},
+        )
+
+
+def _position(engine, player_id):
+    with engine.connect() as conn:
+        return conn.execute(text("SELECT position FROM players WHERE id = :id"), {"id": player_id}).scalar()
+
+
+@pytest.mark.parametrize(
+    "position_name,code,expected",
+    [
+        ("Guard", 1, "Base"),     # decisión documentada en `_POSITION_BY_NAME`
+        ("Forward", 2, "Alero"),
+        ("Center", 3, "Pívot"),
+        (None, 3, "Pívot"),       # sin `positionName`, el código numérico
+        ("Coach", None, ""),      # desconocida: se queda en blanco, no se inventa
+    ],
+)
+def test_a_blank_position_is_filled_in_the_app_vocabulary(engine, position_name, code, expected):
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE players SET position = '' WHERE id = 'howard'"))
+    _link(engine, "howard", "011948")
+
+    with engine.begin() as conn:
+        result = update_player_profiles(conn, [_member("011948", position_name, code)])
+
+    assert _position(engine, "howard") == expected
+    assert result["positions"] == (1 if expected else 0)
+
+
+def test_an_existing_position_is_never_overwritten(engine, linked_player):
+    """La de baskonia.com y el `gameRole` de ACB son más finas que Guard/Forward/Center."""
+    with engine.begin() as conn:
+        result = update_player_profiles(conn, [_member("011948", "Center", 3)])
+
+    assert _position(engine, linked_player) == "Base"  # la del seed, intacta
+    assert result["positions"] == 0
+
+
+def test_position_is_not_written_to_a_player_without_alias(engine):
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE players SET position = '' WHERE id = 'howard'"))
+        result = update_player_profiles(conn, [_member("011948", "Guard", 1)])
+
+    assert _position(engine, "howard") == ""
+    assert result["positions"] == 0
+
+
+def test_nationality_is_written_in_spanish(engine, linked_player):
+    """Para que case con acb.com y baskonia.com ("EE.UU.") en vez de mezclar idiomas."""
+    with engine.begin() as conn:
+        update_player_profiles(conn, PEOPLE)
+
+    assert engine.connect().execute(
+        text("SELECT nationality FROM players WHERE id = 'howard'")
+    ).scalar() == "EE.UU."
+
+
+def test_an_unknown_country_is_kept_as_given():
+    from ingest.euroleague.roster import _country_es
+
+    assert _country_es("Spain") == "España"
+    assert _country_es("Atlantis") == "Atlantis"   # mejor el dato en inglés que el hueco
+    assert _country_es(None) is None
 
 
 # --- fotos ------------------------------------------------------------------
