@@ -47,13 +47,13 @@ from pptx.util import Inches, Pt
 # Mismo patrón de import doble que `postgame_ppt.py` (pytest vs. Streamlit,
 # ver `assistant/tools/context.py`).
 try:  # pragma: no cover - depende de cómo se arranque el proceso, no de la lógica
-    from app.analytics import rotation_patterns, shot_quality, win_thresholds
+    from app.analytics import rotation_patterns, rotation_plan, shot_quality, win_thresholds
     from app.assistant.llm import LLMClient, LLMError
     from app.components.branding import CREST_PATH
     from app.data import queries, queries_assistant
     from app.reports import _deck
 except ImportError:  # pragma: no cover
-    from analytics import rotation_patterns, shot_quality, win_thresholds
+    from analytics import rotation_patterns, rotation_plan, shot_quality, win_thresholds
     from assistant.llm import LLMClient, LLMError
     from components.branding import CREST_PATH
     from data import queries, queries_assistant
@@ -916,6 +916,42 @@ def _build_rotation_slide(prs: Presentation, bullets: List[str], rival_name: str
     )
 
 
+def rotation_plan_bullets(
+    engine, rival_team_id: str, own_team_id: str, season_id: int, rival_name: str, is_home: bool
+) -> List[str]:
+    """Plan de rotación contra el rival (propuesta 15), el mismo que pinta "Próximo rival".
+
+    Con los disponibles por defecto (minutos suficientes con el equipo): el
+    dossier se genera antes de saber quién está lesionado, y la pantalla deja
+    ajustarlo. Frases compactas y como mucho cuatro ventanas, para que quepan
+    en una diapositiva de viñetas. Lista vacía si falta algún equipo en los
+    tramos: la diapositiva no se añade.
+    """
+    data = queries_assistant.season_impact(engine, season_id, None)
+    plan = rotation_plan.build_plan(
+        queries.team_stint_rows(engine, rival_team_id, season_id),
+        queries.team_stint_rows(engine, own_team_id, season_id),
+        data["fit"],
+        data["segments"],
+        own_team_id,
+        rival_on_off=queries_assistant.player_on_off(engine, rival_team_id, season_id),
+        is_home=is_home,
+        top=1,
+        max_windows=4,
+    )
+    return rotation_plan.plan_insights(rival_name, plan, data["names"], compact=True)
+
+
+def _build_rotation_plan_slide(prs: Presentation, bullets: List[str], rival_name: str) -> None:
+    _deck.add_bullets_slide(
+        prs,
+        title=f"Plan de rotación contra {rival_name}",
+        subtitle="Sus ventanas débiles y nuestros mejores quintetos contra lo que suele tener en pista",
+        bullets=bullets,
+        fallback_text="Sin tramos de quinteto suficientes para proponer un plan.",
+    )
+
+
 def generate_scouting_ppt(
     engine,
     *,
@@ -1067,6 +1103,9 @@ def generate_scouting_ppt(
         ctx, style_df, top_rows, player_highlights, lineups_df, shot_quality_bullets, game_keys,
         zones_df=zones_df, attack_zone_profile=attack_zone_profile, defense_zone_profile=defense_zone_profile,
         rotation_summary=rotation_bullets(engine, rival_team_id, scouting_season_id, rival_name),
+        rotation_plan_summary=rotation_plan_bullets(
+            engine, rival_team_id, own_team_id, scouting_season_id, rival_name, is_home
+        ),
     )
 
 
@@ -1083,6 +1122,7 @@ def build_scouting_ppt(
     attack_zone_profile: Optional[pd.DataFrame] = None,
     defense_zone_profile: Optional[pd.DataFrame] = None,
     rotation_summary: Optional[List[str]] = None,
+    rotation_plan_summary: Optional[List[str]] = None,
 ) -> bytes:
     """Bytes del `.pptx`: las seis diapositivas del dossier, con todo el texto ya resuelto.
 
@@ -1100,6 +1140,8 @@ def build_scouting_ppt(
             mismo criterio de "nunca un hueco vacío" que el resto del módulo.
         rotation_summary: frases de `rotation_bullets` (propuesta 13). Si
             viene vacío o `None`, la diapositiva de rotación no se añade.
+        rotation_plan_summary: frases de `rotation_plan_bullets` (propuesta 15), mismo
+            criterio: sin frases, sin diapositiva.
     """
     rival_name = ctx["rival_name"]
     prs = _deck.new_presentation()
@@ -1113,6 +1155,8 @@ def build_scouting_ppt(
     _build_lineups_slide(prs, lineups_df, ctx["quarters_df"], rival_name)
     if rotation_summary:
         _build_rotation_slide(prs, rotation_summary, rival_name)
+    if rotation_plan_summary:
+        _build_rotation_plan_slide(prs, rotation_plan_summary, rival_name)
     _build_keys_slide(prs, game_keys, rival_name)
 
     buffer = io.BytesIO()

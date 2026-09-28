@@ -416,6 +416,24 @@ TERMS: Dict[str, Term] = {
         "escalado a 40 minutos. Los puntos de cada tramo de quinteto se reparten por tiempo entre los "
         "bloques que toca: aproximación, no canasta a canasta.",
     ),
+    # --- plan de rotación (propuesta 15) --
+    "attack_window": Term(
+        "Ventana de ataque", "Minutos del partido en que el rival suele flojear",
+        "O bien el descanso habitual de uno de sus jugadores de más minutos, o bien uno de sus peores "
+        "tramos de reloj de la temporada (diferencia por 40 negativa con muestra suficiente).",
+    ),
+    "margin_vs_five": Term(
+        "Vs. su quinteto", "Diferencia proyectada por 40 contra el quinteto habitual del rival en esa ventana",
+        "Suma del RAPM de nuestros cinco menos la de los cinco del rival que más suelen estar en pista en "
+        "esos minutos, más la ventaja de campo si jugamos en casa (menos, si fuera). Mismo modelo aditivo "
+        "que el constructor de quintetos: no capta química.",
+    ),
+    "gain_vs_usual": Term(
+        "Vs. lo habitual", "Mejora sobre nuestra rotación habitual en esos minutos",
+        "Diferencia proyectada del quinteto propuesto menos la de los cinco disponibles que más solemos "
+        "tener en pista en esa ventana. Es el tamaño de la decisión: cerca de 0, la rotación de siempre "
+        "ya vale.",
+    ),
 }
 
 
