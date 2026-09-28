@@ -380,6 +380,167 @@ TERMS: Dict[str, Term] = {
         "100 = idéntico en todo lo disponible. Depende del método elegido (estilo o nivel) y de los "
         "pesos ajustados — no es una cifra absoluta, cambia según qué se le pida que compare.",
     ),
+    # ------------------------- impacto ajustado y constructor (propuesta 12) --
+    "rapm": Term(
+        "RAPM", "Impacto ajustado (+/- regularizado)",
+        "Cuántos puntos por 40 minutos gana el equipo con este jugador en pista en lugar de uno medio, "
+        "DESCONTANDO con qué compañeros y contra qué rivales jugó (regresión sobre los diez de pista en "
+        "cada tramo, encogida con poca muestra hacia 0 o, si se activa, hacia su valor de la temporada "
+        "anterior). A diferencia del On/Off, no premia al que juega siempre con los titulares.",
+    ),
+    "projected_per_40": Term(
+        "Proyección", "Diferencia proyectada por 40 minutos",
+        "Suma del RAPM de los cinco. Es lo que el modelo espera de ese quinteto contra un rival medio; no "
+        "capta química (dos que se estorban), por eso va al lado de lo que ese quinteto ha hecho de verdad.",
+    ),
+    "observed_minutes": Term(
+        "Min. reales", "Minutos jugados de verdad por ese quinteto exacto",
+        "Minutos de la temporada que esos cinco han compartido pista. Con 0, la proyección es pura "
+        "extrapolación: una idea para probar, no un dato.",
+    ),
+    # ------------------------------------ patrón de rotación (propuesta 13) --
+    "minute_share": Term(
+        "% en pista", "Proporción en pista por minuto de partido",
+        "Segundos que el jugador estuvo en pista en ese minuto, sumados en todos los partidos del corte, "
+        "entre 60 × partidos. 100% = siempre en pista en ese minuto; los partidos en que no jugó cuentan "
+        "como 0.",
+    ),
+    "rest_window": Term(
+        "Descanso habitual", "Minutos en que suele estar sentado",
+        "Tramos de al menos dos minutos seguidos, dentro de su franja de juego, en los que está en pista "
+        "menos de un tercio de los partidos. Es la ventana para atacar lo que él protege.",
+    ),
+    "block_per_40": Term(
+        "+/- 40 del tramo", "Diferencia por 40 minutos en ese tramo del partido",
+        "Puntos a favor menos en contra del equipo en esos minutos de reloj, sumando todos los partidos, "
+        "escalado a 40 minutos. Los puntos de cada tramo de quinteto se reparten por tiempo entre los "
+        "bloques que toca: aproximación, no canasta a canasta.",
+    ),
+    # --- predicción (propuesta 16) --
+    "expected_margin": Term(
+        "Margen esperado", "Diferencia de puntos esperada al final del partido",
+        "Lo que el modelo espera que gane (+) o pierda (−) el Baskonia: nivel de los dos equipos ajustado "
+        "por calendario, más la ventaja de campo y la diferencia de descanso, las dos estimadas de la liga. "
+        "Es la suma exacta de las piezas de 'Qué la mueve'.",
+    ),
+    "win_probability": Term(
+        "Prob. victoria", "Probabilidad de victoria según el modelo",
+        "Probabilidad de que el margen real salga a favor, suponiendo que se reparte alrededor del margen "
+        "esperado con la dispersión que el modelo ve en los partidos de la liga (≈11 puntos). No sabe de "
+        "lesiones ni bajas, y es algo optimista lejos del 50%.",
+    ),
+    "adjusted_rating": Term(
+        "Nivel ajustado", "Rating de equipo ajustado por calendario (tipo SRS)",
+        "Puntos por partido mejor (+) o peor (−) que un equipo medio, descontando contra quién ha jugado "
+        "cada uno y dónde: ganar de 10 a los mejores vale más que ganar de 10 a los últimos. Con pocos "
+        "partidos se acerca a 0 (equipo medio) a propósito.",
+    ),
+    "prediction_backtest": Term(
+        "Prueba hacia atrás", "Acierto del modelo en partidos ya jugados, sin mirar el futuro",
+        "Para cada fecha de la temporada se ajusta el modelo solo con los partidos anteriores y se predicen "
+        "los de ese día. Da el error medio en puntos y el % de ganadores acertados: lo que cabe esperar de "
+        "verdad del número de arriba.",
+    ),
+    # --- RAPM con prior (propuesta 12b) --
+    "rapm_prior": Term(
+        "Punto de partida", "RAPM de la temporada anterior, rebajado",
+        "Lo que se sabía del jugador antes de esta temporada: su RAPM de la temporada anterior por 0,7 (un "
+        "año cambia rol, forma y edad). El RAPM de esta temporada se encoge hacia este valor en lugar de "
+        "hacia 0: con pocos minutos manda él; con muchos, mandan los datos de este año. En blanco = no jugó "
+        "la temporada anterior (se encoge hacia 0, jugador medio).",
+    ),
+    "rapm_no_prior": Term(
+        "Solo esta temporada", "RAPM sin la temporada anterior",
+        "El RAPM calculado solo con los tramos de esta temporada, encogido hacia 0. La diferencia con el RAPM "
+        "final es lo que aporta la temporada anterior: grande en jugadores con pocos minutos, casi nula en "
+        "los que ya tienen muchos.",
+    ),
+    # --- plan de rotación (propuesta 15) --
+    "attack_window": Term(
+        "Ventana de ataque", "Minutos del partido en que el rival suele flojear",
+        "O bien el descanso habitual de uno de sus jugadores de más minutos, o bien uno de sus peores "
+        "tramos de reloj de la temporada (diferencia por 40 negativa con muestra suficiente).",
+    ),
+    "margin_vs_five": Term(
+        "Vs. su quinteto", "Diferencia proyectada por 40 contra el quinteto habitual del rival en esa ventana",
+        "Suma del RAPM de nuestros cinco menos la de los cinco del rival que más suelen estar en pista en "
+        "esos minutos, más la ventaja de campo si jugamos en casa (menos, si fuera). Mismo modelo aditivo "
+        "que el constructor de quintetos: no capta química.",
+    ),
+    "gain_vs_usual": Term(
+        "Vs. lo habitual", "Mejora sobre nuestra rotación habitual en esos minutos",
+        "Diferencia proyectada del quinteto propuesto menos la de los cinco disponibles que más solemos "
+        "tener en pista en esa ventana. Es el tamaño de la decisión: cerca de 0, la rotación de siempre "
+        "ya vale.",
+    ),
+    # --- planificador de minutos (propuesta 17) --
+    "planned_minutes": Term(
+        "Plan (min)", "Minutos planificados para el próximo partido",
+        "Reparto de los 200 minutos de jugador (5 × 40) que maximiza el margen proyectado con los topes, "
+        "mínimos y disponibles de la tabla. Totales del partido, no la rotación concreta.",
+    ),
+    "minutes_cap": Term(
+        "Tope", "Máximo de minutos del jugador en el partido",
+        "Sugerido por la carga: el tope general, rebajado a lo que le falta para cruzar el aviso de minutos "
+        "en 7 días y a un tope de descanso corto si llega con dos días o menos tras un partido largo. El "
+        "entrenador lo corrige en la tabla.",
+    ),
+    "minutes_floor": Term(
+        "Mín.", "Mínimo de minutos del jugador en el partido",
+        "Minutos que tiene que jugar pase lo que pase (rodaje, un plan táctico concreto). Por defecto 0: "
+        "juega lo que dicte el modelo.",
+    ),
+    "recent_avg_minutes": Term(
+        "Media reciente", "Media de minutos en los últimos partidos",
+        "Media de minutos en los partidos que SÍ jugó de los cinco últimos del equipo antes de la fecha "
+        "del partido. En blanco si no jugó ninguno (lesión o recién llegado).",
+    ),
+    "projected_margin": Term(
+        "Margen proyectado", "Diferencia de puntos esperada frente a un rival medio",
+        "Suma de RAPM × minutos / 40 de todos los jugadores: cada minuto de un jugador sustituye a uno "
+        "medio. Modelo aditivo, sin química ni ventaja de campo: sirve para comparar repartos, no para "
+        "pronosticar el marcador.",
+    ),
+    "rapm_prudent": Term(
+        "RAPM prudente", "RAPM menos su incertidumbre",
+        "RAPM menos media desviación típica a posteriori, que es mayor cuantos menos minutos tiene el "
+        "jugador en el ajuste. Con el criterio prudente, un jugador con poca muestra solo gana minutos si "
+        "su ventaja esperada lo compensa.",
+    ),
+    "binding_constraint": Term(
+        "Qué lo limita", "Restricción que fija los minutos del jugador",
+        "Por qué juega esos minutos y no más ni menos: su tope (por carga, descanso corto, general o del "
+        "entrenador), su mínimo, la cobertura de posición, que completa los 200 minutos o que su valor "
+        "queda por debajo de los que juegan.",
+    ),
+    "position_coverage": Term(
+        "Cobertura", "Minutos mínimos por posición",
+        "40 minutos de base y 40 de pívot entre todos los de esa posición. Es la condición exacta para que "
+        "exista una rotación con uno de cada en pista en todo momento (con nadie por encima de 40 "
+        "minutos). 'Ala-pívot' no cuenta como pívot.",
+    ),
+    # --- momentos clave (propuesta 18) --
+    # Clave distinta de `win_probability` (la predicción PREVIA de la propuesta 16): es la
+    # probabilidad EN DIRECTO, instante a instante. Con la misma clave, la segunda pisaba a la
+    # primera en el dict sin avisar.
+    "live_win_probability": Term(
+        "Prob. victoria (en directo)", "Probabilidad de victoria en ese instante del partido",
+        "Probabilidad de ganar el partido en ese instante según el margen, el tiempo que queda y "
+        "quién juega en casa — nada más (no sabe quién tiene la posesión ni cómo de bueno es cada "
+        "equipo). Sale de un modelo ajustado con todos los partidos de la liga en la temporada.",
+    ),
+    "wpa": Term(
+        "WPA", "Probabilidad de victoria añadida (win probability added)",
+        "Cuántos puntos porcentuales subió (o bajó) la probabilidad de ganar durante una jugada o "
+        "tramo. Es lo que ordena los momentos clave: un 5-0 con el partido igualado a falta de dos "
+        "minutos mueve mucho más que un 10-0 en el primer cuarto.",
+    ),
+    "wpa_lineup": Term(
+        "WPA quinteto", "Probabilidad de victoria añadida con ese quinteto en pista",
+        "Suma de todo lo que se movió la probabilidad de ganar mientras esos cinco estaban juntos en "
+        "pista (en puntos porcentuales). Todos los quintetos de un equipo suman su probabilidad final "
+        "menos la de salida. Dice cuándo se ganó o perdió el partido, no quién jugó mejor.",
+    ),
 }
 
 

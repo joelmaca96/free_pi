@@ -17,6 +17,10 @@ algo:
   ya estaba implementado para el chat (`queries_assistant.player_pair_impact`),
   aquí se le da pantalla propia.
 
+- **Impacto ajustado (RAPM) y constructor de quintetos** (propuesta 12,
+  `components/impact.py`): el On/Off descontando con quién y contra quién se
+  juega, y los mejores quintetos posibles con los jugadores disponibles.
+
 Selector de equipo arriba (§2d): sirve igual para el Baskonia que para
 cualquier rival con partidos cargados esta temporada — `lineup_stints`
 guarda el `team_id` de los dos equipos de cada tramo, así que el cálculo es
@@ -35,6 +39,8 @@ import streamlit as st
 
 from assistant.capabilities import probe
 from components.glossary import glossary_expander, help_text
+from components.impact import impact_section, lineup_builder_section
+from components.minutes_plan import minutes_plan_section
 from components.header import page_header
 from data import queries, queries_assistant
 from data.db import get_read_engine
@@ -259,6 +265,23 @@ if capabilities.lineup_stints:
         )
 
 st.divider()
+
+# ------------------------------------------ impacto ajustado y constructor --
+# Propuesta 12: el paso siguiente al On/Off. Mismo interruptor que las
+# secciones de arriba — sin tramos no hay diez jugadores por instante.
+if capabilities.lineup_stints:
+    impact_section(engine, team_id, season_id, competition_id, team_label)
+    st.divider()
+    roster_positions = queries.roster_cards(engine, team_id, season_id)
+    positions = (
+        dict(zip(roster_positions["id"], roster_positions["position"])) if not roster_positions.empty else {}
+    )
+    lineup_builder_section(engine, team_id, season_id, competition_id, team_label, positions)
+    st.divider()
+    # Propuesta 17: minutos del próximo partido, solo para el equipo propio.
+    if team_id == own_team_id:
+        minutes_plan_section(engine, team_id, season_id, competition_id, team_label, positions)
+        st.divider()
 
 # ------------------------------------------------------------------ con y sin --
 st.subheader("Con y sin")

@@ -47,16 +47,20 @@ from pptx.util import Inches, Pt
 # Mismo patrón de import doble que `postgame_ppt.py` (pytest vs. Streamlit,
 # ver `assistant/tools/context.py`).
 try:  # pragma: no cover - depende de cómo se arranque el proceso, no de la lógica
-    from app.analytics import shot_quality, win_thresholds
+    from app.analytics import rotation_patterns, rotation_plan, shot_quality, win_thresholds
     from app.assistant.llm import LLMClient, LLMError
     from app.components.branding import CREST_PATH
     from app.data import queries, queries_assistant
+    from app.analytics.prediction import summary_sentence as prediction_summary
+    from app.data import queries_prediction
     from app.reports import _deck
 except ImportError:  # pragma: no cover
-    from analytics import shot_quality, win_thresholds
+    from analytics import rotation_patterns, rotation_plan, shot_quality, win_thresholds
     from assistant.llm import LLMClient, LLMError
     from components.branding import CREST_PATH
     from data import queries, queries_assistant
+    from analytics.prediction import summary_sentence as prediction_summary
+    from data import queries_prediction
     from reports import _deck
 
 logger = logging.getLogger(__name__)
@@ -96,6 +100,10 @@ def _build_cover_slide(prs: Presentation, ctx: dict) -> None:
             "Balance de " + ctx["rival_name"] + " esta temporada: "
             + ", ".join(f"{c} {w}–{l}" for c, w, l in ctx["rival_record"]) + "."
         )
+    # Propuesta 16: la predicción del partido en una frase, si se pudo calcular
+    # (`ctx.get`: un ctx de test o de una versión anterior no la trae).
+    if ctx.get("prediction_sentence"):
+        footer_bits.append(ctx["prediction_sentence"])
     if ctx["is_fallback_season"]:
         footer_bits.append(
             f"⚠ {ctx['rival_name']} no ha jugado aún en la temporada actual: todo el scouting "
@@ -883,6 +891,80 @@ def _build_keys_slide(prs: Presentation, keys: List[str], rival_name: str) -> No
 # =================================================================== fachada ==
 
 
+def rotation_bullets(engine, rival_team_id: str, season_id: int, rival_name: str) -> List[str]:
+    """Resumen del patrón de rotación del rival (propuesta 13), el mismo que pinta "Próximo rival".
+
+    Lista vacía si la base de datos no tiene tramos (`lineup_stints`) para
+    ese rival: la diapositiva simplemente no se añade.
+    """
+    rows = queries.team_stint_rows(engine, rival_team_id, season_id)
+    if rows.empty:
+        return []
+    rotation = rotation_patterns.player_rotation_table(rotation_patterns.minute_shares(rows))
+    closers, close_games = rotation_patterns.closing_players(rows)
+    return rotation_patterns.rotation_insights(
+        rival_name,
+        rotation,
+        rotation_patterns.starting_lineups(rows),
+        closers,
+        close_games,
+        rotation_patterns.block_performance(rows),
+        queries_assistant.player_on_off(engine, rival_team_id, season_id),
+        n_games=int(rows["game_id"].nunique()),
+    )
+
+
+def _build_rotation_slide(prs: Presentation, bullets: List[str], rival_name: str) -> None:
+    _deck.add_bullets_slide(
+        prs,
+        title=f"Rotación de {rival_name}",
+        subtitle="Quién sale, cuándo descansan sus principales, quién cierra y dónde sufre",
+        bullets=bullets,
+        fallback_text="Sin tramos de quinteto para este rival.",
+    )
+
+
+def rotation_plan_bullets(
+    engine, rival_team_id: str, own_team_id: str, season_id: int, rival_name: str, is_home: bool
+) -> List[str]:
+    """Plan de rotación contra el rival (propuesta 15), el mismo que pinta "Próximo rival".
+
+    Con los disponibles por defecto (minutos suficientes con el equipo): el
+    dossier se genera antes de saber quién está lesionado, y la pantalla deja
+    ajustarlo. Frases compactas y como mucho cuatro ventanas, para que quepan
+    en una diapositiva de viñetas. Lista vacía si falta algún equipo en los
+    tramos o no hay quintetos propios que proponer: la diapositiva no se añade.
+    """
+    data = queries_assistant.season_impact(engine, season_id, None)
+    plan = rotation_plan.build_plan(
+        queries.team_stint_rows(engine, rival_team_id, season_id),
+        queries.team_stint_rows(engine, own_team_id, season_id),
+        data["fit"],
+        data["segments"],
+        own_team_id,
+        rival_on_off=queries_assistant.player_on_off(engine, rival_team_id, season_id),
+        is_home=is_home,
+        top=1,
+        max_windows=4,
+    )
+    # Sin quintetos propios (nuestro equipo sin tramos en esa temporada, o
+    # menos de cinco con minutos) la diapositiva serían solo las ventanas del
+    # rival, que ya están en la de rotación: no se añade.
+    if not plan or plan[0]["lineups"].empty:
+        return []
+    return rotation_plan.plan_insights(rival_name, plan, data["names"], compact=True)
+
+
+def _build_rotation_plan_slide(prs: Presentation, bullets: List[str], rival_name: str) -> None:
+    _deck.add_bullets_slide(
+        prs,
+        title=f"Plan de rotación contra {rival_name}",
+        subtitle="Sus ventanas débiles y nuestros mejores quintetos contra lo que suele tener en pista",
+        bullets=bullets,
+        fallback_text="Sin tramos de quinteto suficientes para proponer un plan.",
+    )
+
+
 def generate_scouting_ppt(
     engine,
     *,
@@ -898,6 +980,7 @@ def generate_scouting_ppt(
     today: dt.date,
     llm_client: Optional[LLMClient] = None,
     max_players: int = _MAX_PLAYERS,
+    match_date: Optional[dt.date] = None,
 ) -> bytes:
     """Punto de entrada único para la página: datos + dos capas de texto + `.pptx`, en bytes.
 
@@ -916,6 +999,9 @@ def generate_scouting_ppt(
             `None` para quedarse solo con las reglas en jugadores/claves.
         max_players: cuántas diapositivas de jugador generar, por producción
             (minutos primero, después puntos) — 5 a 8 según la propuesta.
+        match_date: fecha del partido, para la predicción de la portada
+            (propuesta 16: ajuste con lo anterior y descanso hasta ese día).
+            `None` = `today`.
     """
     h2h_df = queries.head_to_head(engine, own_team_id, rival_team_id)
     h2h_summary = None
@@ -1000,6 +1086,15 @@ def generate_scouting_ppt(
             win_thresholds.rival_adjusted_card(card, rival_avg, league_avg) for card in objective_cards
         ]
 
+    # Propuesta 16: margen esperado y qué lo mueve, en una frase de portada.
+    # `None` si la temporada no tiene partidos para ajustar el modelo.
+    prediction_result = queries_prediction.matchup_prediction(
+        engine, own_team_id, rival_team_id, scouting_season_id, match_date or today, bool(is_home), competition
+    )
+    prediction_sentence = (
+        None if prediction_result is None else prediction_summary(prediction_result["prediction"], rival_name)
+    )
+
     ctx = {
         "rival_name": rival_name,
         "is_home": is_home,
@@ -1015,6 +1110,7 @@ def generate_scouting_ppt(
         "attack_diff": attack_summary["diff_shrunk"] if attack_summary["reliable"] else None,
         "defense_diff": defense_summary["diff_shrunk"] if defense_summary["reliable"] else None,
         "win_threshold_cards": win_threshold_cards,
+        "prediction_sentence": prediction_sentence,
     }
 
     lineups_df = queries.season_lineups(engine, rival_team_id, scouting_season_id)
@@ -1033,6 +1129,10 @@ def generate_scouting_ppt(
     return build_scouting_ppt(
         ctx, style_df, top_rows, player_highlights, lineups_df, shot_quality_bullets, game_keys,
         zones_df=zones_df, attack_zone_profile=attack_zone_profile, defense_zone_profile=defense_zone_profile,
+        rotation_summary=rotation_bullets(engine, rival_team_id, scouting_season_id, rival_name),
+        rotation_plan_summary=rotation_plan_bullets(
+            engine, rival_team_id, own_team_id, scouting_season_id, rival_name, is_home
+        ),
     )
 
 
@@ -1048,6 +1148,8 @@ def build_scouting_ppt(
     zones_df: Optional[pd.DataFrame] = None,
     attack_zone_profile: Optional[pd.DataFrame] = None,
     defense_zone_profile: Optional[pd.DataFrame] = None,
+    rotation_summary: Optional[List[str]] = None,
+    rotation_plan_summary: Optional[List[str]] = None,
 ) -> bytes:
     """Bytes del `.pptx`: las seis diapositivas del dossier, con todo el texto ya resuelto.
 
@@ -1063,6 +1165,10 @@ def build_scouting_ppt(
             diapositiva de calidad de tiro (§4 de la propuesta 03). `None` (o
             vacío) degrada a la diapositiva sin mapas, solo con las viñetas —
             mismo criterio de "nunca un hueco vacío" que el resto del módulo.
+        rotation_summary: frases de `rotation_bullets` (propuesta 13). Si
+            viene vacío o `None`, la diapositiva de rotación no se añade.
+        rotation_plan_summary: frases de `rotation_plan_bullets` (propuesta 15), mismo
+            criterio: sin frases, sin diapositiva.
     """
     rival_name = ctx["rival_name"]
     prs = _deck.new_presentation()
@@ -1074,6 +1180,10 @@ def build_scouting_ppt(
     )
     _build_player_slides(prs, player_rows, player_highlights, rival_name)
     _build_lineups_slide(prs, lineups_df, ctx["quarters_df"], rival_name)
+    if rotation_summary:
+        _build_rotation_slide(prs, rotation_summary, rival_name)
+    if rotation_plan_summary:
+        _build_rotation_plan_slide(prs, rotation_plan_summary, rival_name)
     _build_keys_slide(prs, game_keys, rival_name)
 
     buffer = io.BytesIO()

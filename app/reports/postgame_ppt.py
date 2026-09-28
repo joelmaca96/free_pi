@@ -42,12 +42,12 @@ from pptx import Presentation
 try:  # pragma: no cover - depende de cómo se arranque el proceso, no de la lógica
     from app.assistant.llm import LLMClient, LLMError
     from app.components.branding import CREST_PATH
-    from app.data import queries
+    from app.data import queries, queries_win_probability
     from app.reports import _deck
 except ImportError:  # pragma: no cover
     from assistant.llm import LLMClient, LLMError
     from components.branding import CREST_PATH
-    from data import queries
+    from data import queries, queries_win_probability
     from reports import _deck
 
 logger = logging.getLogger(__name__)
@@ -313,11 +313,50 @@ def _add_player_slide(prs: Presentation, row: dict, highlights: List[str]) -> No
     )
 
 
-def build_postgame_ppt(rows: List[dict], highlights: Dict[str, List[str]], game_context: dict) -> bytes:
-    """Bytes del `.pptx`: una portada + una diapositiva por fila de `rows`."""
+def _add_key_moments_slide(prs: Presentation, moments: List[dict]) -> None:
+    """Los momentos que decidieron el partido (propuesta 18), en una tabla nativa.
+
+    `moments` son filas de `queries_win_probability.game_key_moments(...)["moments"]`
+    (`win_probability.key_moments` + `lineup_own`). Ordenadas por cuánto
+    movieron la probabilidad de victoria, no por el tamaño del parcial.
+    """
+    table_rows = []
+    for moment in moments:
+        table_rows.append([
+            str(int(moment["rank"])),
+            f"{moment['quarter_start']} {moment['clock_start']} a {moment['quarter_end']} {moment['clock_end']}",
+            f"{moment['score_before']} a {moment['score_after']}",
+            f"{int(moment['points_for'])}-{int(moment['points_against'])}",
+            f"{100 * moment['wp_before']:.0f}% a {100 * moment['wp_after']:.0f}%",
+            f"{100 * moment['wpa']:+.0f} pp",
+            moment.get("lineup_own") or "—",
+        ])
+    _deck.add_table_slide(
+        prs,
+        title="Los momentos que decidieron el partido",
+        subtitle="Ordenados por cuánto movieron la probabilidad de victoria, no por el tamaño del parcial",
+        columns=["#", "Reloj", "Marcador", "Parcial", "Prob. victoria", "Cambio", "Quinteto en pista"],
+        rows=table_rows,
+        col_widths=[0.5, 2.3, 1.6, 0.9, 1.6, 0.9, 4.3],
+        footer=(
+            "Probabilidad estimada con un modelo de liga (margen, tiempo restante y campo). Los tiros no "
+            "tienen reloj: la canasta real cae un poco antes del inicio indicado."
+        ),
+    )
+
+
+def build_postgame_ppt(
+    rows: List[dict],
+    highlights: Dict[str, List[str]],
+    game_context: dict,
+    key_moments: Optional[List[dict]] = None,
+) -> bytes:
+    """Bytes del `.pptx`: una portada, los momentos clave (si se pasan) y una diapositiva por fila de `rows`."""
     prs = _deck.new_presentation()
 
     _add_title_slide(prs, game_context)
+    if key_moments:
+        _add_key_moments_slide(prs, key_moments)
     for row in rows:
         _add_player_slide(prs, row, highlights.get(row["player_id"]))
 
@@ -329,8 +368,30 @@ def build_postgame_ppt(rows: List[dict], highlights: Dict[str, List[str]], game_
 # =================================================================== fachada ==
 
 
+def _key_moments_rows(engine, game_id: str, team_id: str) -> Optional[List[dict]]:
+    """Momentos clave del partido para la diapositiva, o `None` si no se pueden calcular.
+
+    Nunca lanza: la diapositiva es un extra — un partido sin play-by-play, o
+    cualquier fallo del modelo, deja la PPT como estaba, sin ella.
+    """
+    try:
+        bundle = queries_win_probability.game_key_moments(engine, game_id, team_id)
+    except Exception as exc:  # noqa: BLE001 - a propósito: la diapositiva es opcional
+        logger.warning("PPT para Paolo: sin diapositiva de momentos clave (%s)", exc)
+        return None
+    if bundle is None or bundle["moments"].empty:
+        return None
+    return bundle["moments"].to_dict("records")
+
+
 def generate_postgame_ppt(
-    engine, game_id: str, team_id: str, game_context: dict, *, llm_client: Optional[LLMClient] = None
+    engine,
+    game_id: str,
+    team_id: str,
+    game_context: dict,
+    *,
+    llm_client: Optional[LLMClient] = None,
+    include_key_moments: bool = True,
 ) -> bytes:
     """Punto de entrada único para la página: datos + puntos destacados + `.pptx`, en bytes.
 
@@ -345,6 +406,9 @@ def generate_postgame_ppt(
             — ver cómo lo arma `app/screens/partidos_anteriores.py`.
         llm_client: `assistant.llm.build_llm_client()` ya construido, o
             `None` para saltarse el LLM y quedarse solo con las reglas.
+        include_key_moments: añade tras la portada la diapositiva de los
+            momentos que decidieron el partido (propuesta 18) si el partido
+            tiene play-by-play.
 
     Raises:
         ValueError: el partido no tiene ningún jugador propio con minutos
@@ -355,4 +419,5 @@ def generate_postgame_ppt(
         raise ValueError("Este partido no tiene boxscore de jugadores con minutos jugados todavía.")
     rows = df.to_dict("records")
     highlights = select_highlights(llm_client, rows, game_context)
-    return build_postgame_ppt(rows, highlights, game_context)
+    key_moments = _key_moments_rows(engine, game_id, team_id) if include_key_moments else None
+    return build_postgame_ppt(rows, highlights, game_context, key_moments=key_moments)

@@ -1,0 +1,560 @@
+"""Impacto ajustado (RAPM) y constructor de quintetos.
+
+Propuesta 12 (`doc/features/propuestas/12_impacto_ajustado_y_constructor.md`).
+El On/Off de `queries_assistant.player_on_off` responde "¿cómo le va al equipo
+con él?", pero no separa al jugador de con quién comparte pista ni contra
+quién: quien juega siempre con los titulares sale inflado, y el suplente que
+se come los minutos contra titulares rivales sale castigado. El RAPM
+(*Regularized Adjusted Plus-Minus*) sí: ajusta una regresión con los diez
+jugadores en pista en cada tramo, así que el número de cada uno ya descuenta a
+sus compañeros y a sus rivales.
+
+**De tramos por equipo a tramos de diez jugadores.** `lineup_stints` guarda
+tramos POR EQUIPO: el del local se corta cuando cambia el local, no cuando
+cambia el visitante. `build_segments` cruza los tramos de los dos equipos de
+un partido y los parte en cada frontera de cualquiera de los dos. El marcador
+en cada frontera se conoce EXACTO —toda frontera es apertura o cierre de
+algún tramo, y cada tramo guarda con qué margen entró y cuántos puntos hubo
+dentro—, así que la diferencia de cada segmento no es una estimación
+repartida a ojo.
+
+**Unidades**: diferencia de puntos por 40 minutos, igual que el resto de la
+interfaz (no por 100 posesiones: `lineup_stints` no guarda posesiones, ver
+§5 de la propuesta 07). Un RAPM de +3 se lee "con él en pista, en lugar de un
+jugador medio, el equipo gana 3 puntos más cada 40 minutos, descontado con
+quién y contra quién jugó".
+
+**Prior de la temporada anterior** (propuesta 12, §6): una temporada es
+poca muestra, y el ridge "a secas" encoge a todo el mundo hacia 0 (jugador
+medio). `fit_rapm(..., prior=...)` lo encoge en cambio hacia lo que el
+jugador hizo la temporada pasada (rebajado por `PRIOR_WEIGHT`): el jugador de
+rotación con 400 minutos deja de parecer "del montón" solo por falta de
+muestra. Ver la docstring de `fit_rapm`.
+
+**El constructor** usa el modelo aditivo: el valor proyectado de un quinteto
+es la suma del RAPM de sus cinco. No capta química (dos que se estorban),
+por eso cada propuesta viaja con los minutos REALES que ese quinteto exacto
+ha jugado y su diferencia observada: el entrenador ve a la vez lo que dice el
+modelo y lo que ha pasado en pista.
+
+Lógica pura sobre `pandas`/`numpy`, sin Streamlit ni SQLAlchemy (regla del
+paquete, ver `app/analytics/__init__.py`).
+"""
+from itertools import combinations
+from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+
+import numpy as np
+import pandas as pd
+
+#: Penalización ridge, en minutos. Sale de un argumento bayesiano, no de un
+#: ajuste a ojo: la varianza del margen en un minuto de juego ronda 5 pts²,
+#: así que la diferencia por 40 de un tramo de `m` minutos tiene varianza
+#: ≈ 40²·5/m = σ²/m con σ² ≈ 8000; el impacto real de un jugador tiene una
+#: desviación de unos 2,5 puntos por 40 (τ), y el ridge óptimo es
+#: λ = σ²/τ² ≈ 1200. En la práctica: un jugador con
+#: 1200 minutos en pista conserva la mitad de lo que diría la regresión sin
+#: regularizar; uno con 300, una quinta parte. `cross_validate_ridge` permite
+#: comprobarlo contra los datos servidos.
+RIDGE_LAMBDA = 1200.0
+
+#: Minutos mínimos en pista para que el RAPM de un jugador se enseñe como
+#: fiable. Por debajo el ridge ya lo ha llevado casi a 0, pero se marca
+#: igualmente para no presentar un "+0,3" como si fuera un dato.
+MIN_RELIABLE_MINUTES = 300.0
+
+#: Tramos más cortos que esto no entran en el ajuste: un segmento de un
+#: segundo con un tiro libre en medio es una diferencia por 40 absurda que
+#: solo pesa por su minuto, pero ensucia las tablas de depuración.
+MIN_SEGMENT_SECONDS = 1.0
+
+#: Cuánto de la temporada anterior se toma como punto de partida:
+#: β₀ = `PRIOR_WEIGHT` · RAPM_anterior. El ruido de la estimación anterior
+#: ya lo descuenta su propio ridge (quien jugó poco llega casi a 0); este
+#: peso descuenta lo que el ridge NO ve: que el impacto real cambia de un
+#: año a otro (edad, rol, sistema, cambio de equipo, lesiones). 0,7 es el
+#: orden de la correlación año a año que se publica para las métricas de
+#: +/- ajustado regularizadas en la NBA (0,6-0,8). En simulación (impacto
+#: que cambia poco o bastante entre temporadas) pesos más altos, hasta 1,
+#: predicen algo mejor, pero la ganancia de 0,7 a 1 es pequeña frente a la
+#: de 0 a 0,7, y la simulación no tiene cambios de rol ni fichajes: se
+#: queda en 0,7 por prudencia hasta calibrarlo con `cross_validate_ridge`
+#: (prior con distintos pesos) sobre la base de datos real.
+PRIOR_WEIGHT = 0.7
+
+#: Punto de partida de quien NO tiene temporada anterior (recién llegado a la
+#: liga o sin minutos en ella): 0, jugador medio, igual que sin prior. Es
+#: frecuente usar un "nivel de reemplazo" algo negativo (−1 a −2 por 40:
+#: el que llega sin historial suele ser peor que la media de quienes sí lo
+#: tienen), pero aquí se deja en 0 por neutralidad —el fichaje estrella que
+#: viene de otra liga no es un jugador de reemplazo— y se puede cambiar por
+#: llamada con `newcomer_prior`.
+NEWCOMER_PRIOR = 0.0
+
+_STINT_COLUMNS = {
+    "stint_id", "game_id", "team_id", "is_home", "start_seconds", "end_seconds",
+    "points_for", "points_against", "margin_start", "player_id",
+}
+
+
+def build_segments(stint_rows: pd.DataFrame) -> pd.DataFrame:
+    """Cruza los tramos de los dos equipos de cada partido en segmentos de diez jugadores.
+
+    Args:
+        stint_rows: una fila por (tramo, jugador), con al menos
+            `stint_id, game_id, team_id, is_home, start_seconds, end_seconds,
+            points_for, points_against, margin_start, player_id` (la salida
+            de `queries.season_stint_rows`).
+
+    Returns:
+        Una fila por segmento: `game_id, start_seconds, end_seconds, minutes,
+        margin_delta` (diferencia del LOCAL en ese segmento), `home_team_id,
+        away_team_id, home_players, away_players` (tuplas de 5). Los tramos
+        en que alguno de los dos equipos no tiene quinteto válido (huecos de
+        la reconstrucción) no generan segmento.
+    """
+    columns = [
+        "game_id", "start_seconds", "end_seconds", "minutes", "margin_delta",
+        "home_team_id", "away_team_id", "home_players", "away_players",
+    ]
+    if stint_rows.empty:
+        return pd.DataFrame(columns=columns)
+    missing = _STINT_COLUMNS - set(stint_rows.columns)
+    if missing:
+        raise ValueError(f"Faltan columnas en los tramos: {sorted(missing)}")
+
+    stints = (
+        stint_rows.groupby("stint_id")
+        .agg(
+            game_id=("game_id", "first"),
+            team_id=("team_id", "first"),
+            is_home=("is_home", "first"),
+            start=("start_seconds", "first"),
+            end=("end_seconds", "first"),
+            pf=("points_for", "first"),
+            pa=("points_against", "first"),
+            margin_start=("margin_start", "first"),
+        )
+        .reset_index()
+    )
+    players = stint_rows.sort_values("player_id").groupby("stint_id")["player_id"].agg(tuple)
+    stints["players"] = stints["stint_id"].map(players)
+    stints = stints[stints["players"].map(len) == 5]
+    # Margen desde el punto de vista del LOCAL, en la apertura y el cierre.
+    sign = np.where(stints["is_home"].astype(bool), 1, -1)
+    stints = stints.assign(
+        home_margin_start=sign * stints["margin_start"],
+        home_margin_end=sign * (stints["margin_start"] + stints["pf"] - stints["pa"]),
+    )
+
+    # Recorrido en Python puro: `itertuples`/`groupby` por partido sobre
+    # columnas de tuplas es lo más lento de todo el cálculo con cientos de
+    # partidos, y aquí solo se leen registros.
+    by_game: Dict[str, List[dict]] = {}
+    for rec in stints.to_dict("records"):
+        by_game.setdefault(rec["game_id"], []).append(rec)
+
+    rows: List[dict] = []
+    for game_id, game in by_game.items():
+        home_recs = sorted((r for r in game if r["is_home"]), key=lambda r: r["start"])
+        away_recs = sorted((r for r in game if not r["is_home"]), key=lambda r: r["start"])
+        if not home_recs or not away_recs:
+            continue
+        # Marcador conocido en cada frontera: la apertura o el cierre de
+        # cualquier tramo. Si dos tramos dicen algo distinto en el mismo
+        # segundo (canasta y cambio en el mismo instante, el orden de la
+        # fuente decide) se queda el primero: el error es de una canasta en
+        # un segmento de duración casi nula.
+        margin_at: Dict[float, int] = {}
+        for rec in game:
+            margin_at.setdefault(float(rec["start"]), int(rec["home_margin_start"]))
+            margin_at.setdefault(float(rec["end"]), int(rec["home_margin_end"]))
+        bounds = sorted(margin_at)
+
+        hi = ai = 0
+        for t0, t1 in zip(bounds, bounds[1:]):
+            if t1 - t0 < MIN_SEGMENT_SECONDS:
+                continue
+            while hi < len(home_recs) and home_recs[hi]["end"] <= t0:
+                hi += 1
+            while ai < len(away_recs) and away_recs[ai]["end"] <= t0:
+                ai += 1
+            if hi >= len(home_recs) or ai >= len(away_recs):
+                break
+            h, a = home_recs[hi], away_recs[ai]
+            if h["start"] > t0 or h["end"] < t1 or a["start"] > t0 or a["end"] < t1:
+                continue  # alguno de los dos está en un hueco sin quinteto válido
+            rows.append({
+                "game_id": game_id,
+                "start_seconds": t0,
+                "end_seconds": t1,
+                "minutes": (t1 - t0) / 60.0,
+                "margin_delta": margin_at[t1] - margin_at[t0],
+                "home_team_id": h["team_id"],
+                "away_team_id": a["team_id"],
+                "home_players": h["players"],
+                "away_players": a["players"],
+            })
+    return pd.DataFrame(rows, columns=columns)
+
+
+def _design(segments: pd.DataFrame, player_index: Dict[str, int]):
+    """Índices de columna, signos, pesos y objetivo de cada segmento (forma dispersa)."""
+    n = len(segments)
+    idx = np.empty((n, 10), dtype=np.int64)
+    for i, (home, away) in enumerate(zip(segments["home_players"], segments["away_players"])):
+        idx[i, :5] = [player_index[p] for p in home]
+        idx[i, 5:] = [player_index[p] for p in away]
+    signs = np.concatenate([np.ones(5), -np.ones(5)])
+    weights = segments["minutes"].to_numpy(dtype=float)
+    # Objetivo: diferencia del local por 40 minutos en el segmento.
+    target = 40.0 * segments["margin_delta"].to_numpy(dtype=float) / weights
+    return idx, signs, weights, target
+
+
+def _normal_equations(idx, signs, weights, target, n_players: int):
+    """`XᵀWX` y `XᵀWy` sin materializar X (P+1 columnas: jugadores + ventaja de campo).
+
+    Cada segmento toca solo 11 columnas (diez jugadores y el término de
+    campo), así que se acumula con `bincount` sobre índices planos en vez de
+    construir una matriz de segmentos × jugadores casi toda a cero.
+    """
+    size = n_players + 1
+    full_idx = np.hstack([idx, np.full((len(idx), 1), n_players)])
+    full_signs = np.concatenate([signs, [1.0]])
+    cols = full_idx.shape[1]
+    rows_flat = np.repeat(full_idx, cols, axis=1)            # i de cada par (i, j)
+    cols_flat = np.tile(full_idx, (1, cols))                 # j de cada par (i, j)
+    pair_sign = np.outer(full_signs, full_signs).ravel()
+    flat = (rows_flat * size + cols_flat).ravel()
+    xtx = np.bincount(flat, weights=(weights[:, None] * pair_sign[None, :]).ravel(), minlength=size * size)
+    xty = np.bincount(
+        full_idx.ravel(),
+        weights=(full_signs[None, :] * (weights * target)[:, None]).ravel(),
+        minlength=size,
+    )
+    return xtx.reshape(size, size), xty
+
+
+def _solve(xtx: np.ndarray, xty: np.ndarray, ridge: float, beta0: Optional[np.ndarray] = None) -> np.ndarray:
+    """Resuelve `(XᵀWX + λI)β = XᵀWy + λβ₀` (con `beta0=None`, β₀ = 0: el ridge de siempre)."""
+    penalty = np.full(len(xty), ridge)
+    penalty[-1] = 1e-6  # la ventaja de campo no se regulariza
+    rhs = xty if beta0 is None else xty + penalty * beta0
+    return np.linalg.solve(xtx + np.diag(penalty), rhs)
+
+
+def _prior_vector(
+    players: Sequence[str], prior: Mapping[str, float], prior_weight: float, newcomer_prior: float
+) -> Tuple[np.ndarray, np.ndarray]:
+    """β₀ (P+1: jugadores + ventaja de campo, esta a 0) y máscara de quién trae prior.
+
+    Un valor no finito (NaN) en `prior` cuenta como "sin prior".
+    """
+    if not 0.0 <= prior_weight <= 1.0:
+        raise ValueError(f"prior_weight tiene que estar entre 0 y 1 (llegó {prior_weight})")
+    values = dict(prior)
+    beta0 = np.zeros(len(players) + 1)
+    has = np.zeros(len(players), dtype=bool)
+    for i, p in enumerate(players):
+        v = values.get(p)
+        if v is not None and np.isfinite(float(v)):
+            beta0[i] = prior_weight * float(v)
+            has[i] = True
+        else:
+            beta0[i] = newcomer_prior
+    return beta0, has
+
+
+_PLAYER_COLUMNS = ["player_id", "rapm", "minutes", "reliable", "rapm_no_prior", "prior", "has_prior"]
+
+
+def fit_rapm(
+    segments: pd.DataFrame,
+    ridge: float = RIDGE_LAMBDA,
+    *,
+    prior: Optional[Mapping[str, float]] = None,
+    prior_weight: float = PRIOR_WEIGHT,
+    newcomer_prior: float = NEWCOMER_PRIOR,
+) -> dict:
+    """Ajusta el RAPM sobre segmentos de diez jugadores.
+
+    **Con prior** (`prior={player_id: RAPM anterior}`, p.ej. `prior_from_fit`
+    del ajuste de la temporada pasada) el ridge no encoge hacia 0 sino hacia
+    β₀ = `prior_weight` · prior:
+
+        min ‖W^½(y − Xβ)‖² + λ‖β − β₀‖²   ⇒   (XᵀWX + λI)β = XᵀWy + λβ₀
+
+    Es la media a posteriori con la temporada pasada como media a priori: con
+    pocos minutos este año manda lo que se sabía; con muchos, los datos de
+    este año se imponen (a 1200 minutos, mitad y mitad; a 5000, el prior
+    apenas mueve el número). Quien no aparece en `prior` se encoge hacia
+    `newcomer_prior` (0 por defecto: jugador medio, como sin prior). La
+    ventaja de campo nunca se regulariza ni tiene prior.
+
+    Se mantiene el mismo λ que sin prior. En rigor λ = σ²/τ² con τ la
+    dispersión del impacto real ALREDEDOR del punto de partida, que con un
+    buen prior es menor que alrededor de 0 (λ podría ser algo mayor); se deja
+    igual por prudencia y `cross_validate_ridge(prior=...)` permite medirlo.
+
+    **Alternativa descartada: agrupar temporadas.** Un solo ajuste con las
+    dos temporadas y los minutos de la anterior con peso decreciente (p.ej.
+    ×0,5) usa directamente con quién jugó cada uno el año pasado, pero da UN
+    coeficiente por jugador para los dos años (supone que su impacto no ha
+    cambiado), duplica el tamaño del ajuste, obliga a que la caché dependa de
+    dos temporadas a la vez y mezcla el rendimiento de un jugador con dos
+    equipos distintos en un único número. El prior conserva un ajuste por
+    temporada, independiente y cacheado, y se reduce a un vector más en la
+    ecuación. Tampoco se usa la varianza a posteriori de cada jugador de la
+    temporada anterior (un λ por jugador): el propio ridge ya ha llevado a
+    ~0 a quien jugó poco, que es la mayor parte de ese efecto.
+
+    Args:
+        prior: `{player_id: RAPM}` SIN ponderar (el peso se aplica aquí).
+            `None` = sin prior, exactamente el cálculo de siempre.
+        prior_weight: fracción del prior que se toma como punto de partida
+            (0..1, por defecto `PRIOR_WEIGHT`).
+        newcomer_prior: punto de partida de quien no tiene prior.
+
+    Returns:
+        `{"players": DataFrame, "home_advantage": float, "segments": int,
+        "ridge": float, "prior_used": bool, "prior_weight": float | None,
+        "prior_players": int}`. `players` trae `player_id, rapm, minutes,
+        reliable, rapm_no_prior, prior, has_prior`, ordenado por `rapm`:
+        `rapm` es el valor final (con prior si lo hay), `rapm_no_prior` el
+        de esta temporada sola (igual a `rapm` sin prior), `prior` el punto
+        de partida β₀ ya ponderado (NaN si el jugador no tiene prior o no se
+        pasa prior) y `has_prior` si lo tenía. `home_advantage` es la ventaja
+        de campo estimada en puntos por 40 (control, no se enseña como dato
+        de jugador). `prior_players` = jugadores de esta temporada con prior.
+        Con `segments` vacío, `players` sale vacío.
+    """
+    used = prior is not None
+    base = {
+        "ridge": ridge, "prior_used": used, "prior_weight": prior_weight if used else None, "prior_players": 0,
+    }
+    if segments.empty:
+        return {
+            "players": pd.DataFrame(columns=_PLAYER_COLUMNS), "home_advantage": float("nan"), "segments": 0, **base,
+        }
+
+    players = sorted(set().union(*segments["home_players"], *segments["away_players"]))
+    player_index = {p: i for i, p in enumerate(players)}
+    idx, signs, weights, target = _design(segments, player_index)
+    xtx, xty = _normal_equations(idx, signs, weights, target, len(players))
+    beta_no_prior = _solve(xtx, xty, ridge)
+    if used:
+        beta0, has = _prior_vector(players, prior, prior_weight, newcomer_prior)
+        beta = _solve(xtx, xty, ridge, beta0)
+        prior_col = np.where(has, beta0[:-1], np.nan)
+    else:
+        beta, has = beta_no_prior, np.zeros(len(players), dtype=bool)
+        prior_col = np.full(len(players), np.nan)
+
+    minutes = np.zeros(len(players))
+    for k in range(10):
+        np.add.at(minutes, idx[:, k], weights)
+    df = pd.DataFrame({"player_id": players, "rapm": beta[:-1], "minutes": minutes})
+    df["reliable"] = df["minutes"] >= MIN_RELIABLE_MINUTES
+    df["rapm_no_prior"] = beta_no_prior[:-1]
+    df["prior"] = prior_col
+    df["has_prior"] = has
+    df = df.sort_values("rapm", ascending=False).reset_index(drop=True)
+    base["prior_players"] = int(has.sum())
+    return {"players": df, "home_advantage": float(beta[-1]), "segments": len(segments), **base}
+
+
+def prior_from_fit(fit: Optional[dict]) -> Dict[str, float]:
+    """Prior para la temporada siguiente a partir de un ajuste: `{player_id: rapm}`, SIN ponderar.
+
+    `fit_rapm` aplica `prior_weight` al usarlo. No hace falta filtrar a quien
+    jugó poco en esa temporada: su RAPM ya viene encogido hacia 0 por el
+    ridge, así que su prior es casi neutro por construcción. Se toma `rapm`
+    (el valor final): si ese ajuste ya llevaba prior, el nuevo arrastra
+    también, cada vez más rebajada, la temporada de antes (encadenado). En
+    `queries_assistant.season_impact` la temporada anterior se ajusta SIN
+    prior, así que solo cuenta un año hacia atrás.
+    """
+    players = fit.get("players") if fit else None
+    if players is None or players.empty:
+        return {}
+    return {str(p): float(v) for p, v in zip(players["player_id"], players["rapm"]) if np.isfinite(v)}
+
+
+def cross_validate_ridge(
+    segments: pd.DataFrame,
+    grid: Sequence[float] = (300.0, 600.0, 1200.0, 2400.0, 4800.0),
+    folds: int = 5,
+    seed: int = 0,
+    *,
+    prior: Optional[Mapping[str, float]] = None,
+    prior_weight: float = PRIOR_WEIGHT,
+    newcomer_prior: float = NEWCOMER_PRIOR,
+) -> pd.DataFrame:
+    """Error de predicción fuera de muestra para cada λ, con pliegues por PARTIDO.
+
+    Por partido y no por segmento: dos segmentos del mismo partido comparten
+    rival, pabellón y dinámica, y partirlos entre entrenamiento y prueba
+    filtraría información. Sirve para comprobar `RIDGE_LAMBDA` contra la base
+    de datos servida (`tools/` o una celda de cuaderno), no para la
+    interfaz, que usa la constante.
+
+    Con `prior` (mismos argumentos que `fit_rapm`) valida el RAPM con prior:
+    comparar su `mse` con el de la misma llamada sin prior dice si la
+    temporada anterior ayuda a predecir esta, y con qué `prior_weight`.
+
+    Returns:
+        `ridge, mse` (error cuadrático ponderado por minutos), ordenado por `ridge`.
+    """
+    if segments.empty:
+        return pd.DataFrame(columns=["ridge", "mse"])
+    players = sorted(set().union(*segments["home_players"], *segments["away_players"]))
+    player_index = {p: i for i, p in enumerate(players)}
+    games = segments["game_id"].unique()
+    rng = np.random.default_rng(seed)
+    fold_of_game = dict(zip(games, rng.integers(0, folds, size=len(games))))
+    fold = segments["game_id"].map(fold_of_game).to_numpy()
+
+    idx, signs, weights, target = _design(segments, player_index)
+    total_xtx, total_xty = _normal_equations(idx, signs, weights, target, len(players))
+    beta0 = None if prior is None else _prior_vector(players, prior, prior_weight, newcomer_prior)[0]
+    errors = {r: [0.0, 0.0] for r in grid}
+    for f in range(folds):
+        test = fold == f
+        if not test.any():
+            continue
+        t_xtx, t_xty = _normal_equations(idx[test], signs, weights[test], target[test], len(players))
+        design_test = np.hstack([idx[test], np.full((test.sum(), 1), len(players))])
+        signs_test = np.concatenate([signs, [1.0]])
+        for r in grid:
+            beta = _solve(total_xtx - t_xtx, total_xty - t_xty, r, beta0)
+            pred = (beta[design_test] * signs_test).sum(axis=1)
+            errors[r][0] += float((weights[test] * (target[test] - pred) ** 2).sum())
+            errors[r][1] += float(weights[test].sum())
+    return pd.DataFrame(
+        [{"ridge": r, "mse": num / den if den else float("nan")} for r, (num, den) in errors.items()]
+    ).sort_values("ridge").reset_index(drop=True)
+
+
+def observed_lineups(segments: pd.DataFrame, team_id: str) -> pd.DataFrame:
+    """Minutos y diferencia REALES de cada quinteto exacto de `team_id`, desde los segmentos.
+
+    Returns:
+        `players` (tupla ordenada de 5), `minutes`, `plus_minus`, `per_40`.
+    """
+    columns = ["players", "minutes", "plus_minus", "per_40"]
+    if segments.empty:
+        return pd.DataFrame(columns=columns)
+    home = segments[segments["home_team_id"] == team_id]
+    away = segments[segments["away_team_id"] == team_id]
+    rows = pd.concat([
+        pd.DataFrame({"players": home["home_players"], "minutes": home["minutes"], "pm": home["margin_delta"]}),
+        pd.DataFrame({"players": away["away_players"], "minutes": away["minutes"], "pm": -away["margin_delta"]}),
+    ])
+    if rows.empty:
+        return pd.DataFrame(columns=columns)
+    agg = rows.groupby("players").agg(minutes=("minutes", "sum"), plus_minus=("pm", "sum")).reset_index()
+    agg["per_40"] = 40.0 * agg["plus_minus"] / agg["minutes"]
+    return agg[columns]
+
+
+def _position_ok(positions: Sequence[Optional[str]], required: Dict[str, int]) -> bool:
+    for label, count in required.items():
+        if sum(1 for p in positions if p and p.strip().lower() == label.lower()) < count:
+            return False
+    return True
+
+
+def best_lineups(
+    rapm: pd.DataFrame,
+    candidates: Iterable[str],
+    *,
+    observed: Optional[pd.DataFrame] = None,
+    positions: Optional[Dict[str, Optional[str]]] = None,
+    required_positions: Optional[Dict[str, int]] = None,
+    must_include: Iterable[str] = (),
+    top: int = 10,
+) -> pd.DataFrame:
+    """Los `top` quintetos con mejor proyección entre los jugadores disponibles.
+
+    Args:
+        rapm: `fit_rapm(...)["players"]`. Un candidato sin fila (nunca ha
+            pisado un tramo válido) cuenta como 0: jugador medio, que es
+            exactamente lo que el ridge diría de él.
+        candidates: jugadores disponibles (el entrenador quita lesionados,
+            no convocados, cargados de minutos...).
+        observed: `observed_lineups(...)` del equipo, para acompañar cada
+            proyección con lo que ese quinteto exacto ha hecho de verdad.
+        positions: `{player_id: posición}` para `required_positions`.
+        required_positions: p.ej. `{"Base": 1, "Pívot": 1}`. Se compara
+            por igualdad exacta de etiqueta (sin mayúsculas): "Pívot" no
+            cuenta un "Ala-pívot". Se ignora si no se pasa `positions`.
+        must_include: jugadores que tienen que estar en todos los quintetos
+            (p.ej. "¿con quién rodeo a Howard?").
+
+    Returns:
+        `players` (tupla de ids), `projected_per_40`, `observed_minutes`,
+        `observed_per_40`. Vacío si hay menos de cinco candidatos.
+    """
+    columns = ["players", "projected_per_40", "observed_minutes", "observed_per_40"]
+    pool = sorted(set(candidates) | set(must_include))
+    fixed = sorted(set(must_include))
+    if len(pool) < 5 or len(fixed) > 5:
+        return pd.DataFrame(columns=columns)
+    value = dict(zip(rapm["player_id"], rapm["rapm"])) if not rapm.empty else {}
+    free = [p for p in pool if p not in fixed]
+
+    results = []
+    for combo in combinations(free, 5 - len(fixed)):
+        lineup = tuple(sorted(fixed + list(combo)))
+        if required_positions and positions is not None:
+            if not _position_ok([positions.get(p) for p in lineup], required_positions):
+                continue
+        results.append((lineup, sum(value.get(p, 0.0) for p in lineup)))
+    if not results:
+        return pd.DataFrame(columns=columns)
+
+    df = pd.DataFrame(results, columns=["players", "projected_per_40"])
+    df = df.sort_values("projected_per_40", ascending=False).head(top).reset_index(drop=True)
+    if observed is not None and not observed.empty:
+        obs = observed.set_index("players")
+        df["observed_minutes"] = df["players"].map(obs["minutes"]).fillna(0.0)
+        df["observed_per_40"] = df["players"].map(obs["per_40"])
+    else:
+        df["observed_minutes"] = 0.0
+        df["observed_per_40"] = float("nan")
+    return df[columns]
+
+
+def replacement_options(
+    rapm: pd.DataFrame, lineup: Sequence[str], out_player: str, candidates: Iterable[str], top: int = 3
+) -> pd.DataFrame:
+    """Mejores sustitutos de `out_player` en `lineup` (falta, lesión o descanso).
+
+    Returns:
+        `player_id, rapm, delta` — `delta` es el cambio de la proyección del
+        quinteto por 40 al hacer el cambio (negativo = se pierde).
+    """
+    value = dict(zip(rapm["player_id"], rapm["rapm"])) if not rapm.empty else {}
+    base = value.get(out_player, 0.0)
+    rows = [
+        {"player_id": p, "rapm": value.get(p, 0.0), "delta": value.get(p, 0.0) - base}
+        for p in candidates
+        if p not in lineup
+    ]
+    df = pd.DataFrame(rows, columns=["player_id", "rapm", "delta"])
+    return df.sort_values("rapm", ascending=False).head(top).reset_index(drop=True)
+
+
+def team_player_minutes(segments: pd.DataFrame, team_id: str) -> pd.Series:
+    """Minutos de cada jugador CON `team_id` en los segmentos (un traspasado solo suma los suyos aquí)."""
+    if segments.empty:
+        return pd.Series(dtype=float)
+    home = segments[segments["home_team_id"] == team_id][["home_players", "minutes"]]
+    away = segments[segments["away_team_id"] == team_id][["away_players", "minutes"]]
+    rows = pd.concat([
+        home.rename(columns={"home_players": "players"}),
+        away.rename(columns={"away_players": "players"}),
+    ]).explode("players")
+    if rows.empty:
+        return pd.Series(dtype=float)
+    return rows.groupby("players")["minutes"].sum().sort_values(ascending=False)
